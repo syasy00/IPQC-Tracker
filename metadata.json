@@ -1,0 +1,6 @@
+{
+  "name": "IPQC TRACKER",
+  "description": "In-Process Quality Control (IPQC) dashboard for semiconductor manufacturing, featuring audit tracking, guideline checklists, and real-time findings analysis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
