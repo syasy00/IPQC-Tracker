@@ -18,3 +18,4 @@ View your app in AI Studio: https://ai.studio/apps/596e4c27-57c9-4ff0-b03d-9f61b
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+# IPQC-Tracker
