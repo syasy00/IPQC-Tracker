@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: ipqc-tracker
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
