@@ -20,6 +20,7 @@ export interface AuditRecord {
   status: 'Open' | 'Closed' | 'In Progress';
   icarNum: string;
   actionTaken: string;
+  mqeEngineer?: string;
 }
 
-export type ViewState = 'dashboard' | 'ipqc' | 'checklist' | 'add-audit' | 'history';
+export type ViewState = 'dashboard' | 'ipqc' | 'checklist' | 'add-audit' | 'history' | 'settings';

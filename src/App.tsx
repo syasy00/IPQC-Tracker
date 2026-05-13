@@ -17,7 +17,15 @@ import {
   Pencil,
   Trash2,
   Filter,
-  History
+  History,
+  Lock,
+  Unlock,
+  Users,
+  Layers,
+  Eye,
+  TrendingDown,
+  TrendingUp,
+  AlertTriangle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -58,6 +66,12 @@ const QUALITY_SNAPSHOT = [
 ];
 
 // Mock Data
+const PLATFORM_MQE_MAPPING: Record<string, string> = {
+  'Apex': 'Siti Naimah',
+  'PDX': 'Larry',
+  'Navigator': 'Farid'
+};
+
 const INITIAL_RECORDS: AuditRecord[] = [
   {
     id: '1',
@@ -70,14 +84,15 @@ const INITIAL_RECORDS: AuditRecord[] = [
     department: 'Production Team',
     platform: 'Apex',
     areaStation: 'SMT 2',
-    groupFinding: 'MacHiro',
+    groupFinding: 'Quality',
     category: 'Tooling_Labeling',
     detailsFindings: 'Calibration Label damage. Turn on Tools / Equipment',
     picture: undefined,
     remark: 'Calibration Label damage',
     status: 'Open',
     icarNum: '',
-    actionTaken: ''
+    actionTaken: '',
+    mqeEngineer: 'Siti Naimah'
   },
   {
     id: '2',
@@ -90,14 +105,15 @@ const INITIAL_RECORDS: AuditRecord[] = [
     department: 'IE Team',
     platform: 'Apex',
     areaStation: 'Workorder Trolley Area',
-    groupFinding: 'MacHiro',
+    groupFinding: 'Quality',
     category: 'ESD_Control',
     detailsFindings: 'No ESD grounding points',
     picture: undefined,
     remark: 'The trolley has no ESD grounding chain (S-CART003M)',
     status: 'Open',
     icarNum: '',
-    actionTaken: ''
+    actionTaken: '',
+    mqeEngineer: 'Siti Naimah'
   },
   {
     id: '3',
@@ -108,7 +124,7 @@ const INITIAL_RECORDS: AuditRecord[] = [
     auditors: 'Amalina',
     personOnJob: 'John Doe',
     department: 'Production Team',
-    platform: 'MacHiro',
+    platform: 'Navigator',
     areaStation: 'Assembly Row 4',
     groupFinding: 'Quality',
     category: 'Tooling_Labeling',
@@ -117,7 +133,8 @@ const INITIAL_RECORDS: AuditRecord[] = [
     remark: 'Sent to calibration lab',
     status: 'In Progress',
     icarNum: 'ICAR-2026-003',
-    actionTaken: 'Tagging and isolation'
+    actionTaken: 'Tagging and isolation',
+    mqeEngineer: 'Farid'
   },
   {
     id: '4',
@@ -128,7 +145,7 @@ const INITIAL_RECORDS: AuditRecord[] = [
     auditors: 'Sarah Connor',
     personOnJob: 'Mike Ross',
     department: 'Etching',
-    platform: 'Quantum-X',
+    platform: 'PDX',
     areaStation: 'Etch A-1',
     groupFinding: 'Hardware',
     category: 'Safety',
@@ -137,7 +154,8 @@ const INITIAL_RECORDS: AuditRecord[] = [
     remark: 'Fixed by maintenance',
     status: 'Closed',
     icarNum: 'ICAR-2026-004',
-    actionTaken: 'Bolt replacement and tightening'
+    actionTaken: 'Bolt replacement and tightening',
+    mqeEngineer: 'Larry'
   },
   {
     id: '5',
@@ -148,7 +166,7 @@ const INITIAL_RECORDS: AuditRecord[] = [
     auditors: 'Zulfikri',
     personOnJob: 'Rachel Zane',
     department: 'Lithography',
-    platform: 'Nexus',
+    platform: 'PDX',
     areaStation: 'Scanner 5',
     groupFinding: 'Software',
     category: 'Process',
@@ -157,7 +175,8 @@ const INITIAL_RECORDS: AuditRecord[] = [
     remark: 'IT notified',
     status: 'Open',
     icarNum: '',
-    actionTaken: 'System reboot performed'
+    actionTaken: 'System reboot performed',
+    mqeEngineer: 'Larry'
   },
   {
     id: '6',
@@ -177,7 +196,8 @@ const INITIAL_RECORDS: AuditRecord[] = [
     remark: 'Minor quality issue',
     status: 'In Progress',
     icarNum: 'ICAR-2026-006',
-    actionTaken: 'Sent for rework'
+    actionTaken: 'Sent for rework',
+    mqeEngineer: 'Siti Naimah'
   },
   {
     id: '7',
@@ -188,16 +208,17 @@ const INITIAL_RECORDS: AuditRecord[] = [
     auditors: 'Amalina',
     personOnJob: 'Kenny Tan',
     department: 'IE Team',
-    platform: 'MacHiro',
+    platform: 'Navigator',
     areaStation: 'Workorder Trolley Area',
-    groupFinding: 'MacHiro',
+    groupFinding: 'Quality',
     category: 'ESD_Control',
     detailsFindings: 'Grounding strap showing wear and tear.',
     picture: undefined,
     remark: 'Replacement ordered',
     status: 'Open',
     icarNum: '',
-    actionTaken: ''
+    actionTaken: '',
+    mqeEngineer: 'Farid'
   },
   {
     id: '8',
@@ -208,7 +229,7 @@ const INITIAL_RECORDS: AuditRecord[] = [
     auditors: 'Zulfikri',
     personOnJob: 'Maria Garcia',
     department: 'Mfg Engineering',
-    platform: 'Nexus',
+    platform: 'PDX',
     areaStation: 'Main Assembly',
     groupFinding: 'Quality',
     category: 'Process',
@@ -217,14 +238,15 @@ const INITIAL_RECORDS: AuditRecord[] = [
     remark: 'Recalibrated torque driver',
     status: 'Closed',
     icarNum: 'ICAR-2026-008',
-    actionTaken: 'Recalibrated and verified with master gauge'
+    actionTaken: 'Recalibrated and verified with master gauge',
+    mqeEngineer: 'Larry'
   }
 ];
 
-const AUDITORS = ['Amalina', 'Zulfikri', 'Ahmad', 'Sarah Connor'];
+const INITIAL_AUDITORS = ['Amalina', 'Zulfikri', 'Ahmad', 'Sarah Connor'];
 const DEPARTMENTS = ['Production Team', 'IE Team', 'Mfg Engineering', 'Etching', 'Lithography'];
-const PLATFORMS = ['Apex', 'MacHiro', 'Nexus', 'Quantum-X'];
-const GROUP_FINDINGS = ['MacHiro', 'Hardware', 'Software', 'Quality'];
+const PLATFORMS = ['Apex', 'PDX', 'Navigator'];
+const GROUP_FINDINGS = ['Hardware', 'Software', 'Quality'];
 const CATEGORIES = ['Tooling_Labeling', 'ESD_Control', 'Quality', 'Process', 'Safety'];
 const WWS = Array.from({length: 52}, (_, i) => (i + 1).toString());
 
@@ -234,6 +256,15 @@ export default function App() {
   const [dashboardMode, setDashboardMode] = useState<'system' | 'powerbi'>('system');
   const [historyTab, setHistoryTab] = useState<'details' | 'timeline'>('details');
   const [historyDate, setHistoryDate] = useState<string>('2026-05-06');
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [loginPassword, setLoginPassword] = useState('');
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+
+  // Settings Management State
+  const [auditorsList, setAuditorsList] = useState(INITIAL_AUDITORS);
+  const [platformsList, setPlatformsList] = useState(PLATFORMS);
+  const [mqeMappings, setMqeMappings] = useState(PLATFORM_MQE_MAPPING);
 
   // URL View param support for Figma plugin
   useEffect(() => {
@@ -243,6 +274,26 @@ export default function App() {
       setView(viewParam);
     }
   }, []);
+
+  const handleLogin = (e: FormEvent) => {
+    e.preventDefault();
+    if (loginPassword === 'admin123') {
+      setIsAdmin(true);
+      setShowLoginModal(false);
+      setLoginPassword('');
+    } else {
+      alert('Invalid admin password');
+    }
+  };
+
+  const logout = () => {
+    setIsAdmin(false);
+    if (view === 'settings') setView('ipqc');
+  };
+
+  const getMqeForPlatform = (platform: string) => {
+    return mqeMappings[platform as keyof typeof mqeMappings] || 'Unassigned';
+  };
   const [records, setRecords] = useState<AuditRecord[]>(INITIAL_RECORDS);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -311,7 +362,11 @@ export default function App() {
     e.preventDefault();
     
     if (editingId) {
-      setRecords(records.map(r => r.id === editingId ? { ...r, ...newAudit as AuditRecord } : r));
+      setRecords(records.map(r => r.id === editingId ? { 
+        ...r, 
+        ...newAudit as AuditRecord,
+        mqeEngineer: getMqeForPlatform(newAudit.platform || '')
+      } : r));
       setEditingId(null);
     } else {
       const id = (records.length + 1).toString();
@@ -320,6 +375,7 @@ export default function App() {
         id,
         no: records.length + 1,
         status: newAudit.status || 'Open',
+        mqeEngineer: getMqeForPlatform(newAudit.platform || '')
       };
       setRecords([record, ...records]);
     }
@@ -393,13 +449,13 @@ export default function App() {
         <div className="p-6 flex items-center gap-3 border-b border-white/5">
           <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 overflow-hidden">
             <img 
-              src="/AE.png" 
+              src="https://upload.wikimedia.org/wikipedia/commons/b/b1/Idea-logo.png" 
               alt="Logo" 
               className="w-full h-full object-contain"
               referrerPolicy="no-referrer"
             />
           </div>
-          <h1 className="font-black text-xs tracking-widest text-white uppercase whitespace-nowrap">ADVANCE ENERGY</h1>
+          <h1 className="font-black text-xs tracking-widest text-white uppercase whitespace-nowrap">IPQC TRACKER</h1>
         </div>
 
         <nav className="flex-1 space-y-1 mt-6 overflow-y-auto px-3">
@@ -454,7 +510,37 @@ export default function App() {
               if (window.innerWidth < 768) setSidebarOpen(false);
             }}
           />
+
+          <div className="px-3 mt-6 mb-2">
+            <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] italic opacity-50">System</span>
+          </div>
+          <NavItem 
+            icon={isAdmin ? <Settings size={18} /> : <Lock size={18} />} 
+            label={isAdmin ? "Settings" : "Admin Login"} 
+            active={view === 'settings'} 
+            collapsed={!sidebarOpen && window.innerWidth >= 768}
+            onClick={() => {
+              if (isAdmin) {
+                setView('settings');
+              } else {
+                setShowLoginModal(true);
+              }
+              if (window.innerWidth < 768) setSidebarOpen(false);
+            }}
+          />
         </nav>
+
+        {isAdmin && (
+          <div className="p-4 mt-auto border-t border-white/5">
+             <button 
+              onClick={logout}
+              className="w-full flex items-center justify-center gap-2 py-2 bg-rose-500/10 text-rose-500 text-[10px] font-black uppercase tracking-widest rounded-lg hover:bg-rose-500 hover:text-white transition-all shadow-sm"
+            >
+              <Unlock size={14} />
+              Logout
+            </button>
+          </div>
+        )}
       </aside>
 
       {/* Main Content */}
@@ -745,6 +831,38 @@ export default function App() {
                 animate={{ opacity: 1 }}
                 className="h-full flex flex-col min-h-0 pb-20"
               >
+                {/* KPI Cards on Top of Table */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                  <KPICard 
+                    icon={<TrendingUp size={16} className="text-emerald-500" />}
+                    label="Compliance"
+                    value="98.2%"
+                    trend="+0.5%"
+                    color="emerald"
+                  />
+                  <KPICard 
+                    icon={<AlertTriangle size={16} className="text-brand-orange" />}
+                    label="Open Findings"
+                    value={records.filter(r => r.status === 'Open').length}
+                    trend="Requires Attention"
+                    color="orange"
+                  />
+                  <KPICard 
+                    icon={<CheckCircle2 size={16} className="text-blue-500" />}
+                    label="Closed this WW"
+                    value={records.filter(r => r.status === 'Closed' && r.ww === filterWW).length}
+                    trend="On Track"
+                    color="blue"
+                  />
+                  <KPICard 
+                    icon={<Clock size={16} className="text-slate-500" />}
+                    label="In Progress"
+                    value={records.filter(r => r.status === 'In Progress').length}
+                    trend="Needs Follow-up"
+                    color="slate"
+                  />
+                </div>
+
                 <div className="bg-white rounded-lg border border-border-subtle overflow-hidden flex flex-col flex-1">
                   {/* Desktop Table */}
                   <div className="hidden md:block overflow-x-auto whitespace-nowrap">
@@ -759,6 +877,7 @@ export default function App() {
                           <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300">PIC Finding</th>
                           <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 bg-[#fce4ec]">Department</th>
                           <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 bg-[#fce4ec]">Platform</th>
+                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300">MQE Engineer</th>
                           <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300">Area / Station</th>
                           <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 bg-[#fce4ec]">Group Finding</th>
                           <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 bg-[#fce4ec]">Category</th>
@@ -785,13 +904,17 @@ export default function App() {
                             <td className="px-2 py-3 border border-slate-200 text-center italic font-semibold text-slate-600">{record.personOnJob}</td>
                             <td className="px-2 py-3 border border-slate-200 font-medium">{record.department}</td>
                             <td className="px-2 py-3 border border-slate-200 font-medium">{record.platform}</td>
+                            <td className="px-2 py-3 border border-slate-200 font-black text-brand-orange/80 italic">{record.mqeEngineer}</td>
                             <td className="px-2 py-3 border border-slate-200 text-center font-medium">{record.areaStation}</td>
                             <td className="px-2 py-3 border border-slate-200 text-center">{record.groupFinding}</td>
                             <td className="px-2 py-3 border border-slate-200 text-center">{record.category}</td>
                             <td className="px-2 py-3 border border-slate-200 max-w-[150px] truncate" title={record.detailsFindings}>{record.detailsFindings}</td>
                             <td className="px-2 py-3 border border-slate-200 text-center">
                               {record.picture ? (
-                                <div className="w-6 h-6 rounded border border-slate-200 overflow-hidden mx-auto">
+                                <div 
+                                  onClick={(e) => { e.stopPropagation(); setPreviewImage(record.picture!); }}
+                                  className="w-10 h-10 rounded border border-slate-200 overflow-hidden mx-auto shadow-sm hover:scale-110 transition-transform cursor-zoom-in"
+                                >
                                   <img src={record.picture} className="w-full h-full object-cover" referrerPolicy="no-referrer" alt="" />
                                 </div>
                               ) : <ImageIcon size={12} className="mx-auto opacity-10" />}
@@ -913,6 +1036,10 @@ export default function App() {
                                   <div className="p-3 bg-slate-50 border border-slate-100 rounded-lg">
                                     <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] block mb-1 italic">IPQC Auditor Name</span>
                                     <span className="text-xs font-bold text-slate-700">{selectedAudit.auditors}</span>
+                                  </div>
+                                  <div className="p-3 bg-slate-50 border border-slate-100 rounded-lg">
+                                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] block mb-1 italic">MQE Engineer</span>
+                                    <span className="text-xs font-bold text-brand-orange">{selectedAudit.mqeEngineer}</span>
                                   </div>
                                   <div className="p-3 bg-slate-50 border border-slate-100 rounded-lg">
                                     <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] block mb-1 italic">PIC Name (Finding)</span>
@@ -1089,7 +1216,7 @@ export default function App() {
                         required 
                         value={newAudit.platform} 
                         onChange={(v: string) => setNewAudit({...newAudit, platform: v})} 
-                        options={PLATFORMS}
+                        options={platformsList}
                       />
                       <FormInput label="Area / Station" required value={newAudit.areaStation} onChange={(v: string) => setNewAudit({...newAudit, areaStation: v})} />
                       <FormSelect 
@@ -1107,7 +1234,7 @@ export default function App() {
                         required 
                         value={newAudit.auditors} 
                         onChange={(v: string) => setNewAudit({...newAudit, auditors: v})} 
-                        options={AUDITORS}
+                        options={auditorsList}
                       />
                       <FormInput label="PIC Name (Finding)" required value={newAudit.personOnJob} onChange={(v: string) => setNewAudit({...newAudit, personOnJob: v})} />
                       <FormSelect 
@@ -1297,6 +1424,7 @@ export default function App() {
                           <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300">PIC Finding</th>
                           <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 bg-[#fce4ec]">Department</th>
                           <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 bg-[#fce4ec]">Platform</th>
+                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300">MQE Engineer</th>
                           <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300">Area / Station</th>
                           <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 bg-[#fce4ec]">Group Finding</th>
                           <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 bg-[#fce4ec]">Category</th>
@@ -1326,6 +1454,7 @@ export default function App() {
                               <td className="px-2 py-3 border border-slate-200 text-center italic font-semibold text-slate-600">{record.personOnJob}</td>
                               <td className="px-2 py-3 border border-slate-200 font-medium">{record.department}</td>
                               <td className="px-2 py-3 border border-slate-200 font-medium">{record.platform}</td>
+                              <td className="px-2 py-3 border border-slate-200 font-black text-brand-orange/80 italic">{record.mqeEngineer}</td>
                               <td className="px-2 py-3 border border-slate-200 text-center font-medium">{record.areaStation}</td>
                               <td className="px-2 py-3 border border-slate-200 text-center">{record.groupFinding}</td>
                               <td className="px-2 py-3 border border-slate-200 text-center">{record.category}</td>
@@ -1384,9 +1513,196 @@ export default function App() {
                 </div>
               </motion.div>
             )}
+
+            {view === 'settings' && isAdmin && (
+              <motion.div 
+                key="settings"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="space-y-6 pb-20"
+              >
+                <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
+                  <div className="flex items-center gap-4 mb-8">
+                    <div className="w-12 h-12 bg-slate-100 rounded-xl flex items-center justify-center text-slate-600">
+                      <Settings size={24} />
+                    </div>
+                    <div>
+                      <h2 className="text-xl font-bold tracking-tight">System Settings</h2>
+                      <p className="text-xs text-text-muted italic uppercase font-bold tracking-widest mt-1">Manage auditors and MQE assignments</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-12">
+                    {/* Auditors Management */}
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
+                          <Users size={14} className="text-brand-orange" />
+                          IPQC Auditors
+                        </h3>
+                        <button className="text-[10px] font-black text-brand-orange uppercase">+ Add New</button>
+                      </div>
+                      <div className="space-y-1">
+                        {auditorsList.map((auditor, i) => (
+                          <div key={i} className="flex items-center justify-between p-3 bg-slate-50 border border-slate-100 rounded-xl group hover:bg-white hover:border-brand-orange/20 transition-all">
+                            <span className="text-xs font-bold text-slate-700">{auditor}</span>
+                            <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button className="p-1.5 hover:bg-slate-100 rounded-md text-slate-400"><Pencil size={12}/></button>
+                              <button className="p-1.5 hover:bg-rose-50 rounded-md text-rose-400"><Trash2 size={12}/></button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Platform Management */}
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
+                          <Layers size={14} className="text-brand-orange" />
+                          Platforms
+                        </h3>
+                        <button className="text-[10px] font-black text-brand-orange uppercase">+ Add New</button>
+                      </div>
+                      <div className="space-y-1">
+                        {platformsList.map((platform, i) => (
+                          <div key={i} className="flex items-center justify-between p-3 bg-slate-50 border border-slate-100 rounded-xl group hover:bg-white hover:border-brand-orange/20 transition-all">
+                            <span className="text-xs font-bold text-slate-700">{platform}</span>
+                            <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button className="p-1.5 hover:bg-slate-100 rounded-md text-slate-400"><Pencil size={12}/></button>
+                              <button className="p-1.5 hover:bg-rose-50 rounded-md text-rose-400"><Trash2 size={12}/></button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* MQE Mapping Management */}
+                    <div className="space-y-4">
+                      <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
+                        <ClipboardCheck size={14} className="text-brand-orange" />
+                        Platform - MQE Mapping
+                      </h3>
+                      <div className="overflow-hidden border border-slate-100 rounded-2xl">
+                        <table className="w-full text-left">
+                          <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-widest text-slate-400">
+                            <tr>
+                              <th className="px-4 py-3">Platform</th>
+                              <th className="px-4 py-3">Responsible MQE</th>
+                              <th className="px-4 py-3"></th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-50">
+                            {platformsList.map((platform) => (
+                              <tr key={platform} className="hover:bg-slate-50/50 transition-all text-xs font-bold text-slate-700">
+                                <td className="px-4 py-3 font-black text-slate-400">{platform}</td>
+                                <td className="px-4 py-3 text-brand-orange uppercase tracking-tight">
+                                  {mqeMappings[platform] || 'Unassigned'}
+                                </td>
+                                <td className="px-4 py-3 text-right">
+                                  <button className="p-1.5 hover:bg-white rounded border border-transparent hover:border-brand-orange/10 text-slate-300 hover:text-brand-orange transition-all">
+                                    <Pencil size={12} />
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <p className="text-[10px] text-slate-400 italic">Only administrators can modify these system-wide constants.</p>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
           </AnimatePresence>
         </main>
       </div>
+
+      {/* Login Modal */}
+      <AnimatePresence>
+        {showLoginModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-md">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl border border-white/20 p-8"
+            >
+              <div className="text-center mb-8">
+                <div className="w-16 h-16 bg-brand-orange/10 text-brand-orange rounded-2xl flex items-center justify-center mx-auto mb-4">
+                  <Lock size={32} />
+                </div>
+                <h3 className="text-2xl font-black tracking-tight text-slate-800">Admin Login</h3>
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mt-2">Restricted Access only</p>
+              </div>
+
+              <form onSubmit={handleLogin} className="space-y-6">
+                <div>
+                  <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2 block ml-1">Master Password</label>
+                  <input 
+                    type="password" 
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    placeholder="Enter password..."
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/5 outline-none transition-all placeholder:text-slate-300 font-bold"
+                  />
+                </div>
+                <div className="flex gap-3">
+                  <button 
+                    type="button"
+                    onClick={() => setShowLoginModal(false)}
+                    className="flex-1 py-3 text-xs font-black uppercase tracking-widest text-slate-400 hover:text-slate-600 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="submit"
+                    className="flex-1 bg-brand-orange text-white py-3 rounded-xl text-xs font-black uppercase tracking-widest shadow-lg shadow-brand-orange/20 hover:brightness-110 active:scale-95 transition-all"
+                  >
+                    Authorize
+                  </button>
+                </div>
+              </form>
+              <p className="text-[9px] text-center text-slate-400 mt-8 font-bold italic uppercase tracking-tighter">Tip: Try admin123</p>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Image Preview Modal (Lightbox) */}
+      <AnimatePresence>
+        {previewImage && (
+          <div 
+            className="fixed inset-0 z-[110] flex items-center justify-center p-4 md:p-12 bg-slate-900/95 backdrop-blur-xl"
+            onClick={() => setPreviewImage(null)}
+          >
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="relative max-w-5xl max-h-full flex items-center justify-center group"
+            >
+               <button 
+                className="absolute -top-12 right-0 md:-right-12 text-white/50 hover:text-white transition-colors"
+                onClick={() => setPreviewImage(null)}
+              >
+                <X size={32} />
+              </button>
+              <img 
+                src={previewImage} 
+                alt="Audit Detail" 
+                className="max-w-full max-h-[80vh] rounded-2xl shadow-2xl border-4 border-white/10 object-contain shadow-brand-orange/20"
+                referrerPolicy="no-referrer"
+              />
+              <div className="absolute -bottom-16 left-0 right-0 text-center opacity-0 group-hover:opacity-100 transition-opacity">
+                <span className="text-white/60 text-[10px] font-black uppercase tracking-[0.3em]">IPQC Tracker Detail View</span>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -1414,12 +1730,36 @@ function StatCard({ label, value, trend }: { label: string, value: string | numb
       <div className="flex justify-between items-start">
         <div className="text-[10px] text-text-muted font-bold uppercase tracking-[0.1em]">{label}</div>
         {trend && (
-          <div className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${trend.startsWith('+') ? 'text-green-600 bg-green-50' : 'text-red-600 bg-red-50'}`}>
+          <div className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${trend.startsWith('+') ? 'text-green-600 bg-green-50' : trend.includes('%') ? 'text-red-600 bg-red-50' : 'text-slate-500 bg-slate-50'}`}>
             {trend}
           </div>
         )}
       </div>
       <div className="text-3xl font-black text-slate-900 mt-2 tracking-tight group-hover:text-brand-orange transition-colors">{value}</div>
+    </div>
+  );
+}
+
+function KPICard({ label, value, trend, icon, color }: { label: string, value: string | number, trend: string, icon: any, color: string }) {
+  const colors: Record<string, string> = {
+    emerald: 'bg-emerald-50 text-emerald-600 border-emerald-100 shadow-emerald-500/5',
+    orange: 'bg-orange-50 text-orange-600 border-orange-100 shadow-orange-500/5',
+    blue: 'bg-blue-50 text-blue-600 border-blue-100 shadow-blue-500/5',
+    slate: 'bg-slate-50 text-slate-600 border-slate-100 shadow-slate-500/5'
+  };
+
+  return (
+    <div className={`p-4 rounded-2xl border bg-white shadow-lg transition-all hover:scale-[1.02] ${colors[color]}`}>
+      <div className="flex justify-between items-start mb-3">
+        <div className="p-2 rounded-lg bg-white shadow-sm border border-inherit">
+          {icon}
+        </div>
+        <span className="text-[10px] font-black uppercase tracking-widest opacity-80">{trend}</span>
+      </div>
+      <div>
+        <div className="text-xs font-black text-slate-400 uppercase tracking-widest mb-1">{label}</div>
+        <div className="text-2xl font-black text-slate-800 tracking-tight">{value}</div>
+      </div>
     </div>
   );
 }
