@@ -25,7 +25,8 @@ import {
   Eye,
   TrendingDown,
   TrendingUp,
-  AlertTriangle
+  AlertTriangle,
+  Tag
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -40,7 +41,10 @@ import {
   Line,
   Cell,
   AreaChart,
-  Area
+  Area,
+  PieChart,
+  Pie,
+  Legend
 } from 'recharts';
 import { AuditRecord, ViewState, Department, Category } from './types';
 
@@ -252,6 +256,7 @@ const WWS = Array.from({length: 52}, (_, i) => (i + 1).toString());
 
 export default function App() {
   const [view, setView] = useState<ViewState>('ipqc');
+  const [records, setRecords] = useState<AuditRecord[]>(INITIAL_RECORDS);
   const [powerBiUrl, setPowerBiUrl] = useState<string>(''); // User can paste their URL here
   const [dashboardMode, setDashboardMode] = useState<'system' | 'powerbi'>('system');
   const [historyTab, setHistoryTab] = useState<'details' | 'timeline'>('details');
@@ -266,7 +271,61 @@ export default function App() {
   const [platformsList, setPlatformsList] = useState(PLATFORMS);
   const [mqeMappings, setMqeMappings] = useState(PLATFORM_MQE_MAPPING);
 
-  // URL View param support for Figma plugin
+  const [analyticsDimension, setAnalyticsDimension] = useState<'platform' | 'category' | 'mqe' | 'auditor'>('platform');
+
+  // Dynamic Analytics Data
+  const analyticsData = useMemo(() => {
+    // Category Breakdown
+    const categories: Record<string, number> = {};
+    // Platform Breakdown
+    const platforms: Record<string, number> = {};
+    // Status Breakdown
+    const statuses: Record<string, number> = { 'Open': 0, 'Closed': 0, 'In Progress': 0 };
+    // MQE Workload
+    const mqes: Record<string, number> = {};
+    // Auditor contribution
+    const auditors: Record<string, number> = {};
+    // Weekly Trend
+    const weeklyTrends: Record<string, number> = {};
+
+    records.forEach(record => {
+      // Category
+      categories[record.category] = (categories[record.category] || 0) + 1;
+      
+      // Platform
+      platforms[record.platform] = (platforms[record.platform] || 0) + 1;
+      
+      // Status
+      if (statuses.hasOwnProperty(record.status)) {
+        statuses[record.status]++;
+      }
+
+      // MQE
+      if (record.mqeEngineer) {
+        mqes[record.mqeEngineer] = (mqes[record.mqeEngineer] || 0) + 1;
+      }
+
+      // Auditor
+      if (record.auditors) {
+        auditors[record.auditors] = (auditors[record.auditors] || 0) + 1;
+      }
+
+      // Weekly
+      const ww = `WW${record.ww || '??'}`;
+      weeklyTrends[ww] = (weeklyTrends[ww] || 0) + 1;
+    });
+
+    return {
+      categories: Object.entries(categories).map(([name, value]) => ({ name, value })),
+      platforms: Object.entries(platforms).map(([name, value]) => ({ name, value })),
+      statuses: Object.entries(statuses).map(([name, value]) => ({ name, value })),
+      mqes: Object.entries(mqes).map(([name, value]) => ({ name, value })),
+      auditors: Object.entries(auditors).map(([name, value]) => ({ name, value })),
+      weeklyTrends: Object.entries(weeklyTrends)
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([name, value]) => ({ name, value }))
+    };
+  }, [records]);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const viewParam = params.get('view') as ViewState;
@@ -294,7 +353,6 @@ export default function App() {
   const getMqeForPlatform = (platform: string) => {
     return mqeMappings[platform as keyof typeof mqeMappings] || 'Unassigned';
   };
-  const [records, setRecords] = useState<AuditRecord[]>(INITIAL_RECORDS);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [filtersOpen, setFiltersOpen] = useState(false);
   
@@ -449,10 +507,9 @@ export default function App() {
         <div className="p-6 flex items-center gap-3 border-b border-white/5">
           <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 overflow-hidden">
             <img 
-              src="https://upload.wikimedia.org/wikipedia/commons/b/b1/Idea-logo.png" 
+              src="/AE.png" 
               alt="Logo" 
               className="w-full h-full object-contain"
-              referrerPolicy="no-referrer"
             />
           </div>
           <h1 className="font-black text-xs tracking-widest text-white uppercase whitespace-nowrap">IPQC TRACKER</h1>
@@ -654,21 +711,53 @@ export default function App() {
                       exit={{ opacity: 0, y: -10 }}
                       className="space-y-6"
                     >
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-                        <StatCard label="Total Audits" value="1,284" trend="+12.4%" />
-                        <StatCard label="Yield Loss (FA)" value="0.04%" trend="-0.01%" />
-                        <StatCard label="Pending Actions" value="12" trend="stable" />
+                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-6">
+                        <KPICard 
+                          icon={<ClipboardCheck size={16} className="text-blue-500" />}
+                          label="Total Findings"
+                          value={records.length}
+                          trend="Lifetime"
+                          color="blue"
+                        />
+                        <KPICard 
+                          icon={<AlertTriangle size={16} className="text-rose-500" />}
+                          label="Critical (Open)"
+                          value={records.filter(r => r.status === 'Open').length}
+                          trend="Immediate Action"
+                          color="rose"
+                        />
+                        <KPICard 
+                          icon={<CheckCircle2 size={16} className="text-emerald-500" />}
+                          label="Resolution Rate"
+                          value={`${Math.round((records.filter(r => r.status === 'Closed').length / (records.length || 1)) * 100)}%`}
+                          trend="Overall Performance"
+                          color="emerald"
+                        />
+                        <KPICard 
+                          icon={<Users size={16} className="text-brand-orange" />}
+                          label="Active Auditors"
+                          value={new Set(records.map(r => r.auditors)).size}
+                          trend="Participation"
+                          color="orange"
+                        />
                       </div>
 
-                      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                        <div className="lg:col-span-2 bg-white p-8 rounded-2xl border border-slate-200 shadow-sm min-h-[400px] flex flex-col">
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        {/* Weekly Trend */}
+                        <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm h-[500px] flex flex-col">
                           <h3 className="font-black text-xs text-slate-400 uppercase tracking-[0.2em] mb-8 flex items-center gap-2">
-                            <LayoutDashboard size={14} className="text-brand-orange" />
-                            Audit Volume Trend
+                            <TrendingUp size={14} className="text-brand-orange" />
+                            Findings Trend (by Work Week)
                           </h3>
-                          <div className="flex-1 w-full min-h-[250px]">
+                          <div className="flex-1 w-full">
                             <ResponsiveContainer width="100%" height="100%">
-                              <BarChart data={PRODUCTION_TREND} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                              <AreaChart data={analyticsData.weeklyTrends} margin={{ top: 10, right: 10, left: -20, bottom: 20 }}>
+                                <defs>
+                                  <linearGradient id="colorTrend" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="#F15D22" stopOpacity={0.1}/>
+                                    <stop offset="95%" stopColor="#F15D22" stopOpacity={0}/>
+                                  </linearGradient>
+                                </defs>
                                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                                 <XAxis 
                                   dataKey="name" 
@@ -684,100 +773,148 @@ export default function App() {
                                 />
                                 <RechartsTooltip 
                                   contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)', fontSize: '10px', fontWeight: 700 }}
-                                  cursor={{ fill: '#f1f5f9' }}
                                 />
-                                <Bar dataKey="production" radius={[4, 4, 0, 0]} barSize={32}>
-                                  {PRODUCTION_TREND.map((entry, index) => (
-                                    <Cell key={`cell-${index}`} fill={index === PRODUCTION_TREND.length - 1 ? '#F15D22' : '#F15D2220'} className="transition-all duration-300 hover:fill-[#F15D22]" />
+                                <Area 
+                                  type="monotone" 
+                                  dataKey="value" 
+                                  stroke="#F15D22" 
+                                  fillOpacity={1} 
+                                  fill="url(#colorTrend)" 
+                                  strokeWidth={3}
+                                  name="Finding Count"
+                                />
+                              </AreaChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </div>
+
+                        {/* Resolution Status - Reduced size for better layout */}
+                        <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm h-[500px] flex flex-col items-center">
+                          <h3 className="font-black text-xs text-slate-400 uppercase tracking-[0.2em] mb-4 w-full text-left">Resolution Status</h3>
+                          <div className="flex-1 w-full">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <PieChart>
+                                <Pie
+                                  data={analyticsData.statuses}
+                                  innerRadius={70}
+                                  outerRadius={100}
+                                  paddingAngle={8}
+                                  dataKey="value"
+                                  stroke="none"
+                                >
+                                  {analyticsData.statuses.map((entry, index) => (
+                                    <Cell 
+                                      key={`cell-${index}`} 
+                                      fill={
+                                        entry.name === 'Closed' ? '#10b981' : 
+                                        entry.name === 'Open' ? '#f43f5e' : '#f59e0b'
+                                      } 
+                                    />
+                                  ))}
+                                </Pie>
+                                <RechartsTooltip 
+                                  contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                                />
+                                <Legend 
+                                  verticalAlign="bottom" 
+                                  height={36} 
+                                  iconType="circle"
+                                  formatter={(value) => <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">{value}</span>}
+                                />
+                              </PieChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Consolidated Dynamic Bar Chart */}
+                      <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm flex flex-col">
+                        <div className="flex flex-col md:flex-row md:items-center justify-between mb-10 gap-4">
+                          <div>
+                            <h3 className="font-black text-sm text-slate-800 uppercase tracking-tight">Dimensional Analysis</h3>
+                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Select dimension to visualize distribution</p>
+                          </div>
+                          <div className="flex bg-slate-100 p-1 rounded-2xl gap-1">
+                            {[
+                              { id: 'platform', label: 'Platform', icon: <Layers size={12}/> },
+                              { id: 'category', label: 'Category', icon: <Tag size={12}/> },
+                              { id: 'mqe', label: 'MQE', icon: <Settings size={12}/> },
+                              { id: 'auditor', label: 'Auditor', icon: <Users size={12}/> }
+                            ].map((dim) => (
+                              <button
+                                key={dim.id}
+                                onClick={() => setAnalyticsDimension(dim.id as any)}
+                                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+                                  analyticsDimension === dim.id 
+                                    ? 'bg-white text-brand-orange shadow-sm scale-105' 
+                                    : 'text-slate-400 hover:text-slate-600'
+                                }`}
+                              >
+                                {dim.icon}
+                                {dim.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="w-full h-[450px]">
+                          { (analyticsDimension === 'platform' ? analyticsData.platforms : 
+                             analyticsDimension === 'category' ? analyticsData.categories : 
+                             analyticsDimension === 'mqe' ? analyticsData.mqes : 
+                             analyticsData.auditors).length > 0 ? (
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart 
+                                data={
+                                  analyticsDimension === 'platform' ? analyticsData.platforms :
+                                  analyticsDimension === 'category' ? analyticsData.categories :
+                                  analyticsDimension === 'mqe' ? analyticsData.mqes :
+                                  analyticsData.auditors
+                                } 
+                                margin={{ top: 20, right: 30, left: 20, bottom: 60 }}
+                              >
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                <XAxis 
+                                  dataKey="name" 
+                                  axisLine={false} 
+                                  tickLine={false} 
+                                  tick={{ fontSize: 10, fontWeight: 800, fill: '#64748b' }}
+                                  interval={0}
+                                  angle={-45}
+                                  textAnchor="end"
+                                />
+                                <YAxis 
+                                  axisLine={false} 
+                                  tickLine={false} 
+                                  tick={{ fontSize: 10, fontWeight: 800, fill: '#94a3b8' }}
+                                />
+                                <RechartsTooltip 
+                                  cursor={{ fill: '#f8fafc' }}
+                                  contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)', fontWeight: 900, fontSize: '12px' }}
+                                />
+                                <Bar 
+                                  dataKey="value" 
+                                  radius={[8, 8, 0, 0]} 
+                                  barSize={60}
+                                >
+                                  {(
+                                    analyticsDimension === 'platform' ? analyticsData.platforms :
+                                    analyticsDimension === 'category' ? analyticsData.categories :
+                                    analyticsDimension === 'mqe' ? analyticsData.mqes :
+                                    analyticsData.auditors
+                                  ).map((entry, index) => (
+                                    <Cell 
+                                      key={`cell-${index}`} 
+                                      fill={['#F15D22', '#6366f1', '#3b82f6', '#ec4899', '#8b5cf6'][index % 5]} 
+                                    />
                                   ))}
                                 </Bar>
                               </BarChart>
                             </ResponsiveContainer>
-                          </div>
-                        </div>
-                        <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm flex flex-col">
-                          <h3 className="font-black text-xs text-slate-400 uppercase tracking-[0.2em] mb-8 shrink-0">Compliance Score</h3>
-                          <div className="flex-1 w-full min-h-[200px]">
-                            <ResponsiveContainer width="100%" height="100%">
-                              <LineChart data={PRODUCTION_TREND} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                                <XAxis 
-                                  dataKey="name" 
-                                  axisLine={false} 
-                                  tickLine={false} 
-                                  tick={{ fontSize: 9, fontWeight: 700, fill: '#94a3b8' }}
-                                  dy={10}
-                                />
-                                <YAxis 
-                                  domain={[90, 100]}
-                                  axisLine={false} 
-                                  tickLine={false} 
-                                  tick={{ fontSize: 9, fontWeight: 700, fill: '#94a3b8' }}
-                                />
-                                <RechartsTooltip 
-                                  contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)', fontSize: '10px', fontWeight: 700 }}
-                                />
-                                <Line 
-                                  type="monotone" 
-                                  dataKey="quality" 
-                                  stroke="#F15D22" 
-                                  strokeWidth={3} 
-                                  dot={{ fill: '#F15D22', strokeWidth: 2, r: 4, stroke: '#fff' }}
-                                  activeDot={{ r: 6, strokeWidth: 0 }}
-                                />
-                              </LineChart>
-                            </ResponsiveContainer>
-                          </div>
-                          <div className="mt-8 space-y-4 shrink-0">
-                            <div className="flex justify-between items-center bg-slate-50 p-3 rounded-xl border border-slate-100">
-                                <span className="text-[10px] font-bold text-slate-500 uppercase">Avg Quality</span>
-                                <span className="text-sm font-black text-brand-orange">97.4%</span>
+                          ) : (
+                            <div className="h-full w-full flex flex-col items-center justify-center bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                              <p className="text-slate-400 font-bold uppercase tracking-widest text-[10px]">No data available for this dimension</p>
                             </div>
-                            <div className="flex justify-between items-center bg-slate-50 p-3 rounded-xl border border-slate-100">
-                                <span className="text-[10px] font-bold text-slate-500 uppercase">Weekly Delta</span>
-                                <span className="text-sm font-black text-emerald-500">+1.2%</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
-                        <h3 className="font-black text-xs text-slate-400 uppercase tracking-[0.2em] mb-8">Departmental Performance</h3>
-                        <div className="h-64 w-full">
-                          <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={QUALITY_SNAPSHOT} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                              <defs>
-                                <linearGradient id="colorPass" x1="0" y1="0" x2="0" y2="1">
-                                  <stop offset="5%" stopColor="#10b981" stopOpacity={0.1}/>
-                                  <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                                </linearGradient>
-                              </defs>
-                              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                              <XAxis 
-                                dataKey="name" 
-                                axisLine={false} 
-                                tickLine={false} 
-                                tick={{ fontSize: 9, fontWeight: 700, fill: '#94a3b8' }}
-                                dy={10}
-                              />
-                              <YAxis 
-                                axisLine={false} 
-                                tickLine={false} 
-                                tick={{ fontSize: 9, fontWeight: 700, fill: '#94a3b8' }}
-                              />
-                              <RechartsTooltip 
-                                contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)', fontSize: '10px', fontWeight: 700 }}
-                              />
-                              <Area 
-                                type="monotone" 
-                                dataKey="pass" 
-                                stroke="#10b981" 
-                                fillOpacity={1} 
-                                fill="url(#colorPass)" 
-                                strokeWidth={2}
-                              />
-                            </AreaChart>
-                          </ResponsiveContainer>
+                          )}
                         </div>
                       </div>
                     </motion.div>
@@ -913,11 +1050,14 @@ export default function App() {
                               {record.picture ? (
                                 <div 
                                   onClick={(e) => { e.stopPropagation(); setPreviewImage(record.picture!); }}
-                                  className="w-10 h-10 rounded border border-slate-200 overflow-hidden mx-auto shadow-sm hover:scale-110 transition-transform cursor-zoom-in"
+                                  className="w-24 h-24 rounded-lg border border-slate-200 overflow-hidden mx-auto shadow-sm hover:scale-110 transition-transform cursor-zoom-in relative group"
                                 >
                                   <img src={record.picture} className="w-full h-full object-cover" referrerPolicy="no-referrer" alt="" />
+                                  <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                                    <Eye size={16} className="text-white" />
+                                  </div>
                                 </div>
-                              ) : <ImageIcon size={12} className="mx-auto opacity-10" />}
+                              ) : <ImageIcon size={20} className="mx-auto opacity-10" />}
                             </td>
                             <td className="px-2 py-3 border border-slate-200 max-w-[150px] truncate italic text-slate-500" title={record.remark}>{record.remark}</td>
                             <td className={`px-2 py-3 border border-slate-200 text-center font-black ${record.status === 'Open' ? 'bg-[#fce4ec] text-[#e91e63]' : ''}`}>
@@ -1001,139 +1141,185 @@ export default function App() {
                         initial={{ opacity: 0, scale: 0.95 }}
                         animate={{ opacity: 1, scale: 1 }}
                         exit={{ opacity: 0, scale: 0.95 }}
-                        className="bg-white rounded-lg w-full max-w-lg overflow-hidden shadow-2xl border border-border-subtle"
+                        className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden shadow-2xl border border-slate-200 flex flex-col"
                       >
-                        <div className="p-4 border-b border-border-subtle flex justify-between items-center bg-bg-main">
-                          <div className="flex gap-4">
+                        <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-white shrink-0">
+                          <div className="flex gap-6">
                             <button 
                               onClick={() => setHistoryTab('details')}
-                              className={`text-[10px] font-bold uppercase tracking-widest pb-1 border-b-2 transition-all ${historyTab === 'details' ? 'border-brand-orange text-brand-orange' : 'border-transparent text-text-muted hover:text-text-main'}`}
+                              className={`text-[10px] font-black uppercase tracking-[0.2em] pb-3 border-b-2 transition-all ${historyTab === 'details' ? 'border-brand-orange text-brand-orange' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
                             >
-                              Current Findings
+                              Finding Details
                             </button>
                             <button 
                               onClick={() => setHistoryTab('timeline')}
-                              className={`text-[10px] font-bold uppercase tracking-widest pb-1 border-b-2 transition-all ${historyTab === 'timeline' ? 'border-brand-orange text-brand-orange' : 'border-transparent text-text-muted hover:text-text-main'}`}
+                              className={`text-[10px] font-black uppercase tracking-[0.2em] pb-3 border-b-2 transition-all ${historyTab === 'timeline' ? 'border-brand-orange text-brand-orange' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
                             >
-                              Item History
+                              Audit History
                             </button>
                           </div>
-                          <button onClick={() => { setSelectedAudit(null); setHistoryTab('details'); }} className="text-text-muted hover:text-text-main">
+                          <button onClick={() => { setSelectedAudit(null); setHistoryTab('details'); }} className="w-10 h-10 flex items-center justify-center rounded-xl hover:bg-slate-50 transition-colors text-slate-400">
                             <X size={20} />
                           </button>
                         </div>
-                        <div className="p-6 space-y-6">
+                        
+                        <div className="flex-1 overflow-y-auto p-6 md:p-8 custom-scrollbar">
                           <AnimatePresence mode="wait">
                             {historyTab === 'details' ? (
                               <motion.div 
                                 key="details-tab"
-                                initial={{ opacity: 0, x: -10 }}
-                                animate={{ opacity: 1, x: 0 }}
-                                exit={{ opacity: 0, x: 10 }}
-                                className="space-y-6"
+                                initial={{ opacity: 0, y: 10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: -10 }}
+                                className="grid grid-cols-1 lg:grid-cols-12 gap-8"
                               >
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                  <div className="p-3 bg-slate-50 border border-slate-100 rounded-lg">
-                                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] block mb-1 italic">IPQC Auditor Name</span>
-                                    <span className="text-xs font-bold text-slate-700">{selectedAudit.auditors}</span>
+                                {/* Info Panel */}
+                                <div className="lg:col-span-7 space-y-8">
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <DetailField label="IPQC Auditor" value={selectedAudit.auditors} />
+                                    <DetailField label="MQE Engineer" value={selectedAudit.mqeEngineer} highlight />
+                                    <DetailField label="Platform" value={selectedAudit.platform} />
+                                    <DetailField label="Station/Area" value={selectedAudit.areaStation} />
+                                    <DetailField label="PIC Finding" value={selectedAudit.personOnJob} />
+                                    <DetailField label="Category" value={selectedAudit.category} />
+                                    <DetailField label="Shift / Dept" value={`${selectedAudit.shift} | ${selectedAudit.department}`} />
+                                    <DetailField label="Status" value={selectedAudit.status} status={selectedAudit.status} />
                                   </div>
-                                  <div className="p-3 bg-slate-50 border border-slate-100 rounded-lg">
-                                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] block mb-1 italic">MQE Engineer</span>
-                                    <span className="text-xs font-bold text-brand-orange">{selectedAudit.mqeEngineer}</span>
-                                  </div>
-                                  <div className="p-3 bg-slate-50 border border-slate-100 rounded-lg">
-                                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] block mb-1 italic">PIC Name (Finding)</span>
-                                    <span className="text-xs font-bold text-slate-700">{selectedAudit.personOnJob}</span>
-                                  </div>
-                                  <div className="p-3 bg-slate-50 border border-slate-100 rounded-lg">
-                                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] block mb-1 italic">Platform / Station</span>
-                                    <span className="text-xs font-bold text-slate-700">{selectedAudit.platform} / {selectedAudit.areaStation}</span>
-                                  </div>
-                                  <div className="p-3 bg-slate-50 border border-slate-100 rounded-lg">
-                                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] block mb-1 italic">Date / WW</span>
-                                    <span className="text-xs font-bold text-slate-700">{selectedAudit.auditDate} | {selectedAudit.ww}</span>
-                                  </div>
-                                  <div className="p-3 bg-slate-50 border border-slate-100 rounded-lg">
-                                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] block mb-1 italic">Shift / Dept</span>
-                                    <span className="text-xs font-bold text-slate-700">{selectedAudit.shift} | {selectedAudit.department}</span>
-                                  </div>
-                                  <div className="p-3 bg-slate-50 border border-slate-100 rounded-lg">
-                                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] block mb-1 italic">Group Finding / Category</span>
-                                    <span className="text-xs font-bold text-slate-700">{selectedAudit.groupFinding} / {selectedAudit.category}</span>
-                                  </div>
-                                  <div className="p-3 bg-slate-50 border border-slate-100 rounded-lg">
-                                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] block mb-1 italic">ICAR#</span>
-                                    <span className="text-xs font-bold text-slate-700">{selectedAudit.icarNum || 'N/A'}</span>
-                                  </div>
-                                  <div className="p-3 bg-slate-50 border border-slate-100 rounded-lg">
-                                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] block mb-1 italic">Status</span>
-                                    <span className="text-xs font-bold text-slate-700">{selectedAudit.status}</span>
+
+                                  <div className="space-y-6">
+                                    <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100">
+                                      <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3 italic">Finding Details</h4>
+                                      <p className="text-sm font-semibold text-slate-700 leading-relaxed">{selectedAudit.detailsFindings}</p>
+                                    </div>
+                                    <div className="bg-emerald-50 border border-emerald-100 p-6 rounded-2xl">
+                                      <h4 className="text-[10px] font-black uppercase tracking-widest text-emerald-500 mb-3 italic">Action Taken</h4>
+                                      <p className="text-sm font-semibold text-slate-700 leading-relaxed">{selectedAudit.actionTaken || 'Pending action record.'}</p>
+                                    </div>
+                                    {selectedAudit.remark && (
+                                      <div className="bg-blue-50 border border-blue-100 p-6 rounded-2xl">
+                                        <h4 className="text-[10px] font-black uppercase tracking-widest text-blue-500 mb-3 italic">Remarks</h4>
+                                        <p className="text-sm font-semibold text-slate-700 leading-relaxed italic">"{selectedAudit.remark}"</p>
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
-                                <div className="space-y-4">
-                                  <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl relative overflow-hidden group">
-                                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] block mb-2 italic">Finding Details</span>
-                                    <p className="text-xs text-slate-600 leading-relaxed font-medium">{selectedAudit.detailsFindings}</p>
-                                  </div>
-                                  <div className="p-4 bg-emerald-50/30 border border-emerald-100 rounded-xl">
-                                    <span className="text-[9px] font-black text-emerald-500 uppercase tracking-[0.2em] block mb-2 italic">Action Taken</span>
-                                    <p className="text-xs text-slate-600 leading-relaxed font-medium">{selectedAudit.actionTaken || 'No action recorded.'}</p>
-                                  </div>
-                                  <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl">
-                                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] block mb-2 italic">Remark</span>
-                                    <p className="text-xs text-slate-600 leading-relaxed font-medium italic">{selectedAudit.remark || 'N/A'}</p>
+
+                                {/* Media Panel */}
+                                <div className="lg:col-span-5">
+                                  <div className="sticky top-0 bg-slate-50 border border-slate-100 rounded-3xl p-4 shadow-inner">
+                                    <div className="flex items-center justify-between mb-4 px-2">
+                                      <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400 italic">Visual Evidence</h4>
+                                      {selectedAudit.picture && (
+                                        <button 
+                                          onClick={() => setPreviewImage(selectedAudit.picture!)}
+                                          className="text-[9px] font-black text-brand-orange uppercase tracking-widest hover:underline"
+                                        >
+                                          Open Fullscreen
+                                        </button>
+                                      )}
+                                    </div>
+                                    
+                                    {selectedAudit.picture ? (
+                                      <div 
+                                        onClick={() => setPreviewImage(selectedAudit.picture!)}
+                                        className="w-full aspect-[4/5] rounded-2xl overflow-hidden border border-slate-200 bg-white relative group cursor-zoom-in"
+                                      >
+                                        <img 
+                                          src={selectedAudit.picture} 
+                                          className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" 
+                                          alt="Visual Evidence" 
+                                          referrerPolicy="no-referrer" 
+                                        />
+                                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center transition-opacity duration-300">
+                                          <div className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-2xl flex items-center justify-center text-white mb-3">
+                                            <Eye size={24} />
+                                          </div>
+                                          <span className="text-[10px] font-black text-white uppercase tracking-[0.3em]">Tap to expand</span>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <div className="w-full aspect-[4/5] rounded-2xl border-2 border-dashed border-slate-200 flex flex-col items-center justify-center bg-white/50">
+                                        <ImageIcon size={48} className="text-slate-200 mb-4" />
+                                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">No Image Provided</span>
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
                               </motion.div>
                             ) : (
                               <motion.div 
                                 key="history-tab"
-                                initial={{ opacity: 0, x: 10 }}
-                                animate={{ opacity: 1, x: 0 }}
-                                exit={{ opacity: 0, x: -10 }}
-                                className="space-y-4 max-h-[300px] overflow-y-auto pr-2"
+                                initial={{ opacity: 0, y: 10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: -10 }}
+                                className="space-y-4"
                               >
-                                <h4 className="text-[10px] font-bold uppercase text-text-muted tracking-widest mb-2">Previous Audits for {selectedAudit.areaStation}</h4>
-                                {records
-                                  .filter(r => r.areaStation === selectedAudit.areaStation && r.id !== selectedAudit.id)
-                                  .sort((a,b) => new Date(b.auditDate).getTime() - new Date(a.auditDate).getTime())
-                                  .map((hist) => (
-                                    <div key={hist.id} className="p-3 bg-bg-main border border-border-subtle rounded-md flex justify-between items-center">
-                                      <div>
-                                        <div className="text-xs font-bold">{hist.auditDate} | {hist.ww}</div>
-                                        <div className="text-[10px] text-text-muted">{hist.auditors}</div>
+                                <div className="flex items-center gap-4 mb-8">
+                                  <div className="w-12 h-12 bg-slate-50 border border-slate-100 rounded-2xl flex items-center justify-center text-slate-400">
+                                    <History size={20} />
+                                  </div>
+                                  <div>
+                                    <h4 className="text-sm font-black text-slate-800 uppercase tracking-tight">Audit Trail</h4>
+                                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Station: {selectedAudit.areaStation}</p>
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-3">
+                                  {records
+                                    .filter(r => r.areaStation === selectedAudit.areaStation && r.id !== selectedAudit.id)
+                                    .sort((a,b) => new Date(b.auditDate).getTime() - new Date(a.auditDate).getTime())
+                                    .map((hist) => (
+                                      <div key={hist.id} className="p-4 bg-slate-50 border border-slate-100 rounded-2xl flex justify-between items-center group hover:bg-white hover:border-brand-orange/20 hover:shadow-sm transition-all">
+                                        <div className="flex items-center gap-4">
+                                          <div className="w-2 h-2 rounded-full bg-slate-200 group-hover:bg-brand-orange transition-colors" />
+                                          <div>
+                                            <div className="text-xs font-black text-slate-700">{hist.auditDate} <span className="text-slate-300 mx-2 text-[10px]">|</span> WW{hist.ww}</div>
+                                            <div className="text-[9px] text-slate-400 font-black uppercase tracking-tight mt-1">Audit by {hist.auditors}</div>
+                                          </div>
+                                        </div>
+                                        <div className="flex items-center gap-4">
+                                          <span className={`px-2.5 py-1 rounded-lg text-[9px] font-black uppercase ${hist.status === 'Closed' ? 'bg-emerald-50 text-emerald-600' : 'bg-brand-orange/10 text-brand-orange'}`}>
+                                            {hist.status}
+                                          </span>
+                                          <button 
+                                            onClick={() => setSelectedAudit(hist)}
+                                            className="w-8 h-8 flex items-center justify-center rounded-lg bg-white border border-slate-100 text-slate-400 hover:text-brand-orange hover:border-brand-orange/20 transition-all opacity-0 group-hover:opacity-100"
+                                          >
+                                            <Eye size={16} />
+                                          </button>
+                                        </div>
                                       </div>
-                                      <span className={`px-2 py-0.5 rounded text-[0.6rem] font-bold uppercase bg-slate-100 text-slate-600`}>
-                                        {hist.groupFinding}
-                                      </span>
+                                    ))}
+                                  {records.filter(r => r.areaStation === selectedAudit.areaStation && r.id !== selectedAudit.id).length === 0 && (
+                                    <div className="py-20 text-center">
+                                      <History size={48} className="mx-auto text-slate-100 mb-4" />
+                                      <p className="text-xs text-slate-400 font-black uppercase tracking-[0.2em]">No prior audit history</p>
                                     </div>
-                                  ))}
-                                {records.filter(r => r.areaStation === selectedAudit.areaStation && r.id !== selectedAudit.id).length === 0 && (
-                                  <div className="text-center py-6 text-xs text-text-muted italic">No prior history found for this area.</div>
-                                )}
+                                  )}
+                                </div>
                               </motion.div>
                             )}
                           </AnimatePresence>
-                          
-                          <div className="flex justify-between items-center pt-4 border-t border-border-subtle">
-                            <button 
-                              onClick={() => {
-                                handleEditClick(selectedAudit);
-                                setSelectedAudit(null);
-                                setHistoryTab('details');
-                              }}
-                              className="bg-slate-100 text-slate-600 px-6 py-2 rounded text-xs font-bold uppercase transition-all hover:bg-slate-200 flex items-center gap-2"
-                            >
-                              <Pencil size={12} />
-                              Edit Record
-                            </button>
-                            <button 
-                              onClick={() => { setSelectedAudit(null); setHistoryTab('details'); }}
-                              className="bg-brand-orange text-white px-6 py-2 rounded text-xs font-bold uppercase transition-all hover:brightness-110"
-                            >
-                              Close
-                            </button>
-                          </div>
+                        </div>
+                        
+                        <div className="p-6 border-t border-slate-100 bg-slate-50/50 flex justify-between items-center shrink-0">
+                          <button 
+                            onClick={() => {
+                              handleEditClick(selectedAudit);
+                              setSelectedAudit(null);
+                              setHistoryTab('details');
+                            }}
+                            className="bg-white border border-slate-200 text-slate-600 px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] shadow-sm hover:border-brand-orange hover:text-brand-orange transition-all flex items-center gap-2"
+                          >
+                            <Pencil size={14} />
+                            Modify Record
+                          </button>
+                          <button 
+                            onClick={() => { setSelectedAudit(null); setHistoryTab('details'); }}
+                            className="bg-brand-orange text-white px-10 py-3 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] shadow-lg shadow-brand-orange/20 hover:brightness-110 active:scale-95 transition-all"
+                          >
+                            Dismiss
+                          </button>
                         </div>
                       </motion.div>
                     </div>
@@ -1461,10 +1647,16 @@ export default function App() {
                               <td className="px-2 py-3 border border-slate-200 max-w-[150px] truncate" title={record.detailsFindings}>{record.detailsFindings}</td>
                               <td className="px-2 py-3 border border-slate-200 text-center">
                                 {record.picture ? (
-                                  <div className="w-6 h-6 rounded border border-slate-200 overflow-hidden mx-auto">
+                                  <div 
+                                    onClick={(e) => { e.stopPropagation(); setPreviewImage(record.picture!); }}
+                                    className="w-24 h-24 rounded-lg border border-slate-200 overflow-hidden mx-auto shadow-sm hover:scale-110 transition-transform cursor-zoom-in relative group"
+                                  >
                                     <img src={record.picture} className="w-full h-full object-cover" referrerPolicy="no-referrer" alt="" />
+                                    <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                                      <Eye size={16} className="text-white" />
+                                    </div>
                                   </div>
-                                ) : <ImageIcon size={12} className="mx-auto opacity-10" />}
+                                ) : <ImageIcon size={20} className="mx-auto opacity-10" />}
                               </td>
                               <td className="px-2 py-3 border border-slate-200 max-w-[150px] truncate italic text-slate-500" title={record.remark}>{record.remark}</td>
                               <td className={`px-2 py-3 border border-slate-200 text-center font-black ${record.status === 'Open' ? 'bg-[#fce4ec] text-[#e91e63]' : ''}`}>
@@ -1693,7 +1885,7 @@ export default function App() {
               <img 
                 src={previewImage} 
                 alt="Audit Detail" 
-                className="max-w-full max-h-[80vh] rounded-2xl shadow-2xl border-4 border-white/10 object-contain shadow-brand-orange/20"
+                className="max-w-[95vw] max-h-[90vh] rounded-2xl shadow-2xl border-4 border-white/10 object-contain shadow-brand-orange/30"
                 referrerPolicy="no-referrer"
               />
               <div className="absolute -bottom-16 left-0 right-0 text-center opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1745,11 +1937,12 @@ function KPICard({ label, value, trend, icon, color }: { label: string, value: s
     emerald: 'bg-emerald-50 text-emerald-600 border-emerald-100 shadow-emerald-500/5',
     orange: 'bg-orange-50 text-orange-600 border-orange-100 shadow-orange-500/5',
     blue: 'bg-blue-50 text-blue-600 border-blue-100 shadow-blue-500/5',
-    slate: 'bg-slate-50 text-slate-600 border-slate-100 shadow-slate-500/5'
+    slate: 'bg-slate-50 text-slate-600 border-slate-100 shadow-slate-500/5',
+    rose: 'bg-rose-50 text-rose-600 border-rose-100 shadow-rose-500/5'
   };
 
   return (
-    <div className={`p-4 rounded-2xl border bg-white shadow-lg transition-all hover:scale-[1.02] ${colors[color]}`}>
+    <div className={`p-4 rounded-2xl border bg-white shadow-lg transition-all hover:scale-[1.02] ${colors[color] || colors.slate}`}>
       <div className="flex justify-between items-start mb-3">
         <div className="p-2 rounded-lg bg-white shadow-sm border border-inherit">
           {icon}
@@ -1823,6 +2016,34 @@ function FormInput({ label, required, value, onChange, type = 'text' }: any) {
         required={required}
         className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 px-4 text-sm font-semibold text-slate-800 focus:bg-white focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/5 outline-none transition-all"
       />
+    </div>
+  );
+}
+
+function DetailField({ label, value, highlight, status }: { label: string, value: string, highlight?: boolean, status?: string }) {
+  const getStatusColor = (s: string) => {
+    switch (s) {
+      case 'Open': return 'bg-rose-50 text-rose-600 border-rose-100';
+      case 'In Progress': return 'bg-amber-50 text-amber-600 border-amber-100';
+      case 'Closed': return 'bg-emerald-50 text-emerald-600 border-emerald-100';
+      default: return 'bg-slate-50 text-slate-600 border-slate-100';
+    }
+  };
+
+  return (
+    <div className={`p-3 border rounded-xl flex flex-col gap-1 transition-all ${highlight ? 'bg-brand-orange/[0.03] border-brand-orange/20 shadow-sm shadow-brand-orange/5' : 'bg-slate-50 border-slate-100 hover:bg-white hover:border-slate-200'}`}>
+      <span className={`text-[9px] font-black uppercase tracking-[0.2em] italic ${highlight ? 'text-brand-orange' : 'text-slate-400'}`}>
+        {label}
+      </span>
+      {status ? (
+        <div className={`w-fit px-2.5 py-1 rounded-lg text-[10px] font-black uppercase border ${getStatusColor(status)}`}>
+          {value}
+        </div>
+      ) : (
+        <span className="text-xs font-black text-slate-700 leading-tight">
+          {value || '—'}
+        </span>
+      )}
     </div>
   );
 }
