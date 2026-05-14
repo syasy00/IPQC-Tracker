@@ -26,7 +26,9 @@ import {
   TrendingDown,
   TrendingUp,
   AlertTriangle,
-  Tag
+  Tag,
+  Download,
+  Upload
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -47,6 +49,19 @@ import {
   Legend
 } from 'recharts';
 import { AuditRecord, ViewState, Department, Category } from './types';
+import { exportToExcel, importFromExcel } from './utils/excel';
+
+// Calculate Work Week from date string
+const calculateWW = (dateStr: string): string => {
+  if (!dateStr) return '';
+  const date = new Date(dateStr);
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return weekNo.toString();
+};
 
 // Mock Data for Charts
 const PRODUCTION_TREND = [
@@ -80,8 +95,8 @@ const INITIAL_RECORDS: AuditRecord[] = [
   {
     id: '1',
     no: 1,
-    auditDate: '2026-05-04',
-    ww: '18',
+    auditDate: new Date().toISOString().split('T')[0],
+    ww: calculateWW(new Date().toISOString().split('T')[0]),
     shift: 'D',
     auditors: 'Amalina',
     personOnJob: 'Alleya',
@@ -101,8 +116,8 @@ const INITIAL_RECORDS: AuditRecord[] = [
   {
     id: '2',
     no: 2,
-    auditDate: '2026-05-04',
-    ww: '18',
+    auditDate: new Date().toISOString().split('T')[0],
+    ww: calculateWW(new Date().toISOString().split('T')[0]),
     shift: 'D',
     auditors: 'Zulfikri',
     personOnJob: 'mathanraj',
@@ -244,6 +259,174 @@ const INITIAL_RECORDS: AuditRecord[] = [
     icarNum: 'ICAR-2026-008',
     actionTaken: 'Recalibrated and verified with master gauge',
     mqeEngineer: 'Larry'
+  },
+  {
+    id: '9',
+    no: 9,
+    auditDate: new Date().toISOString().split('T')[0],
+    ww: calculateWW(new Date().toISOString().split('T')[0]),
+    shift: 'N',
+    auditors: 'Sarah Connor',
+    personOnJob: 'John Smith',
+    department: 'Production Team',
+    platform: 'Apex',
+    areaStation: 'SMT 3',
+    groupFinding: 'Safety',
+    category: 'Process',
+    detailsFindings: 'Exposed wiring on station 3 power supply.',
+    picture: undefined,
+    remark: 'Maintenance alerted',
+    status: 'Open',
+    icarNum: '',
+    actionTaken: '',
+    mqeEngineer: 'Siti Naimah'
+  },
+  {
+    id: '10',
+    no: 10,
+    auditDate: new Date().toISOString().split('T')[0],
+    ww: calculateWW(new Date().toISOString().split('T')[0]),
+    shift: 'D',
+    auditors: 'Ahmad',
+    personOnJob: 'Lee Wei',
+    department: 'IE Team',
+    platform: 'Navigator',
+    areaStation: 'Packaging',
+    groupFinding: 'Hardware',
+    category: 'Tooling_Labeling',
+    detailsFindings: 'Label printer jamming frequently.',
+    picture: 'https://picsum.photos/seed/printer/200/150',
+    remark: 'Hardware replacement requested',
+    status: 'In Progress',
+    icarNum: '',
+    actionTaken: 'Temporary fix applied',
+    mqeEngineer: 'Farid'
+  },
+  {
+    id: '11',
+    no: 11,
+    auditDate: new Date().toISOString().split('T')[0],
+    ww: calculateWW(new Date().toISOString().split('T')[0]),
+    shift: 'N',
+    auditors: 'Amalina',
+    personOnJob: 'Siti Aminah',
+    department: 'Production Team',
+    platform: 'Apex',
+    areaStation: 'SMT 1',
+    groupFinding: 'Quality',
+    category: 'ESD_Control',
+    detailsFindings: 'Ionizer fan not functioning at required speed.',
+    picture: undefined,
+    remark: 'Unit needs service',
+    status: 'Open',
+    icarNum: '',
+    actionTaken: '',
+    mqeEngineer: 'Siti Naimah'
+  },
+  {
+    id: '12',
+    no: 12,
+    auditDate: new Date().toISOString().split('T')[0],
+    ww: calculateWW(new Date().toISOString().split('T')[0]),
+    shift: 'D',
+    auditors: 'Zulfikri',
+    personOnJob: 'Ramasamy',
+    department: 'Mfg Engineering',
+    platform: 'Navigator',
+    areaStation: 'Post-Etch Inspection',
+    groupFinding: 'Quality',
+    category: 'Process',
+    detailsFindings: 'Residue found on wafers post-cleaning.',
+    picture: 'https://picsum.photos/seed/residue/200/150',
+    remark: 'Check chemical concentrations',
+    status: 'Open',
+    icarNum: '',
+    actionTaken: '',
+    mqeEngineer: 'Farid'
+  },
+  {
+    id: '13',
+    no: 13,
+    auditDate: new Date().toISOString().split('T')[0],
+    ww: calculateWW(new Date().toISOString().split('T')[0]),
+    shift: 'N',
+    auditors: 'Sarah Connor',
+    personOnJob: 'Chong Wei',
+    department: 'Etching',
+    platform: 'PDX',
+    areaStation: 'Dry Etch 2',
+    groupFinding: 'Hardware',
+    category: 'Safety',
+    detailsFindings: 'Emergency stop button sticks when pressed.',
+    picture: undefined,
+    remark: 'Safety hazard!',
+    status: 'In Progress',
+    icarNum: '',
+    actionTaken: 'Lubricated mechanism',
+    mqeEngineer: 'Larry'
+  },
+  {
+    id: '14',
+    no: 14,
+    auditDate: new Date().toISOString().split('T')[0],
+    ww: calculateWW(new Date().toISOString().split('T')[0]),
+    shift: 'D',
+    auditors: 'Ahmad',
+    personOnJob: 'Fatimah',
+    department: 'Production Team',
+    platform: 'Apex',
+    areaStation: 'Hand Insert Line',
+    groupFinding: 'Quality',
+    category: 'Tooling_Labeling',
+    detailsFindings: 'Soldering iron temperature exceeding spec.',
+    picture: 'https://picsum.photos/seed/solder/200/150',
+    remark: 'Recalibrating station',
+    status: 'Closed',
+    icarNum: 'ICAR-2026-014',
+    actionTaken: 'Sensor replacement',
+    mqeEngineer: 'Siti Naimah'
+  },
+  {
+    id: '15',
+    no: 15,
+    auditDate: new Date().toISOString().split('T')[0],
+    ww: calculateWW(new Date().toISOString().split('T')[0]),
+    shift: 'N',
+    auditors: 'Amalina',
+    personOnJob: 'Rajesh',
+    department: 'Lithography',
+    platform: 'Navigator',
+    areaStation: 'Developer Track',
+    groupFinding: 'Software',
+    category: 'Process',
+    detailsFindings: 'Batch processing delay in execution software.',
+    picture: undefined,
+    remark: 'Software update pending',
+    status: 'Open',
+    icarNum: '',
+    actionTaken: '',
+    mqeEngineer: 'Farid'
+  },
+  {
+    id: '16',
+    no: 16,
+    auditDate: '2026-05-10',
+    ww: calculateWW('2026-05-10'),
+    shift: 'D',
+    auditors: 'Zulfikri',
+    personOnJob: 'Kevin Tan',
+    department: 'IE Team',
+    platform: 'PDX',
+    areaStation: 'Material Receiving',
+    groupFinding: 'Hardware',
+    category: 'Safety',
+    detailsFindings: 'Forklift battery charger cable frayed.',
+    picture: undefined,
+    remark: 'Ordering new cable',
+    status: 'In Progress',
+    icarNum: '',
+    actionTaken: 'Insulated with tape temporarily',
+    mqeEngineer: 'Larry'
   }
 ];
 
@@ -260,7 +443,7 @@ export default function App() {
   const [powerBiUrl, setPowerBiUrl] = useState<string>(''); // User can paste their URL here
   const [dashboardMode, setDashboardMode] = useState<'system' | 'powerbi'>('system');
   const [historyTab, setHistoryTab] = useState<'details' | 'timeline'>('details');
-  const [historyDate, setHistoryDate] = useState<string>('2026-05-06');
+  const [historyDate, setHistoryDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [isAdmin, setIsAdmin] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [loginPassword, setLoginPassword] = useState('');
@@ -326,6 +509,18 @@ export default function App() {
         .map(([name, value]) => ({ name, value }))
     };
   }, [records]);
+
+  // Dynamic Filter Options for Dropdowns
+  const dynamicOptions = useMemo(() => {
+    return {
+      shifts: Array.from(new Set(records.map(r => r.shift))).filter(Boolean).sort(),
+      auditors: Array.from(new Set(records.map(r => r.auditors))).filter(Boolean).sort(),
+      platforms: Array.from(new Set(records.map(r => r.platform))).filter(Boolean).sort(),
+      statuses: Array.from(new Set(records.map(r => r.status))).filter(Boolean).sort(),
+      departments: Array.from(new Set(records.map(r => r.department))).filter(Boolean).sort(),
+    };
+  }, [records]);
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const viewParam = params.get('view') as ViewState;
@@ -361,7 +556,10 @@ export default function App() {
   const [filterDept, setFilterDept] = useState('');
   const [filterFindings, setFilterFindings] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
-  const [filterWW, setFilterWW] = useState('18');
+  const [filterStatus, setFilterStatus] = useState('');
+  const [filterShift, setFilterShift] = useState('');
+  const [filterPlatform, setFilterPlatform] = useState('');
+  const [filterWW, setFilterWW] = useState(calculateWW(new Date().toISOString().split('T')[0]));
   const [filterDate, setFilterDate] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -369,7 +567,7 @@ export default function App() {
   // Form State
   const [newAudit, setNewAudit] = useState<Partial<AuditRecord>>({
     auditDate: new Date().toISOString().split('T')[0],
-    ww: '18',
+    ww: calculateWW(new Date().toISOString().split('T')[0]),
     shift: 'D',
     auditors: '',
     personOnJob: '',
@@ -385,22 +583,37 @@ export default function App() {
     status: 'Open'
   });
 
+  // Auto-calculate WW when date changes
+  useEffect(() => {
+    if (newAudit.auditDate) {
+      const calculatedWW = calculateWW(newAudit.auditDate);
+      if (calculatedWW !== newAudit.ww) {
+        setNewAudit(prev => ({ ...prev, ww: calculatedWW }));
+      }
+    }
+  }, [newAudit.auditDate]);
+
   const filteredRecords = useMemo(() => {
     return records.filter(r => {
-      const matchesSearch = 
-        r.areaStation.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        r.platform.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        r.auditors.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesSearch = searchQuery === '' || Object.values(r).some(value => 
+        value !== null && value !== undefined && String(value).toLowerCase().includes(searchQuery.toLowerCase())
+      );
       
-      const matchesAuditor = !filterAuditor || r.auditors.toLowerCase().includes(filterAuditor.toLowerCase());
-      const matchesDept = !filterDept || r.department.toLowerCase().includes(filterDept.toLowerCase());
-      const matchesFindings = !filterFindings || r.groupFinding.toLowerCase().includes(filterFindings.toLowerCase());
+      const matchesAuditor = !filterAuditor || r.auditors === filterAuditor;
+      const matchesDept = !filterDept || r.department === filterDept;
+      const matchesFindings = !filterFindings || r.groupFinding === filterFindings;
       const matchesDate = !filterDate || r.auditDate === filterDate;
       const matchesWW = !filterWW || r.ww === filterWW;
+      const matchesCategory = !filterCategory || r.category === filterCategory;
+      const matchesStatus = !filterStatus || r.status === filterStatus;
+      const matchesShift = !filterShift || r.shift === filterShift;
+      const matchesPlatform = !filterPlatform || r.platform === filterPlatform;
 
-      return matchesSearch && matchesAuditor && matchesDept && matchesFindings && matchesDate && matchesWW;
+      return matchesSearch && matchesAuditor && matchesDept && matchesFindings && 
+             matchesDate && matchesWW && matchesCategory && matchesStatus && 
+             matchesShift && matchesPlatform;
     });
-  }, [records, searchQuery, filterAuditor, filterDept, filterFindings, filterDate, filterWW]);
+  }, [records, searchQuery, filterAuditor, filterDept, filterFindings, filterDate, filterWW, filterCategory, filterStatus, filterShift, filterPlatform]);
 
   const [selectedAudit, setSelectedAudit] = useState<AuditRecord | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -440,7 +653,7 @@ export default function App() {
 
     setNewAudit({
       auditDate: new Date().toISOString().split('T')[0],
-      ww: '18',
+      ww: calculateWW(new Date().toISOString().split('T')[0]),
       shift: 'D',
       auditors: '',
       personOnJob: '',
@@ -460,24 +673,26 @@ export default function App() {
   };
 
   const handleEditClick = (record: AuditRecord) => {
+    const id = record.id;
     setNewAudit({
-      auditDate: record.auditDate,
-      ww: record.ww,
-      shift: record.shift,
-      auditors: record.auditors,
-      personOnJob: record.personOnJob,
-      department: record.department,
-      platform: record.platform,
-      areaStation: record.areaStation,
-      groupFinding: record.groupFinding,
-      category: record.category,
-      detailsFindings: record.detailsFindings,
-      remark: record.remark,
-      icarNum: record.icarNum,
-      actionTaken: record.actionTaken,
+      auditDate: record.auditDate || '',
+      ww: record.ww || '',
+      shift: record.shift || 'D',
+      auditors: record.auditors || '',
+      personOnJob: record.personOnJob || '',
+      department: record.department || '',
+      platform: record.platform || '',
+      areaStation: record.areaStation || '',
+      groupFinding: record.groupFinding || '',
+      category: record.category || '',
+      detailsFindings: record.detailsFindings || '',
+      remark: record.remark || '',
+      icarNum: record.icarNum || '',
+      actionTaken: record.actionTaken || '',
+      status: record.status || 'Open',
       picture: record.picture,
     });
-    setEditingId(record.id);
+    setEditingId(id);
     setView('add-audit');
   };
 
@@ -507,9 +722,10 @@ export default function App() {
         <div className="p-6 flex items-center gap-3 border-b border-white/5">
           <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 overflow-hidden">
             <img 
-              src="/AE.png" 
+              src="https://upload.wikimedia.org/wikipedia/commons/b/b1/Idea-logo.png" 
               alt="Logo" 
               className="w-full h-full object-contain"
+              referrerPolicy="no-referrer"
             />
           </div>
           <h1 className="font-black text-xs tracking-widest text-white uppercase whitespace-nowrap">IPQC TRACKER</h1>
@@ -614,63 +830,17 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-4">
-            {view === 'ipqc' && (
-              <button 
-                onClick={() => setFiltersOpen(!filtersOpen)}
-                className={`p-2 rounded-md transition-all flex items-center gap-2 text-xs font-bold uppercase ${filtersOpen ? 'bg-brand-orange/10 text-brand-orange' : 'text-text-muted hover:bg-bg-main border border-border-subtle'}`}
-              >
-                <Filter size={14} />
-                <span className="hidden sm:inline">{filtersOpen ? 'Hide Filters' : 'Show Filters'}</span>
-              </button>
-            )}
             <button 
               onClick={() => setView('add-audit')}
-              className="bg-brand-orange hover:brightness-110 text-white px-3 py-2 md:px-4 md:py-2 rounded-md text-[11px] md:text-xs font-semibold transition-all whitespace-nowrap"
+              className="bg-brand-orange hover:brightness-110 text-white px-3 py-2 md:px-4 md:py-2 rounded-md text-[11px] md:text-xs font-semibold transition-all whitespace-nowrap shadow-lg shadow-brand-orange/20 flex items-center gap-2"
             >
-              <span className="hidden sm:inline">+ Add New Audit</span>
-              <Plus className="sm:hidden" size={16} />
+              <Plus size={16} />
+              <span className="hidden sm:inline">Add Finding</span>
             </button>
           </div>
         </header>
 
-        {/* Filter Bar */}
-        <AnimatePresence>
-          {filtersOpen && view === 'ipqc' && (
-            <motion.div 
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: 'auto', opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              className="overflow-hidden bg-white border-b border-border-subtle shrink-0"
-            >
-              <div className="px-4 md:px-6 py-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-                <FilterInput label="Work Week (WW)" type="select" options={WWS} value={filterWW} onChange={setFilterWW} />
-                <FilterInput label="Date" type="date" value={filterDate} onChange={setFilterDate} />
-                <FilterInput label="Auditor" placeholder="Search Auditor..." value={filterAuditor} onChange={setFilterAuditor} />
-                <FilterInput label="Group Finding" placeholder="Search Finding..." value={filterFindings} onChange={setFilterFindings} />
-                <FilterInput label="Department" placeholder="Department" value={filterDept} onChange={setFilterDept} />
-                <FilterInput label="Category" type="select" options={CATEGORIES} value={filterCategory} onChange={setFilterCategory} />
-                <div className="flex items-end">
-                  <button 
-                    onClick={() => {
-                      setFilterDate('');
-                      setFilterAuditor('');
-                      setFilterFindings('');
-                      setFilterDept('');
-                      setFilterCategory('');
-                      setSearchQuery('');
-                      setFilterWW('18');
-                    }}
-                    className="w-full bg-slate-50 border border-border-subtle rounded-md text-text-muted text-[10px] font-bold uppercase p-2.5 hover:bg-slate-100 transition-colors"
-                  >
-                    Reset Filters
-                  </button>
-                </div>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        <main className="flex-1 overflow-y-auto p-6 min-h-0">
+        <main className="flex-1 overflow-hidden p-6 min-h-0 bg-slate-50/30 flex flex-col">
           <AnimatePresence mode="wait">
             {view === 'dashboard' && (
               <motion.div 
@@ -678,7 +848,7 @@ export default function App() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="space-y-6 pb-20"
+                className="h-full overflow-y-auto space-y-6 pb-20 custom-scrollbar"
               >
                 {/* Dashboard Header/Toggle */}
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-4 rounded-lg border border-border-subtle">
@@ -966,105 +1136,212 @@ export default function App() {
                 key="ipqc"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                className="h-full flex flex-col min-h-0 pb-20"
+                className="flex-1 flex flex-col min-h-0 bg-transparent"
               >
-                {/* KPI Cards on Top of Table */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-                  <KPICard 
-                    icon={<TrendingUp size={16} className="text-emerald-500" />}
-                    label="Compliance"
-                    value="98.2%"
-                    trend="+0.5%"
-                    color="emerald"
-                  />
-                  <KPICard 
-                    icon={<AlertTriangle size={16} className="text-brand-orange" />}
-                    label="Open Findings"
-                    value={records.filter(r => r.status === 'Open').length}
-                    trend="Requires Attention"
-                    color="orange"
-                  />
-                  <KPICard 
-                    icon={<CheckCircle2 size={16} className="text-blue-500" />}
-                    label="Closed this WW"
-                    value={records.filter(r => r.status === 'Closed' && r.ww === filterWW).length}
-                    trend="On Track"
-                    color="blue"
-                  />
-                  <KPICard 
-                    icon={<Clock size={16} className="text-slate-500" />}
-                    label="In Progress"
-                    value={records.filter(r => r.status === 'In Progress').length}
-                    trend="Needs Follow-up"
-                    color="slate"
-                  />
+                {/* KPI Summary Row */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                  <KPICard icon={<AlertTriangle size={16} />} label="Open Findings" value={records.filter(r => r.status === 'Open').length} trend="Active" color="orange" />
+                  <KPICard icon={<CheckCircle2 size={16} />} label="Closed (Current WW)" value={records.filter(r => r.status === 'Closed' && r.ww === filterWW).length} trend={`WW${filterWW}`} color="blue" />
+                  <KPICard icon={<Clock size={16} />} label="Needs Follow-up" value={records.filter(r => r.status === 'In Progress').length} trend="Pending" color="slate" />
                 </div>
 
-                <div className="bg-white rounded-lg border border-border-subtle overflow-hidden flex flex-col flex-1">
-                  {/* Desktop Table */}
-                  <div className="hidden md:block overflow-x-auto whitespace-nowrap">
-                    <table className="w-full text-left border-collapse border border-slate-200">
-                      <thead className="bg-[#f2f2f2] sticky top-0 z-10 font-bold border-b-2 border-slate-300">
+                {/* Utility Toolbar */}
+                <div className="bg-white p-4 rounded-2xl border border-border-subtle shadow-sm mb-6 flex flex-col md:flex-row items-center gap-4">
+                  {/* Left: Search */}
+                  <div className="relative flex-1 w-full">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input 
+                      type="text" 
+                      placeholder="Search across all records and fields..." 
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full bg-slate-50 border border-border-subtle rounded-xl text-xs font-bold pl-10 p-3 outline-none focus:border-brand-orange transition-all"
+                    />
+                  </div>
+                  
+                  {/* Right: Actions Group */}
+                  <div className="flex items-center gap-3 w-full md:w-auto">
+                    <button 
+                      onClick={() => setFiltersOpen(!filtersOpen)}
+                      className={`flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${filtersOpen ? 'bg-brand-orange text-white border-brand-orange shadow-md shadow-brand-orange/20' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+                    >
+                      <Filter size={14} />
+                      {filtersOpen ? 'Hide Filters' : 'Filter'}
+                    </button>
+                    
+                    <div className="h-8 w-px bg-slate-200 hidden md:block mx-1"></div>
+                    
+                    <div className="flex items-center gap-2 flex-1 md:flex-none">
+                      <button 
+                        onClick={() => exportToExcel(records)}
+                        className="flex-1 md:flex-none flex items-center justify-center gap-2 px-5 py-2.5 bg-emerald-50 text-emerald-600 border border-emerald-100 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600 hover:text-white transition-all"
+                      >
+                        <Download size={14} />
+                        Export
+                      </button>
+                      
+                      <label className="flex-1 md:flex-none flex items-center justify-center gap-2 px-5 py-2.5 bg-blue-50 text-blue-600 border border-blue-100 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-600 hover:text-white transition-all cursor-pointer">
+                        <Upload size={14} />
+                        Import
+                        <input 
+                          type="file" 
+                          accept=".xlsx, .xls"
+                          className="hidden"
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                              try {
+                                const imported = await importFromExcel(file);
+                                const newRecords = imported.map((r, index) => ({
+                                  ...r,
+                                  id: (records.length + index + 1).toString(),
+                                  no: records.length + index + 1,
+                                  status: r.status || 'Open'
+                                })) as AuditRecord[];
+                                setRecords([...records, ...newRecords]);
+                                alert(`Import successful! Added ${newRecords.length} records.`);
+                              } catch (err) {
+                                alert('Error importing file.');
+                              }
+                            }
+                          }}
+                        />
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Relocated Filters Section */}
+                <AnimatePresence>
+                  {filtersOpen && (
+                    <motion.div 
+                      initial={{ height: 0, opacity: 0, marginBottom: 0 }}
+                      animate={{ height: 'auto', opacity: 1, marginBottom: 24 }}
+                      exit={{ height: 0, opacity: 0, marginBottom: 0 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="bg-white p-6 rounded-2xl border border-border-subtle shadow-sm grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                        <FilterInput label="Work Week (WW)" type="select" options={WWS} value={filterWW} onChange={setFilterWW} />
+                        <FilterInput label="Date" type="date" value={filterDate} onChange={setFilterDate} />
+                        <FilterInput label="Status" type="select" options={dynamicOptions.statuses} value={filterStatus} onChange={setFilterStatus} />
+                        <FilterInput label="Shift" type="select" options={dynamicOptions.shifts} value={filterShift} onChange={setFilterShift} />
+                        <FilterInput label="Auditor" type="select" options={dynamicOptions.auditors} value={filterAuditor} onChange={setFilterAuditor} />
+                        <FilterInput label="Department" type="select" options={dynamicOptions.departments} value={filterDept} onChange={setFilterDept} />
+                        <FilterInput label="Platform" type="select" options={dynamicOptions.platforms} value={filterPlatform} onChange={setFilterPlatform} />
+                        <FilterInput label="Category" type="select" options={CATEGORIES} value={filterCategory} onChange={setFilterCategory} />
+                        <FilterInput label="Group Finding" type="select" options={GROUP_FINDINGS} value={filterFindings} onChange={setFilterFindings} />
+                        <div className="flex items-end">
+                          <button 
+                            onClick={() => {
+                              setFilterDate('');
+                              setFilterAuditor('');
+                              setFilterFindings('');
+                              setFilterDept('');
+                              setFilterCategory('');
+                              setFilterStatus('');
+                              setFilterShift('');
+                              setFilterPlatform('');
+                              setSearchQuery('');
+                              setFilterWW(calculateWW(new Date().toISOString().split('T')[0]));
+                            }}
+                            className="w-full bg-slate-50 border border-border-subtle rounded-xl text-text-muted text-[10px] font-black uppercase p-3 hover:bg-slate-100 transition-colors"
+                          >
+                            Reset
+                          </button>
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                <div className="bg-white rounded-2xl border border-border-subtle overflow-hidden flex flex-col flex-1 shadow-sm min-h-0">
+                  {/* Desktop Table - Flex Grow to take available space */}
+                  <div className="hidden md:block overflow-auto flex-1 custom-scrollbar">
+                    <table className="w-full text-left border-collapse min-w-[1800px]">
+                      <thead className="bg-[#f8fafc] sticky top-0 z-20 shadow-sm">
                         <tr>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 text-center">No</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300">Date</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 text-center bg-[#fce4ec]">WW</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 text-center bg-[#fce4ec]">Shift</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300">IPQC Auditor Name</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300">PIC Finding</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 bg-[#fce4ec]">Department</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 bg-[#fce4ec]">Platform</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300">MQE Engineer</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300">Area / Station</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 bg-[#fce4ec]">Group Finding</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 bg-[#fce4ec]">Category</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300">Finding Details</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 bg-[#fce4ec]">Finding Image</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300">Remark</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 bg-[#fce4ec]">Status</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300">ICAR#</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300">ACTION TAKEN</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 text-center sticky left-0 bg-[#f8fafc]">No</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Date</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 text-center">WW</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 text-center">Shift</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Auditor Name</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">PIC Finding</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Department</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Platform</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">MQE Engineer</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 font-bold bg-slate-50/50">Station / Area</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Grp Finding</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Category</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Details</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 text-center">Image</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Remark</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 text-center">Status</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">ICAR#</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Action Taken</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Actions</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-200">
+                      <tbody className="divide-y divide-slate-100">
                         {filteredRecords.map((record) => (
                           <tr 
                             key={record.id} 
                             onClick={() => setSelectedAudit(record)}
-                            className="hover:bg-brand-orange/[0.03] transition-all duration-150 text-[10px] text-slate-700 bg-white cursor-pointer group"
+                            className="hover:bg-slate-50 transition-all duration-150 text-[11px] text-slate-600 bg-white cursor-pointer group"
                           >
-                            <td className="px-2 py-3 border border-slate-200 text-center font-bold text-slate-400 group-hover:text-brand-orange">{record.no}</td>
-                            <td className="px-2 py-3 border border-slate-200 whitespace-nowrap font-medium">{record.auditDate}</td>
-                            <td className="px-2 py-3 border border-slate-200 text-center font-bold">{record.ww}</td>
-                            <td className="px-2 py-3 border border-slate-200 text-center font-bold">{record.shift}</td>
-                            <td className="px-2 py-3 border border-slate-200 text-center italic font-semibold text-slate-600">{record.auditors}</td>
-                            <td className="px-2 py-3 border border-slate-200 text-center italic font-semibold text-slate-600">{record.personOnJob}</td>
-                            <td className="px-2 py-3 border border-slate-200 font-medium">{record.department}</td>
-                            <td className="px-2 py-3 border border-slate-200 font-medium">{record.platform}</td>
-                            <td className="px-2 py-3 border border-slate-200 font-black text-brand-orange/80 italic">{record.mqeEngineer}</td>
-                            <td className="px-2 py-3 border border-slate-200 text-center font-medium">{record.areaStation}</td>
-                            <td className="px-2 py-3 border border-slate-200 text-center">{record.groupFinding}</td>
-                            <td className="px-2 py-3 border border-slate-200 text-center">{record.category}</td>
-                            <td className="px-2 py-3 border border-slate-200 max-w-[150px] truncate" title={record.detailsFindings}>{record.detailsFindings}</td>
-                            <td className="px-2 py-3 border border-slate-200 text-center">
+                            <td className="px-4 py-4 text-center font-bold text-slate-400 group-hover:text-brand-orange sticky left-0 bg-white group-hover:bg-slate-50 transition-colors">{record.no}</td>
+                            <td className="px-4 py-4 whitespace-nowrap font-medium">{record.auditDate}</td>
+                            <td className="px-4 py-4 text-center font-black text-slate-400">{record.ww}</td>
+                            <td className="px-4 py-4 text-center font-bold bg-slate-50/30">{record.shift}</td>
+                            <td className="px-4 py-4 font-semibold text-slate-800">{record.auditors}</td>
+                            <td className="px-4 py-4 font-medium text-slate-500">{record.personOnJob}</td>
+                            <td className="px-4 py-4 font-bold text-blue-600/70">{record.department}</td>
+                            <td className="px-4 py-4 font-bold text-brand-orange/80">{record.platform}</td>
+                            <td className="px-4 py-4 font-medium italic text-slate-400">{record.mqeEngineer}</td>
+                            <td className="px-4 py-4 font-black text-slate-900 bg-slate-50/30">{record.areaStation}</td>
+                            <td className="px-4 py-4 italic">{record.groupFinding}</td>
+                            <td className="px-4 py-4 whitespace-nowrap">
+                              <span className="px-2 py-1 bg-slate-100 rounded text-[9px] font-black uppercase tracking-widest text-slate-500">
+                                {record.category}
+                              </span>
+                            </td>
+                            <td className="px-4 py-4 max-w-[200px] truncate leading-tight" title={record.detailsFindings}>
+                              {record.detailsFindings}
+                            </td>
+                            <td className="px-4 py-4 text-center">
                               {record.picture ? (
                                 <div 
                                   onClick={(e) => { e.stopPropagation(); setPreviewImage(record.picture!); }}
-                                  className="w-24 h-24 rounded-lg border border-slate-200 overflow-hidden mx-auto shadow-sm hover:scale-110 transition-transform cursor-zoom-in relative group"
+                                  className="w-40 h-32 rounded-lg border border-slate-200 overflow-hidden mx-auto shadow-md group-hover:scale-105 transition-transform cursor-zoom-in relative"
                                 >
                                   <img src={record.picture} className="w-full h-full object-cover" referrerPolicy="no-referrer" alt="" />
-                                  <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                                    <Eye size={16} className="text-white" />
+                                  <div className="absolute inset-0 bg-black/5 opacity-0 hover:opacity-100 flex items-center justify-center transition-opacity">
+                                    <Search size={20} className="text-white drop-shadow-md" />
                                   </div>
                                 </div>
-                              ) : <ImageIcon size={20} className="mx-auto opacity-10" />}
+                              ) : <ImageIcon size={24} className="mx-auto opacity-10" />}
                             </td>
-                            <td className="px-2 py-3 border border-slate-200 max-w-[150px] truncate italic text-slate-500" title={record.remark}>{record.remark}</td>
-                            <td className={`px-2 py-3 border border-slate-200 text-center font-black ${record.status === 'Open' ? 'bg-[#fce4ec] text-[#e91e63]' : ''}`}>
-                              {record.status}
+                            <td className="px-4 py-4 max-w-[150px] truncate italic text-slate-400">{record.remark || '-'}</td>
+                            <td className="px-4 py-4 text-center">
+                              <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest shadow-sm ${
+                                record.status === 'Open' ? 'bg-rose-50 text-rose-500 border border-rose-100' : 
+                                record.status === 'In Progress' ? 'bg-amber-50 text-amber-600 border border-amber-100' : 
+                                'bg-emerald-50 text-emerald-600 border border-emerald-100'
+                              }`}>
+                                {record.status}
+                              </span>
                             </td>
-                            <td className="px-2 py-3 border border-slate-200 text-center font-mono text-[9px]">{record.icarNum || '-'}</td>
-                            <td className="px-2 py-3 border border-slate-200 whitespace-pre-wrap leading-tight text-[9px]">{record.actionTaken || '-'}</td>
+                            <td className="px-4 py-4 font-mono text-[10px] text-slate-400">{record.icarNum || '-'}</td>
+                            <td className="px-4 py-4 text-[10px] max-w-[150px] truncate">{record.actionTaken || '-'}</td>
+                            <td className="px-4 py-4 text-right">
+                              <div className="flex justify-end items-center gap-2">
+                                <button 
+                                  onClick={(e) => { e.stopPropagation(); handleEditClick(record); }}
+                                  className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-brand-orange transition-all hover:shadow-sm"
+                                >
+                                  <Pencil size={14} />
+                                </button>
+                              </div>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -1127,8 +1404,18 @@ export default function App() {
                   </div>
 
                   {filteredRecords.length === 0 && (
-                    <div className="p-10 text-center text-text-muted text-xs uppercase font-bold">
-                      No matching audit records found.
+                    <div className="p-20 text-center bg-white flex-1 flex flex-col items-center justify-center">
+                      <div className="w-16 h-16 bg-bg-main rounded-full flex items-center justify-center mb-4 text-text-muted/30">
+                        <Filter size={32} />
+                      </div>
+                      <h4 className="font-bold text-text-muted uppercase tracking-widest text-sm">No Results Found</h4>
+                      <p className="text-xs text-text-muted/60 mt-2">Try adjusting your filters or search query.</p>
+                      <button 
+                        onClick={() => setFilterWW('All')}
+                        className="mt-6 px-6 py-2 bg-brand-orange/10 text-brand-orange rounded-full text-[10px] font-black uppercase tracking-widest hover:bg-brand-orange hover:text-white transition-all shadow-sm"
+                      >
+                        Show All Weeks
+                      </button>
                     </div>
                   )}
                 </div>
@@ -1334,7 +1621,7 @@ export default function App() {
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -20 }}
-                className="w-full pb-20"
+                className="flex-1 overflow-y-auto pb-20 custom-scrollbar"
               >
                 <div className="bg-white rounded-lg border border-border-subtle overflow-hidden">
                   <div className="bg-bg-main p-4 md:p-6 border-b border-border-subtle flex justify-between items-center">
@@ -1348,8 +1635,8 @@ export default function App() {
                         setEditingId(null);
                         setNewAudit({
                           auditDate: new Date().toISOString().split('T')[0],
-                          ww: '',
-                          shift: 'Day',
+                          ww: calculateWW(new Date().toISOString().split('T')[0]),
+                          shift: 'D',
                           auditors: '',
                           personOnJob: '',
                           department: '',
@@ -1361,6 +1648,7 @@ export default function App() {
                           remark: '',
                           icarNum: '',
                           actionTaken: '',
+                          status: 'Open',
                           picture: undefined,
                         });
                       }} 
@@ -1459,11 +1747,12 @@ export default function App() {
                           />
                         </div>
                         <div>
-                          <FormSelect 
-                            label="Action Taken" 
-                            value={newAudit.actionTaken || ''} 
-                            onChange={(v: string) => setNewAudit({...newAudit, actionTaken: v})} 
-                            options={['N/A', 'Corrected on spot', 'Parts replacement', 'Pending maintenance']}
+                          <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest mb-2 block italic">Action Taken</label>
+                          <textarea 
+                            className="w-full bg-slate-50 border border-border-subtle rounded-xl p-4 text-sm focus:border-brand-orange outline-none transition-all placeholder:text-text-muted/40 min-h-[80px]"
+                            placeholder="What actions were taken to resolve this?"
+                            value={newAudit.actionTaken || ''}
+                            onChange={(e) => setNewAudit({...newAudit, actionTaken: e.target.value})}
                           />
                         </div>
                         <div>
@@ -1521,8 +1810,8 @@ export default function App() {
                           setEditingId(null);
                           setNewAudit({
                             auditDate: new Date().toISOString().split('T')[0],
-                            ww: '',
-                            shift: 'Day',
+                            ww: calculateWW(new Date().toISOString().split('T')[0]),
+                            shift: 'D',
                             auditors: '',
                             personOnJob: '',
                             department: '',
@@ -1534,6 +1823,7 @@ export default function App() {
                             remark: '',
                             icarNum: '',
                             actionTaken: '',
+                            status: 'Open',
                             picture: undefined,
                           });
                         }}
@@ -1559,7 +1849,7 @@ export default function App() {
                 initial={{ opacity: 0, scale: 0.99 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.99 }}
-                className="space-y-6 pb-20"
+                className="flex-1 flex flex-col min-h-0 space-y-6 pb-20"
               >
                 {/* History Header & Date Selector */}
                 <div className="bg-white p-6 rounded-lg border border-border-subtle flex flex-col md:flex-row justify-between items-center gap-6 shadow-sm">
@@ -1587,7 +1877,7 @@ export default function App() {
                 </div>
 
                 {/* Daily Report View */}
-                <div className="bg-white rounded-lg border border-border-subtle overflow-hidden shadow-sm flex flex-col">
+                <div className="bg-white rounded-lg border border-border-subtle overflow-hidden shadow-sm flex flex-col flex-1 min-h-0">
                   <div className="bg-bg-main p-4 border-b border-border-subtle flex justify-between items-center">
                     <div className="flex items-center gap-2">
                        <div className="w-2 h-2 rounded-full bg-brand-orange animate-pulse"></div>
@@ -1598,31 +1888,32 @@ export default function App() {
                     </span>
                   </div>
 
-                  <div className="overflow-x-auto whitespace-nowrap">
-                    <table className="w-full text-left border-collapse border border-slate-200">
-                      <thead className="bg-[#f2f2f2] sticky top-0 z-10 font-bold border-b-2 border-slate-300">
+                  <div className="overflow-auto flex-1 custom-scrollbar">
+                    <table className="w-full text-left border-collapse min-w-[1800px]">
+                      <thead className="bg-[#f8fafc] sticky top-0 z-20 shadow-sm">
                         <tr>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 text-center">No</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300">Date</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 text-center bg-[#fce4ec]">WW</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 text-center bg-[#fce4ec]">Shift</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300">IPQC Auditor Name</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300">PIC Finding</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 bg-[#fce4ec]">Department</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 bg-[#fce4ec]">Platform</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300">MQE Engineer</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300">Area / Station</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 bg-[#fce4ec]">Group Finding</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 bg-[#fce4ec]">Category</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300">Finding Details</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 bg-[#fce4ec]">Finding Image</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300">Remark</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300 bg-[#fce4ec]">Status</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300">ICAR#</th>
-                          <th className="px-2 py-3 text-[9px] font-black text-slate-600 uppercase tracking-widest border border-slate-300">ACTION TAKEN</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 text-center sticky left-0 bg-[#f8fafc]">No</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Date</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 text-center">WW</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 text-center">Shift</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Auditor Name</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">PIC Finding</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Department</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Platform</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">MQE Engineer</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 font-bold bg-slate-50/50">Station / Area</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Grp Finding</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Category</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Details</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 text-center">Image</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Remark</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 text-center">Status</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">ICAR#</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Action Taken</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Actions</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-200">
+                      <tbody className="divide-y divide-slate-100">
                         {records
                           .filter(r => r.auditDate === historyDate)
                           .sort((a, b) => b.no - a.no)
@@ -1630,40 +1921,62 @@ export default function App() {
                             <tr 
                               key={record.id} 
                               onClick={() => setSelectedAudit(record)}
-                              className="hover:bg-brand-orange/[0.03] transition-all duration-150 text-[10px] text-slate-700 bg-white cursor-pointer group"
+                              className="hover:bg-slate-50 transition-all duration-150 text-[11px] text-slate-600 bg-white cursor-pointer group"
                             >
-                              <td className="px-2 py-3 border border-slate-200 text-center font-bold text-slate-400 group-hover:text-brand-orange">{record.no}</td>
-                              <td className="px-2 py-3 border border-slate-200 whitespace-nowrap font-medium">{record.auditDate}</td>
-                              <td className="px-2 py-3 border border-slate-200 text-center font-bold">{record.ww}</td>
-                              <td className="px-2 py-3 border border-slate-200 text-center font-bold">{record.shift}</td>
-                              <td className="px-2 py-3 border border-slate-200 text-center italic font-semibold text-slate-600">{record.auditors}</td>
-                              <td className="px-2 py-3 border border-slate-200 text-center italic font-semibold text-slate-600">{record.personOnJob}</td>
-                              <td className="px-2 py-3 border border-slate-200 font-medium">{record.department}</td>
-                              <td className="px-2 py-3 border border-slate-200 font-medium">{record.platform}</td>
-                              <td className="px-2 py-3 border border-slate-200 font-black text-brand-orange/80 italic">{record.mqeEngineer}</td>
-                              <td className="px-2 py-3 border border-slate-200 text-center font-medium">{record.areaStation}</td>
-                              <td className="px-2 py-3 border border-slate-200 text-center">{record.groupFinding}</td>
-                              <td className="px-2 py-3 border border-slate-200 text-center">{record.category}</td>
-                              <td className="px-2 py-3 border border-slate-200 max-w-[150px] truncate" title={record.detailsFindings}>{record.detailsFindings}</td>
-                              <td className="px-2 py-3 border border-slate-200 text-center">
+                              <td className="px-4 py-4 text-center font-bold text-slate-400 group-hover:text-brand-orange sticky left-0 bg-white group-hover:bg-slate-50 transition-colors">{record.no}</td>
+                              <td className="px-4 py-4 whitespace-nowrap font-medium">{record.auditDate}</td>
+                              <td className="px-4 py-4 text-center font-black text-slate-400">{record.ww}</td>
+                              <td className="px-4 py-4 text-center font-bold bg-slate-50/30">{record.shift}</td>
+                              <td className="px-4 py-4 font-semibold text-slate-800">{record.auditors}</td>
+                              <td className="px-4 py-4 font-medium text-slate-500">{record.personOnJob}</td>
+                              <td className="px-4 py-4 font-bold text-blue-600/70">{record.department}</td>
+                              <td className="px-4 py-4 font-bold text-brand-orange/80">{record.platform}</td>
+                              <td className="px-4 py-4 font-medium italic text-slate-400">{record.mqeEngineer}</td>
+                              <td className="px-4 py-4 font-black text-slate-900 bg-slate-50/30">{record.areaStation}</td>
+                              <td className="px-4 py-4 italic">{record.groupFinding}</td>
+                              <td className="px-4 py-4 whitespace-nowrap">
+                                <span className="px-2 py-1 bg-slate-100 rounded text-[9px] font-black uppercase tracking-widest text-slate-500">
+                                  {record.category}
+                                </span>
+                              </td>
+                              <td className="px-4 py-4 max-w-[200px] truncate leading-tight" title={record.detailsFindings}>
+                                {record.detailsFindings}
+                              </td>
+                              <td className="px-4 py-4 text-center">
                                 {record.picture ? (
                                   <div 
                                     onClick={(e) => { e.stopPropagation(); setPreviewImage(record.picture!); }}
-                                    className="w-24 h-24 rounded-lg border border-slate-200 overflow-hidden mx-auto shadow-sm hover:scale-110 transition-transform cursor-zoom-in relative group"
+                                    className="w-40 h-32 rounded-lg border border-slate-200 overflow-hidden mx-auto shadow-md group-hover:scale-105 transition-transform cursor-zoom-in relative"
                                   >
                                     <img src={record.picture} className="w-full h-full object-cover" referrerPolicy="no-referrer" alt="" />
-                                    <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                                      <Eye size={16} className="text-white" />
+                                    <div className="absolute inset-0 bg-black/5 opacity-0 hover:opacity-100 flex items-center justify-center transition-opacity">
+                                      <Search size={20} className="text-white drop-shadow-md" />
                                     </div>
                                   </div>
-                                ) : <ImageIcon size={20} className="mx-auto opacity-10" />}
+                                ) : <ImageIcon size={24} className="mx-auto opacity-10" />}
                               </td>
-                              <td className="px-2 py-3 border border-slate-200 max-w-[150px] truncate italic text-slate-500" title={record.remark}>{record.remark}</td>
-                              <td className={`px-2 py-3 border border-slate-200 text-center font-black ${record.status === 'Open' ? 'bg-[#fce4ec] text-[#e91e63]' : ''}`}>
-                                {record.status}
+                              <td className="px-4 py-4 max-w-[150px] truncate italic text-slate-400">{record.remark || '-'}</td>
+                              <td className="px-4 py-4 text-center">
+                                <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest shadow-sm ${
+                                  record.status === 'Open' ? 'bg-rose-50 text-rose-500 border border-rose-100' : 
+                                  record.status === 'In Progress' ? 'bg-amber-50 text-amber-600 border border-amber-100' : 
+                                  'bg-emerald-50 text-emerald-600 border border-emerald-100'
+                                }`}>
+                                  {record.status}
+                                </span>
                               </td>
-                              <td className="px-2 py-3 border border-slate-200 text-center font-mono text-[9px]">{record.icarNum || '-'}</td>
-                              <td className="px-2 py-3 border border-slate-200 whitespace-pre-wrap leading-tight text-[9px]">{record.actionTaken || '-'}</td>
+                              <td className="px-4 py-4 font-mono text-[10px] text-slate-400">{record.icarNum || '-'}</td>
+                              <td className="px-4 py-4 text-[10px] max-w-[150px] truncate">{record.actionTaken || '-'}</td>
+                              <td className="px-4 py-4 text-right">
+                                <div className="flex justify-end items-center gap-2">
+                                  <button 
+                                    onClick={(e) => { e.stopPropagation(); handleEditClick(record); }}
+                                    className="p-2 hover:bg-white rounded-lg text-slate-400 hover:text-brand-orange transition-all hover:shadow-sm"
+                                  >
+                                    <Pencil size={14} />
+                                  </button>
+                                </div>
+                              </td>
                             </tr>
                           ))}
                       </tbody>
