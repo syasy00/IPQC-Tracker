@@ -758,34 +758,67 @@ export default function App() {
                 animate={{ opacity: 1 }}
                 className="flex-1 flex flex-col min-h-0 bg-transparent space-y-4"
               >
-                <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white p-4 rounded-2xl border border-border-subtle shadow-sm">
-                  <div className="relative flex-1 w-full">
-                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input 
-                      type="text" 
-                      placeholder="Search across all records and fields..." 
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full bg-slate-50 border border-border-subtle rounded-xl text-xs font-bold pl-10 p-3 outline-none focus:border-brand-orange transition-all"
-                    />
+                {/* Clean Tabbed Navigation Bar */}
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                  <div className="flex items-center gap-2 overflow-x-auto w-full sm:w-auto pb-2 sm:pb-0">
+                    <button 
+                      onClick={() => setFilterStatus('')}
+                      className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${
+                        filterStatus === '' ? 'bg-orange-50 text-brand-orange border border-orange-200 shadow-sm' : 'text-slate-500 hover:bg-slate-50'
+                      }`}
+                    >
+                      All Records ({records.length})
+                    </button>
+                    <button 
+                      onClick={() => setFilterStatus('Locked')}
+                      className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${
+                        filterStatus === 'Locked' ? 'bg-amber-50 text-amber-700 border border-amber-200 shadow-sm' : 'text-slate-500 hover:bg-slate-50'
+                      }`}
+                    >
+                      Locked ICARs ({records.filter(r => r.icarStatus === 'Locked').length})
+                    </button>
+                    <button 
+                      onClick={() => setFilterStatus('Submitted')}
+                      className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${
+                        filterStatus === 'Submitted' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm' : 'text-slate-500 hover:bg-slate-50'
+                      }`}
+                    >
+                      Submitted ICARs ({records.filter(r => r.icarStatus === 'Submitted').length})
+                    </button>
                   </div>
                   
-                  <div className="flex items-center gap-3 w-full md:w-auto">
+                  <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
                     <button 
                       onClick={() => setFiltersOpen(!filtersOpen)}
-                      className={`flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${filtersOpen ? 'bg-brand-orange text-white border-brand-orange shadow-md shadow-brand-orange/20' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+                      className={`flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${
+                        filtersOpen ? 'bg-slate-800 text-white border-slate-800 shadow-md' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                      }`}
                     >
                       <Filter size={14} />
-                      {filtersOpen ? 'Hide Filters' : 'Filter'}
+                      {filtersOpen ? 'Hide Filter Bar' : 'Advanced Filter'}
                     </button>
                     
                     <button 
                       onClick={() => exportToExcel(records)}
-                      className="flex items-center justify-center gap-2 px-5 py-2.5 bg-emerald-50 text-emerald-600 border border-emerald-100 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600 hover:text-white transition-all"
+                      className="flex items-center justify-center gap-2 px-5 py-2.5 bg-emerald-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-700 shadow-md shadow-emerald-600/20 transition-all whitespace-nowrap"
                     >
                       <Download size={14} />
-                      Export Excel
+                      Export All
                     </button>
+                  </div>
+                </div>
+
+                {/* Search Bar */}
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 flex flex-col md:flex-row items-center gap-4">
+                  <div className="relative flex-1 w-full">
+                    <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input 
+                      type="text" 
+                      placeholder="Search records by keyword, platform, station..." 
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-xl text-xs font-bold pl-10 pr-4 py-3 outline-none focus:border-brand-orange shadow-sm transition-all"
+                    />
                   </div>
                 </div>
 
@@ -793,20 +826,19 @@ export default function App() {
                   {filtersOpen && (
                     <motion.div 
                       initial={{ height: 0, opacity: 0, marginBottom: 0 }}
-                      animate={{ height: 'auto', opacity: 1, marginBottom: 24 }}
+                      animate={{ height: 'auto', opacity: 1, marginBottom: 16 }}
                       exit={{ height: 0, opacity: 0, marginBottom: 0 }}
                       className="overflow-hidden"
                     >
-                      <div className="bg-white p-6 rounded-2xl border border-border-subtle shadow-sm grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+                      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
                         <FilterInput label="Work Week (WW)" type="select" options={WWS} value={filterWW} onChange={setFilterWW} />
                         <FilterInput label="Date" type="date" value={filterDate} onChange={setFilterDate} />
-                        <FilterInput label="ICAR Status" type="select" options={['Locked', 'Submitted']} value={filterStatus} onChange={setFilterStatus} />
                         <FilterInput label="Shift" type="select" options={SHIFTS} value={filterShift} onChange={setFilterShift} />
                         <FilterInput label="Auditor" type="select" options={auditorsList} value={filterAuditor} onChange={setFilterAuditor} />
                         <FilterInput label="Department" type="select" options={DEPARTMENTS} value={filterDept} onChange={setFilterDept} />
                         <FilterInput label="Platform" type="select" options={platformsList} value={filterPlatform} onChange={setFilterPlatform} />
                         <FilterInput label="Category" type="select" options={CATEGORIES} value={filterCategory} onChange={setFilterCategory} />
-                        <div className="flex items-end">
+                        <div className="flex items-end lg:col-span-2">
                           <button 
                             onClick={() => {
                               setFilterDate('');
@@ -820,9 +852,9 @@ export default function App() {
                               setSearchQuery('');
                               setFilterWW('');
                             }}
-                            className="w-full bg-slate-50 border border-border-subtle rounded-xl text-text-muted text-[10px] font-black uppercase p-3 hover:bg-slate-100 transition-colors"
+                            className="w-full bg-slate-100 border border-slate-200 rounded-xl text-slate-600 text-[10px] font-black uppercase p-3 hover:bg-slate-200 transition-colors"
                           >
-                            Reset
+                            Clear All Filters
                           </button>
                         </div>
                       </div>
@@ -830,12 +862,12 @@ export default function App() {
                   )}
                 </AnimatePresence>
 
-                <div className="bg-white rounded-2xl border border-border-subtle overflow-hidden flex flex-col flex-1 shadow-sm min-h-0">
+                <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden flex flex-col flex-1 shadow-sm min-h-0">
                   <div className="overflow-auto flex-1 custom-scrollbar">
-                    <table className="w-full text-left border-collapse min-w-[1600px]">
+                    <table className="w-full text-left border-collapse min-w-[1650px]">
                       <thead className="bg-slate-100 sticky top-0 z-20 shadow-[0_2px_4px_rgba(0,0,0,0.05)]">
                         <tr>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200 text-center sticky left-0 bg-slate-100 z-30 shadow-[2px_0_5px_rgba(0,0,0,0.03)]">No</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200 text-center sticky left-0 bg-slate-100 z-30 shadow-[2px_0_5px_rgba(0,0,0,0.03)] w-16">No</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200">Date</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200 text-center">WW</th>
                           <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200 text-center">Shift</th>
@@ -860,11 +892,14 @@ export default function App() {
                           <tr 
                             key={record.id} 
                             onClick={() => setSelectedRecord(record)}
-                            className={`transition-all duration-150 text-[11px] text-slate-700 cursor-pointer group hover:bg-orange-50/50 ${
+                            className={`transition-all duration-150 text-[11px] text-slate-700 cursor-pointer group hover:bg-orange-50/60 ${
                               index % 2 === 0 ? 'bg-white' : 'bg-slate-50/70'
                             }`}
                           >
-                            <td className="px-4 py-4 text-center font-bold text-slate-500 border-r border-slate-200 sticky left-0 bg-inherit z-10 shadow-[2px_0_5px_rgba(0,0,0,0.02)] group-hover:text-brand-orange">{record.no}</td>
+                            {/* Fixed No Column with fallback index mapping */}
+                            <td className="px-4 py-4 text-center font-bold text-slate-500 border-r border-slate-200 sticky left-0 bg-inherit z-10 shadow-[2px_0_5px_rgba(0,0,0,0.02)] group-hover:text-brand-orange">
+                              {record.no || index + 1}
+                            </td>
                             <td className="px-4 py-4 whitespace-nowrap font-medium border-r border-slate-100">{record.auditDate}</td>
                             <td className="px-4 py-4 text-center font-black text-slate-600 border-r border-slate-100">{record.ww}</td>
                             <td className="px-4 py-4 text-center font-bold border-r border-slate-100">{record.shift}</td>
@@ -880,14 +915,14 @@ export default function App() {
                                 {record.category}
                               </span>
                             </td>
-                            <td className="px-4 py-4 max-w-[200px] truncate leading-tight border-r border-slate-100" title={record.detailsFindings}>
+                            <td className="px-4 py-4 max-w-[200px] truncate leading-tight border-r border-slate-100 font-medium" title={record.detailsFindings}>
                               {record.detailsFindings}
                             </td>
                             <td className="px-4 py-4 text-center border-r border-slate-100">
                               {record.picture ? (
                                 <div 
                                   onClick={(e) => { e.stopPropagation(); setPreviewImage(getImageUrl(record.picture!)!); }}
-                                  className="w-16 h-12 rounded-lg border border-slate-300 overflow-hidden mx-auto shadow-sm group-hover:scale-105 transition-transform cursor-zoom-in relative"
+                                  className="w-16 h-12 rounded-lg border border-slate-300 overflow-hidden mx-auto shadow-sm group-hover:scale-105 transition-transform cursor-zoom-in relative bg-white"
                                 >
                                   <img src={getImageUrl(record.picture)} className="w-full h-full object-cover" referrerPolicy="no-referrer" alt="" />
                                 </div>
