@@ -49,15 +49,15 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
-// API: Get All Audits (READ)
-app.get('/api/audits', (req, res) => {
+// API: Get All Records (READ)
+app.get('/api/records', (req, res) => {
   const sql = `
     SELECT 
       id, no, DATE_FORMAT(audit_date, '%Y-%m-%d') as auditDate, ww, shift, 
       auditor_name as auditors, pic_finding as personOnJob, department, 
       platform, area_station as areaStation, group_finding as groupFinding, 
       category, finding_details as detailsFindings, picture, remark, 
-      status, icar_num as icarNum, action_taken as actionTaken, mqe_engineer as mqeEngineer 
+      icar_status as icarStatus, icar_num as icarNum, mqe_engineer as mqeEngineer 
     FROM audit_records 
     ORDER BY id DESC
   `;
@@ -67,28 +67,28 @@ app.get('/api/audits', (req, res) => {
   });
 });
 
-// API: Add a New Audit (CREATE)
-app.post('/api/audits', upload.single('picture'), (req, res) => {
+// API: Add a New Record (CREATE)
+app.post('/api/records', upload.single('picture'), (req, res) => {
   const {
     auditDate, ww, shift, auditors, personOnJob, department,
     platform, areaStation, groupFinding, category, detailsFindings,
-    remark, status, icarNum, actionTaken, mqeEngineer
+    remark, icarNum, icarStatus, mqeEngineer
   } = req.body;
 
-  const picture = req.file ? `/uploads/${req.file.filename}` : null;
+  const picture = req.file ? `/uploads/${req.file.filename}` : (req.body.picture || null);
 
   const sql = `
     INSERT INTO audit_records (
       audit_date, ww, shift, auditor_name, pic_finding, department,
       platform, area_station, group_finding, category, finding_details,
-      picture, remark, status, icar_num, action_taken, mqe_engineer
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      picture, remark, icar_status, icar_num, mqe_engineer
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
   const values = [
     auditDate, ww, shift, auditors, personOnJob, department,
     platform, areaStation, groupFinding, category, detailsFindings,
-    picture, remark, status, icarNum, actionTaken, mqeEngineer
+    picture, remark, icarStatus || 'Locked', icarNum || 'N/A', mqeEngineer
   ];
 
   db.query(sql, values, (err, result) => {
@@ -96,7 +96,65 @@ app.post('/api/audits', upload.single('picture'), (req, res) => {
       console.error('Database insertion error:', err);
       return res.status(500).json({ error: 'Database insertion failed' });
     }
-    res.status(201).json({ message: 'Audit added successfully', id: result.insertId });
+    
+    // Return the newly created record object back to the frontend
+    const newRecord = {
+      id: result.insertId,
+      no: result.insertId,
+      auditDate, ww, shift, auditors, personOnJob, department,
+      platform, areaStation, groupFinding, category, detailsFindings,
+      picture, remark, icarStatus: icarStatus || 'Locked', icarNum: icarNum || 'N/A', mqeEngineer
+    };
+    res.status(201).json(newRecord);
+  });
+});
+
+// API: Update an Existing Record (UPDATE)
+app.put('/api/records/:id', upload.single('picture'), (req, res) => {
+  const { id } = req.params;
+  const {
+    auditDate, ww, shift, auditors, personOnJob, department,
+    platform, areaStation, groupFinding, category, detailsFindings,
+    remark, icarNum, icarStatus, mqeEngineer
+  } = req.body;
+
+  const picture = req.file ? `/uploads/${req.file.filename}` : req.body.picture;
+
+  const sql = `
+    UPDATE audit_records SET 
+      audit_date = ?, ww = ?, shift = ?, auditor_name = ?, pic_finding = ?, department = ?,
+      platform = ?, area_station = ?, group_finding = ?, category = ?, finding_details = ?,
+      picture = COALESCE(?, picture), remark = ?, icar_status = ?, icar_num = ?, mqe_engineer = ?
+    WHERE id = ?
+  `;
+
+  const values = [
+    auditDate, ww, shift, auditors, personOnJob, department,
+    platform, areaStation, groupFinding, category, detailsFindings,
+    picture, remark, icarStatus || 'Locked', icarNum || 'N/A', mqeEngineer, id
+  ];
+
+  db.query(sql, values, (err) => {
+    if (err) {
+      console.error('Database update error:', err);
+      return res.status(500).json({ error: 'Database update failed' });
+    }
+
+    const updatedRecord = {
+      id, auditDate, ww, shift, auditors, personOnJob, department,
+      platform, areaStation, groupFinding, category, detailsFindings,
+      picture, remark, icarStatus: icarStatus || 'Locked', icarNum: icarNum || 'N/A', mqeEngineer
+    };
+    res.status(200).json(updatedRecord);
+  });
+});
+
+// API: Delete a Record (DELETE)
+app.delete('/api/records/:id', (req, res) => {
+  const { id } = req.params;
+  db.query('DELETE FROM audit_records WHERE id = ?', [id], (err) => {
+    if (err) return res.status(500).json(err);
+    res.status(200).json({ message: 'Deleted successfully' });
   });
 });
 
