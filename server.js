@@ -13,38 +13,28 @@ app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static('public/uploads')); // Serve images to frontend
 
-// Resilient MySQL Connection with Auto-Reconnect
-let db;
+// Resilient MySQL Connection Pool with Keep-Alive
+const db = mysql.createPool({
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10000
+});
 
-function handleDisconnect() {
-  db = mysql.createConnection({
-    host: process.env.DB_HOST,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-    connectTimeout: 30000
-  });
-
-  db.connect((err) => {
-    if (err) {
-      console.error('Error connecting to MySQL, retrying in 2s...', err);
-      setTimeout(handleDisconnect, 2000);
-    } else {
-      console.log('Connected to MySQL Database!');
-    }
-  });
-
-  db.on('error', (err) => {
-    console.error('MySQL database error:', err);
-    if (err.code === 'PROTOCOL_CONNECTION_LOST' || err.code === 'ECONNRESET') {
-      handleDisconnect();
-    } else {
-      throw err;
-    }
-  });
-}
-
-handleDisconnect();
+// Test the pool connection on startup
+db.getConnection((err, connection) => {
+  if (err) {
+    console.error('Error connecting to MySQL Database:', err);
+  } else {
+    console.log('Connected to MySQL Database via Pool!');
+    connection.release();
+  }
+});
 
 // Configure Image Uploads
 const storage = multer.diskStorage({
