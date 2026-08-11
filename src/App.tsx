@@ -41,14 +41,12 @@ import { exportToExcel, importFromExcel } from './utils/excel';
 
 const API_BASE_URL = '';
 
-// Helper to resolve image URLs from backend or base64 local preview
 const getImageUrl = (path?: string) => {
   if (!path) return undefined;
   if (path.startsWith('http') || path.startsWith('data:')) return path;
   return `${API_BASE_URL}${path}`;
 };
 
-// Calculate Work Week from date string
 const calculateWW = (dateStr: string): string => {
   if (!dateStr) return '';
   const date = new Date(dateStr);
@@ -152,7 +150,21 @@ const PLATFORM_MQE_MAPPING: Record<string, string> = {
 };
 
 const SHIFTS = ['A', 'B', 'C'];
-const INITIAL_AUDITORS = ['Amalina', 'Zulfikri', 'Ahmad', 'Sarah Connor'];
+const INITIAL_AUDITORS = [
+  'Ifah',
+  'Amalina',
+  'Amalia',
+  'Annur',
+  'Azmizal',
+  'Firdaus',
+  'Izzati',
+  'Najmi',
+  'Saiful',
+  'Zaidi',
+  'Zulfikri',
+  'Ahmad',
+  'Sarah Connor'
+];
 const WWS = Array.from({length: 52}, (_, i) => (i + 1).toString());
 
 export default function App() {
@@ -165,14 +177,12 @@ export default function App() {
   const [loginPassword, setLoginPassword] = useState('');
   const [previewImage, setPreviewImage] = useState<string | null>(null);
 
-  // Settings Management State
   const [auditorsList] = useState(INITIAL_AUDITORS);
   const [platformsList] = useState(PLATFORMS);
   const [mqeMappings] = useState(PLATFORM_MQE_MAPPING);
 
   const [analyticsDimension, setAnalyticsDimension] = useState<'platform' | 'category' | 'mqe' | 'auditor'>('platform');
 
-  // Fetch data from backend on component mount
   useEffect(() => {
     const fetchAudits = async () => {
       try {
@@ -188,7 +198,6 @@ export default function App() {
     fetchAudits();
   }, []);
 
-  // Dynamic Analytics Data (Only counts 'Submitted' records as per user flow)
   const analyticsData = useMemo(() => {
     const submittedRecords = records.filter(r => r.icarStatus === 'Submitted');
     const categories: Record<string, number> = {};
@@ -246,7 +255,6 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [filtersOpen, setFiltersOpen] = useState(false);
   
-  // Filter states
   const [filterAuditor, setFilterAuditor] = useState('');
   const [filterDept, setFilterDept] = useState('');
   const [filterFindings, setFilterFindings] = useState('');
@@ -259,12 +267,11 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  // Form State
   const [newAudit, setNewAudit] = useState<Partial<AuditRecord>>({
     auditDate: new Date().toISOString().split('T')[0],
     ww: calculateWW(new Date().toISOString().split('T')[0]),
     shift: SHIFTS[0],
-    auditors: '',
+    auditors: INITIAL_AUDITORS[0],
     personOnJob: '',
     department: DEPARTMENTS[0],
     platform: PLATFORMS[0],
@@ -391,7 +398,7 @@ export default function App() {
         auditDate: new Date().toISOString().split('T')[0],
         ww: calculateWW(new Date().toISOString().split('T')[0]),
         shift: SHIFTS[0],
-        auditors: '',
+        auditors: INITIAL_AUDITORS[0],
         personOnJob: '',
         department: DEPARTMENTS[0],
         platform: PLATFORMS[0],
@@ -422,7 +429,7 @@ export default function App() {
       auditDate: record.auditDate || '',
       ww: record.ww || '',
       shift: record.shift || 'A',
-      auditors: record.auditors || '',
+      auditors: record.auditors || INITIAL_AUDITORS[0],
       personOnJob: record.personOnJob || '',
       department: record.department || DEPARTMENTS[0],
       platform: record.platform || PLATFORMS[0],
@@ -1064,7 +1071,10 @@ export default function App() {
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                       <FormSelect label="IPQC Auditor Name" required value={newAudit.auditors} onChange={(v: string) => setNewAudit({...newAudit, auditors: v})} options={auditorsList} />
+                      
+                      {/* PIC Name as a free-text input */}
                       <FormInput label="PIC Name (Finding)" required value={newAudit.personOnJob} onChange={(v: string) => setNewAudit({...newAudit, personOnJob: v})} />
+
                       <div className="flex flex-col gap-2">
                         <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em] px-1">MQE Engineer (Auto Assigned)</label>
                         <input 
