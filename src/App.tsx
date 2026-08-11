@@ -51,7 +51,7 @@ import {
 import { AuditRecord, ViewState, Department, Category } from './types';
 import { exportToExcel, importFromExcel } from './utils/excel';
 
-const API_BASE_URL = 'http://localhost:5000';
+const API_BASE_URL = '';
 
 // Helper to resolve image URLs from backend or base64 local preview
 const getImageUrl = (path?: string) => {
