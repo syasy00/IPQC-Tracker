@@ -51,6 +51,15 @@ import {
 import { AuditRecord, ViewState, Department, Category } from './types';
 import { exportToExcel, importFromExcel } from './utils/excel';
 
+const API_BASE_URL = 'http://localhost:5000';
+
+// Helper to resolve image URLs from backend or base64 local preview
+const getImageUrl = (path?: string) => {
+  if (!path) return undefined;
+  if (path.startsWith('http') || path.startsWith('data:')) return path;
+  return `${API_BASE_URL}${path}`;
+};
+
 // Calculate Work Week from date string
 const calculateWW = (dateStr: string): string => {
   if (!dateStr) return '';
@@ -63,372 +72,11 @@ const calculateWW = (dateStr: string): string => {
   return weekNo.toString();
 };
 
-// Mock Data for Charts
-const PRODUCTION_TREND = [
-  { name: 'W1', production: 400, quality: 98 },
-  { name: 'W2', production: 600, quality: 94 },
-  { name: 'W3', production: 350, quality: 99 },
-  { name: 'W4', production: 900, quality: 97 },
-  { name: 'W5', production: 550, quality: 99 },
-  { name: 'W6', production: 750, quality: 95 },
-  { name: 'W7', production: 450, quality: 98 },
-  { name: 'W8', production: 650, quality: 96 },
-  { name: 'W9', production: 800, quality: 99 },
-];
-
-const QUALITY_SNAPSHOT = [
-  { name: 'Litho', pass: 45, fail: 2 },
-  { name: 'Etch', pass: 38, fail: 5 },
-  { name: 'Depo', pass: 52, fail: 3 },
-  { name: 'CMP', pass: 30, fail: 1 },
-  { name: 'Diff', pass: 41, fail: 4 },
-];
-
-// Mock Data
 const PLATFORM_MQE_MAPPING: Record<string, string> = {
   'Apex': 'Siti Naimah',
   'PDX': 'Larry',
   'Navigator': 'Farid'
 };
-
-const INITIAL_RECORDS: AuditRecord[] = [
-  {
-    id: '1',
-    no: 1,
-    auditDate: new Date().toISOString().split('T')[0],
-    ww: calculateWW(new Date().toISOString().split('T')[0]),
-    shift: 'D',
-    auditors: 'Amalina',
-    personOnJob: 'Alleya',
-    department: 'Production Team',
-    platform: 'Apex',
-    areaStation: 'SMT 2',
-    groupFinding: 'Quality',
-    category: 'Tooling_Labeling',
-    detailsFindings: 'Calibration Label damage. Turn on Tools / Equipment',
-    picture: undefined,
-    remark: 'Calibration Label damage',
-    status: 'Open',
-    icarNum: '',
-    actionTaken: '',
-    mqeEngineer: 'Siti Naimah'
-  },
-  {
-    id: '2',
-    no: 2,
-    auditDate: new Date().toISOString().split('T')[0],
-    ww: calculateWW(new Date().toISOString().split('T')[0]),
-    shift: 'D',
-    auditors: 'Zulfikri',
-    personOnJob: 'mathanraj',
-    department: 'IE Team',
-    platform: 'Apex',
-    areaStation: 'Workorder Trolley Area',
-    groupFinding: 'Quality',
-    category: 'ESD_Control',
-    detailsFindings: 'No ESD grounding points',
-    picture: undefined,
-    remark: 'The trolley has no ESD grounding chain (S-CART003M)',
-    status: 'Open',
-    icarNum: '',
-    actionTaken: '',
-    mqeEngineer: 'Siti Naimah'
-  },
-  {
-    id: '3',
-    no: 3,
-    auditDate: '2026-05-05',
-    ww: '18',
-    shift: 'N',
-    auditors: 'Amalina',
-    personOnJob: 'John Doe',
-    department: 'Production Team',
-    platform: 'Navigator',
-    areaStation: 'Assembly Row 4',
-    groupFinding: 'Quality',
-    category: 'Tooling_Labeling',
-    detailsFindings: 'Tool #45 calibration expired.',
-    picture: 'https://picsum.photos/seed/tool45/200/150',
-    remark: 'Sent to calibration lab',
-    status: 'In Progress',
-    icarNum: 'ICAR-2026-003',
-    actionTaken: 'Tagging and isolation',
-    mqeEngineer: 'Farid'
-  },
-  {
-    id: '4',
-    no: 4,
-    auditDate: '2026-05-05',
-    ww: '18',
-    shift: 'D',
-    auditors: 'Sarah Connor',
-    personOnJob: 'Mike Ross',
-    department: 'Etching',
-    platform: 'PDX',
-    areaStation: 'Etch A-1',
-    groupFinding: 'Hardware',
-    category: 'Safety',
-    detailsFindings: 'Safety guard loose on platform.',
-    picture: undefined,
-    remark: 'Fixed by maintenance',
-    status: 'Closed',
-    icarNum: 'ICAR-2026-004',
-    actionTaken: 'Bolt replacement and tightening',
-    mqeEngineer: 'Larry'
-  },
-  {
-    id: '5',
-    no: 5,
-    auditDate: '2026-05-06',
-    ww: '18',
-    shift: 'N',
-    auditors: 'Zulfikri',
-    personOnJob: 'Rachel Zane',
-    department: 'Lithography',
-    platform: 'PDX',
-    areaStation: 'Scanner 5',
-    groupFinding: 'Software',
-    category: 'Process',
-    detailsFindings: 'Login error on control software.',
-    picture: 'https://picsum.photos/seed/software/200/150',
-    remark: 'IT notified',
-    status: 'Open',
-    icarNum: '',
-    actionTaken: 'System reboot performed',
-    mqeEngineer: 'Larry'
-  },
-  {
-    id: '6',
-    no: 6,
-    auditDate: '2026-05-06',
-    ww: '18',
-    shift: 'D',
-    auditors: 'Ahmad',
-    personOnJob: 'Sarah Lee',
-    department: 'Production Team',
-    platform: 'Apex',
-    areaStation: 'SMT 2',
-    groupFinding: 'Hardware',
-    category: 'Quality',
-    detailsFindings: 'Small scratch found on PCB surface before assembly.',
-    picture: 'https://picsum.photos/seed/pcb1/200/150',
-    remark: 'Minor quality issue',
-    status: 'In Progress',
-    icarNum: 'ICAR-2026-006',
-    actionTaken: 'Sent for rework',
-    mqeEngineer: 'Siti Naimah'
-  },
-  {
-    id: '7',
-    no: 7,
-    auditDate: '2026-05-06',
-    ww: '18',
-    shift: 'N',
-    auditors: 'Amalina',
-    personOnJob: 'Kenny Tan',
-    department: 'IE Team',
-    platform: 'Navigator',
-    areaStation: 'Workorder Trolley Area',
-    groupFinding: 'Quality',
-    category: 'ESD_Control',
-    detailsFindings: 'Grounding strap showing wear and tear.',
-    picture: undefined,
-    remark: 'Replacement ordered',
-    status: 'Open',
-    icarNum: '',
-    actionTaken: '',
-    mqeEngineer: 'Farid'
-  },
-  {
-    id: '8',
-    no: 8,
-    auditDate: '2026-05-06',
-    ww: '18',
-    shift: 'D',
-    auditors: 'Zulfikri',
-    personOnJob: 'Maria Garcia',
-    department: 'Mfg Engineering',
-    platform: 'PDX',
-    areaStation: 'Main Assembly',
-    groupFinding: 'Quality',
-    category: 'Process',
-    detailsFindings: 'Screw torque settings slightly out of bounds.',
-    picture: 'https://picsum.photos/seed/torque/200/150',
-    remark: 'Recalibrated torque driver',
-    status: 'Closed',
-    icarNum: 'ICAR-2026-008',
-    actionTaken: 'Recalibrated and verified with master gauge',
-    mqeEngineer: 'Larry'
-  },
-  {
-    id: '9',
-    no: 9,
-    auditDate: new Date().toISOString().split('T')[0],
-    ww: calculateWW(new Date().toISOString().split('T')[0]),
-    shift: 'N',
-    auditors: 'Sarah Connor',
-    personOnJob: 'John Smith',
-    department: 'Production Team',
-    platform: 'Apex',
-    areaStation: 'SMT 3',
-    groupFinding: 'Safety',
-    category: 'Process',
-    detailsFindings: 'Exposed wiring on station 3 power supply.',
-    picture: undefined,
-    remark: 'Maintenance alerted',
-    status: 'Open',
-    icarNum: '',
-    actionTaken: '',
-    mqeEngineer: 'Siti Naimah'
-  },
-  {
-    id: '10',
-    no: 10,
-    auditDate: new Date().toISOString().split('T')[0],
-    ww: calculateWW(new Date().toISOString().split('T')[0]),
-    shift: 'D',
-    auditors: 'Ahmad',
-    personOnJob: 'Lee Wei',
-    department: 'IE Team',
-    platform: 'Navigator',
-    areaStation: 'Packaging',
-    groupFinding: 'Hardware',
-    category: 'Tooling_Labeling',
-    detailsFindings: 'Label printer jamming frequently.',
-    picture: 'https://picsum.photos/seed/printer/200/150',
-    remark: 'Hardware replacement requested',
-    status: 'In Progress',
-    icarNum: '',
-    actionTaken: 'Temporary fix applied',
-    mqeEngineer: 'Farid'
-  },
-  {
-    id: '11',
-    no: 11,
-    auditDate: new Date().toISOString().split('T')[0],
-    ww: calculateWW(new Date().toISOString().split('T')[0]),
-    shift: 'N',
-    auditors: 'Amalina',
-    personOnJob: 'Siti Aminah',
-    department: 'Production Team',
-    platform: 'Apex',
-    areaStation: 'SMT 1',
-    groupFinding: 'Quality',
-    category: 'ESD_Control',
-    detailsFindings: 'Ionizer fan not functioning at required speed.',
-    picture: undefined,
-    remark: 'Unit needs service',
-    status: 'Open',
-    icarNum: '',
-    actionTaken: '',
-    mqeEngineer: 'Siti Naimah'
-  },
-  {
-    id: '12',
-    no: 12,
-    auditDate: new Date().toISOString().split('T')[0],
-    ww: calculateWW(new Date().toISOString().split('T')[0]),
-    shift: 'D',
-    auditors: 'Zulfikri',
-    personOnJob: 'Ramasamy',
-    department: 'Mfg Engineering',
-    platform: 'Navigator',
-    areaStation: 'Post-Etch Inspection',
-    groupFinding: 'Quality',
-    category: 'Process',
-    detailsFindings: 'Residue found on wafers post-cleaning.',
-    picture: 'https://picsum.photos/seed/residue/200/150',
-    remark: 'Check chemical concentrations',
-    status: 'Open',
-    icarNum: '',
-    actionTaken: '',
-    mqeEngineer: 'Farid'
-  },
-  {
-    id: '13',
-    no: 13,
-    auditDate: new Date().toISOString().split('T')[0],
-    ww: calculateWW(new Date().toISOString().split('T')[0]),
-    shift: 'N',
-    auditors: 'Sarah Connor',
-    personOnJob: 'Chong Wei',
-    department: 'Etching',
-    platform: 'PDX',
-    areaStation: 'Dry Etch 2',
-    groupFinding: 'Hardware',
-    category: 'Safety',
-    detailsFindings: 'Emergency stop button sticks when pressed.',
-    picture: undefined,
-    remark: 'Safety hazard!',
-    status: 'In Progress',
-    icarNum: '',
-    actionTaken: 'Lubricated mechanism',
-    mqeEngineer: 'Larry'
-  },
-  {
-    id: '14',
-    no: 14,
-    auditDate: new Date().toISOString().split('T')[0],
-    ww: calculateWW(new Date().toISOString().split('T')[0]),
-    shift: 'D',
-    auditors: 'Ahmad',
-    personOnJob: 'Fatimah',
-    department: 'Production Team',
-    platform: 'Apex',
-    areaStation: 'Hand Insert Line',
-    groupFinding: 'Quality',
-    category: 'Tooling_Labeling',
-    detailsFindings: 'Soldering iron temperature exceeding spec.',
-    picture: 'https://picsum.photos/seed/solder/200/150',
-    remark: 'Recalibrating station',
-    status: 'Closed',
-    icarNum: 'ICAR-2026-014',
-    actionTaken: 'Sensor replacement',
-    mqeEngineer: 'Siti Naimah'
-  },
-  {
-    id: '15',
-    no: 15,
-    auditDate: new Date().toISOString().split('T')[0],
-    ww: calculateWW(new Date().toISOString().split('T')[0]),
-    shift: 'N',
-    auditors: 'Amalina',
-    personOnJob: 'Rajesh',
-    department: 'Lithography',
-    platform: 'Navigator',
-    areaStation: 'Developer Track',
-    groupFinding: 'Software',
-    category: 'Process',
-    detailsFindings: 'Batch processing delay in execution software.',
-    picture: undefined,
-    remark: 'Software update pending',
-    status: 'Open',
-    icarNum: '',
-    actionTaken: '',
-    mqeEngineer: 'Farid'
-  },
-  {
-    id: '16',
-    no: 16,
-    auditDate: '2026-05-10',
-    ww: calculateWW('2026-05-10'),
-    shift: 'D',
-    auditors: 'Zulfikri',
-    personOnJob: 'Kevin Tan',
-    department: 'IE Team',
-    platform: 'PDX',
-    areaStation: 'Material Receiving',
-    groupFinding: 'Hardware',
-    category: 'Safety',
-    detailsFindings: 'Forklift battery charger cable frayed.',
-    picture: undefined,
-    remark: 'Ordering new cable',
-    status: 'In Progress',
-    icarNum: '',
-    actionTaken: 'Insulated with tape temporarily',
-    mqeEngineer: 'Larry'
-  }
-];
 
 const INITIAL_AUDITORS = ['Amalina', 'Zulfikri', 'Ahmad', 'Sarah Connor'];
 const DEPARTMENTS = ['Production Team', 'IE Team', 'Mfg Engineering', 'Etching', 'Lithography'];
@@ -439,8 +87,8 @@ const WWS = Array.from({length: 52}, (_, i) => (i + 1).toString());
 
 export default function App() {
   const [view, setView] = useState<ViewState>('ipqc');
-  const [records, setRecords] = useState<AuditRecord[]>(INITIAL_RECORDS);
-  const [powerBiUrl, setPowerBiUrl] = useState<string>(''); // User can paste their URL here
+  const [records, setRecords] = useState<AuditRecord[]>([]); // Now starts empty, waits for DB
+  const [powerBiUrl, setPowerBiUrl] = useState<string>(''); 
   const [dashboardMode, setDashboardMode] = useState<'system' | 'powerbi'>('system');
   const [historyTab, setHistoryTab] = useState<'details' | 'timeline'>('details');
   const [historyDate, setHistoryDate] = useState<string>(new Date().toISOString().split('T')[0]);
@@ -456,44 +104,38 @@ export default function App() {
 
   const [analyticsDimension, setAnalyticsDimension] = useState<'platform' | 'category' | 'mqe' | 'auditor'>('platform');
 
+  // Fetch data from MySQL on component mount
+  useEffect(() => {
+    const fetchAudits = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/audits`);
+        if (response.ok) {
+          const data = await response.json();
+          setRecords(data);
+        }
+      } catch (error) {
+        console.error('Error fetching data from database:', error);
+      }
+    };
+    
+    fetchAudits();
+  }, []);
+
   // Dynamic Analytics Data
   const analyticsData = useMemo(() => {
-    // Category Breakdown
     const categories: Record<string, number> = {};
-    // Platform Breakdown
     const platforms: Record<string, number> = {};
-    // Status Breakdown
     const statuses: Record<string, number> = { 'Open': 0, 'Closed': 0, 'In Progress': 0 };
-    // MQE Workload
     const mqes: Record<string, number> = {};
-    // Auditor contribution
     const auditors: Record<string, number> = {};
-    // Weekly Trend
     const weeklyTrends: Record<string, number> = {};
 
     records.forEach(record => {
-      // Category
-      categories[record.category] = (categories[record.category] || 0) + 1;
-      
-      // Platform
-      platforms[record.platform] = (platforms[record.platform] || 0) + 1;
-      
-      // Status
-      if (statuses.hasOwnProperty(record.status)) {
-        statuses[record.status]++;
-      }
-
-      // MQE
-      if (record.mqeEngineer) {
-        mqes[record.mqeEngineer] = (mqes[record.mqeEngineer] || 0) + 1;
-      }
-
-      // Auditor
-      if (record.auditors) {
-        auditors[record.auditors] = (auditors[record.auditors] || 0) + 1;
-      }
-
-      // Weekly
+      if (record.category) categories[record.category] = (categories[record.category] || 0) + 1;
+      if (record.platform) platforms[record.platform] = (platforms[record.platform] || 0) + 1;
+      if (record.status && statuses.hasOwnProperty(record.status)) statuses[record.status]++;
+      if (record.mqeEngineer) mqes[record.mqeEngineer] = (mqes[record.mqeEngineer] || 0) + 1;
+      if (record.auditors) auditors[record.auditors] = (auditors[record.auditors] || 0) + 1;
       const ww = `WW${record.ww || '??'}`;
       weeklyTrends[ww] = (weeklyTrends[ww] || 0) + 1;
     });
@@ -548,6 +190,7 @@ export default function App() {
   const getMqeForPlatform = (platform: string) => {
     return mqeMappings[platform as keyof typeof mqeMappings] || 'Unassigned';
   };
+
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [filtersOpen, setFiltersOpen] = useState(false);
   
@@ -583,7 +226,6 @@ export default function App() {
     status: 'Open'
   });
 
-  // Auto-calculate WW when date changes
   useEffect(() => {
     if (newAudit.auditDate) {
       const calculatedWW = calculateWW(newAudit.auditDate);
@@ -629,47 +271,74 @@ export default function App() {
     }
   };
 
-  const handleAddAudit = (e: FormEvent) => {
+  const handleAddAudit = async (e: FormEvent) => {
     e.preventDefault();
+
+    // 1. Pack the data into FormData (required for sending physical image files)
+    const formData = new FormData();
     
-    if (editingId) {
-      setRecords(records.map(r => r.id === editingId ? { 
-        ...r, 
-        ...newAudit as AuditRecord,
-        mqeEngineer: getMqeForPlatform(newAudit.platform || '')
-      } : r));
-      setEditingId(null);
-    } else {
-      const id = (records.length + 1).toString();
-      const record: AuditRecord = {
-        ...newAudit as AuditRecord,
-        id,
-        no: records.length + 1,
-        status: newAudit.status || 'Open',
-        mqeEngineer: getMqeForPlatform(newAudit.platform || '')
-      };
-      setRecords([record, ...records]);
+    Object.entries(newAudit).forEach(([key, value]) => {
+      if (key !== 'picture' && value !== undefined && value !== null) {
+        formData.append(key, value.toString());
+      }
+    });
+
+    const assignedMqe = getMqeForPlatform(newAudit.platform || '');
+    formData.append('mqeEngineer', assignedMqe);
+    
+    if (fileInputRef.current?.files?.[0]) {
+      formData.append('picture', fileInputRef.current.files[0]);
     }
 
-    setNewAudit({
-      auditDate: new Date().toISOString().split('T')[0],
-      ww: calculateWW(new Date().toISOString().split('T')[0]),
-      shift: 'D',
-      auditors: '',
-      personOnJob: '',
-      department: '',
-      platform: '',
-      areaStation: '',
-      groupFinding: '',
-      category: '',
-      detailsFindings: '',
-      remark: '',
-      icarNum: '',
-      actionTaken: '',
-      status: 'Open',
-      picture: undefined,
-    });
-    setView('ipqc');
+    try {
+      if (editingId) {
+        alert("Edit API endpoint coming next!");
+      } else {
+        // 2. Send the POST request to your Express backend
+        const response = await fetch(`${API_BASE_URL}/api/audits`, {
+          method: 'POST',
+          body: formData, 
+        });
+
+        if (response.ok) {
+          // 3. If successful, refresh the data from the database
+          const fetchResponse = await fetch(`${API_BASE_URL}/api/audits`);
+          const data = await fetchResponse.json();
+          setRecords(data);
+        } else {
+          alert('Failed to save the audit record to database.');
+        }
+      }
+
+      // 4. Reset the form
+      setNewAudit({
+        auditDate: new Date().toISOString().split('T')[0],
+        ww: calculateWW(new Date().toISOString().split('T')[0]),
+        shift: 'D',
+        auditors: '',
+        personOnJob: '',
+        department: '',
+        platform: '',
+        areaStation: '',
+        groupFinding: '',
+        category: '',
+        detailsFindings: '',
+        remark: '',
+        icarNum: '',
+        actionTaken: '',
+        status: 'Open',
+        picture: undefined,
+      });
+      setEditingId(null);
+      setView('ipqc');
+      
+      if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+      }
+    } catch (error) {
+      console.error('Error submitting audit:', error);
+      alert('A network error occurred while contacting the server.');
+    }
   };
 
   const handleEditClick = (record: AuditRecord) => {
@@ -698,6 +367,7 @@ export default function App() {
 
   const handleDeleteRecord = (id: string) => {
     if (confirm('Are you sure you want to delete this audit record?')) {
+      // NOTE: For full completion, you'll want to add a DELETE API route here later
       setRecords(records.filter(r => r.id !== id));
     }
   };
@@ -850,7 +520,6 @@ export default function App() {
                 exit={{ opacity: 0 }}
                 className="h-full overflow-y-auto space-y-6 pb-20 custom-scrollbar"
               >
-                {/* Dashboard Header/Toggle */}
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-4 rounded-lg border border-border-subtle">
                   <div>
                     <h3 className="text-sm font-bold uppercase tracking-widest text-text-muted">Analytics Dashboard</h3>
@@ -899,21 +568,20 @@ export default function App() {
                         <KPICard 
                           icon={<CheckCircle2 size={16} className="text-emerald-500" />}
                           label="Resolution Rate"
-                          value={`${Math.round((records.filter(r => r.status === 'Closed').length / (records.length || 1)) * 100)}%`}
+                          value={`${Math.round((records.filter(r => r.status === 'Closed').length / (records.length || 1)) * 100) || 0}%`}
                           trend="Overall Performance"
                           color="emerald"
                         />
                         <KPICard 
                           icon={<Users size={16} className="text-brand-orange" />}
                           label="Active Auditors"
-                          value={new Set(records.map(r => r.auditors)).size}
+                          value={new Set(records.filter(r => r.auditors).map(r => r.auditors)).size}
                           trend="Participation"
                           color="orange"
                         />
                       </div>
 
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                        {/* Weekly Trend */}
                         <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm h-[500px] flex flex-col">
                           <h3 className="font-black text-xs text-slate-400 uppercase tracking-[0.2em] mb-8 flex items-center gap-2">
                             <TrendingUp size={14} className="text-brand-orange" />
@@ -958,7 +626,6 @@ export default function App() {
                           </div>
                         </div>
 
-                        {/* Resolution Status - Reduced size for better layout */}
                         <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm h-[500px] flex flex-col items-center">
                           <h3 className="font-black text-xs text-slate-400 uppercase tracking-[0.2em] mb-4 w-full text-left">Resolution Status</h3>
                           <div className="flex-1 w-full">
@@ -997,7 +664,6 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* Consolidated Dynamic Bar Chart */}
                       <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm flex flex-col">
                         <div className="flex flex-col md:flex-row md:items-center justify-between mb-10 gap-4">
                           <div>
@@ -1138,16 +804,13 @@ export default function App() {
                 animate={{ opacity: 1 }}
                 className="flex-1 flex flex-col min-h-0 bg-transparent"
               >
-                {/* KPI Summary Row */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                   <KPICard icon={<AlertTriangle size={16} />} label="Open Findings" value={records.filter(r => r.status === 'Open').length} trend="Active" color="orange" />
                   <KPICard icon={<CheckCircle2 size={16} />} label="Closed (Current WW)" value={records.filter(r => r.status === 'Closed' && r.ww === filterWW).length} trend={`WW${filterWW}`} color="blue" />
                   <KPICard icon={<Clock size={16} />} label="Needs Follow-up" value={records.filter(r => r.status === 'In Progress').length} trend="Pending" color="slate" />
                 </div>
 
-                {/* Utility Toolbar */}
                 <div className="bg-white p-4 rounded-2xl border border-border-subtle shadow-sm mb-6 flex flex-col md:flex-row items-center gap-4">
-                  {/* Left: Search */}
                   <div className="relative flex-1 w-full">
                     <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                     <input 
@@ -1159,7 +822,6 @@ export default function App() {
                     />
                   </div>
                   
-                  {/* Right: Actions Group */}
                   <div className="flex items-center gap-3 w-full md:w-auto">
                     <button 
                       onClick={() => setFiltersOpen(!filtersOpen)}
@@ -1192,14 +854,8 @@ export default function App() {
                             if (file) {
                               try {
                                 const imported = await importFromExcel(file);
-                                const newRecords = imported.map((r, index) => ({
-                                  ...r,
-                                  id: (records.length + index + 1).toString(),
-                                  no: records.length + index + 1,
-                                  status: r.status || 'Open'
-                                })) as AuditRecord[];
-                                setRecords([...records, ...newRecords]);
-                                alert(`Import successful! Added ${newRecords.length} records.`);
+                                // The user can build out a backend route to process bulk import later
+                                alert(`Parsed ${imported.length} rows. Mass import to DB requires a bulk POST route on the backend.`);
                               } catch (err) {
                                 alert('Error importing file.');
                               }
@@ -1211,7 +867,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Relocated Filters Section */}
                 <AnimatePresence>
                   {filtersOpen && (
                     <motion.div 
@@ -1255,7 +910,6 @@ export default function App() {
                 </AnimatePresence>
 
                 <div className="bg-white rounded-2xl border border-border-subtle overflow-hidden flex flex-col flex-1 shadow-sm min-h-0">
-                  {/* Desktop Table - Flex Grow to take available space */}
                   <div className="hidden md:block overflow-auto flex-1 custom-scrollbar">
                     <table className="w-full text-left border-collapse min-w-[1800px]">
                       <thead className="bg-[#f8fafc] sticky top-0 z-20 shadow-sm">
@@ -1310,10 +964,10 @@ export default function App() {
                             <td className="px-4 py-4 text-center">
                               {record.picture ? (
                                 <div 
-                                  onClick={(e) => { e.stopPropagation(); setPreviewImage(record.picture!); }}
+                                  onClick={(e) => { e.stopPropagation(); setPreviewImage(getImageUrl(record.picture!)!); }}
                                   className="w-40 h-32 rounded-lg border border-slate-200 overflow-hidden mx-auto shadow-md group-hover:scale-105 transition-transform cursor-zoom-in relative"
                                 >
-                                  <img src={record.picture} className="w-full h-full object-cover" referrerPolicy="no-referrer" alt="" />
+                                  <img src={getImageUrl(record.picture)} className="w-full h-full object-cover" referrerPolicy="no-referrer" alt="" />
                                   <div className="absolute inset-0 bg-black/5 opacity-0 hover:opacity-100 flex items-center justify-center transition-opacity">
                                     <Search size={20} className="text-white drop-shadow-md" />
                                   </div>
@@ -1348,7 +1002,6 @@ export default function App() {
                     </table>
                   </div>
 
-                  {/* Mobile Cards */}
                   <div className="md:hidden divide-y divide-slate-100 overflow-y-auto">
                     {filteredRecords.map((record) => (
                       <div key={record.id} className="p-5 space-y-4 hover:bg-slate-50 transition-colors group">
@@ -1356,7 +1009,7 @@ export default function App() {
                           <div className="flex items-center gap-4">
                              <div className="w-12 h-12 rounded-xl shrink-0 bg-white shadow-sm border border-slate-100 flex items-center justify-center text-[10px] text-text-muted overflow-hidden">
                               {record.picture ? (
-                                <img src={record.picture} className="w-full h-full object-cover" referrerPolicy="no-referrer" alt="" />
+                                <img src={getImageUrl(record.picture)} className="w-full h-full object-cover" referrerPolicy="no-referrer" alt="" />
                               ) : <ImageIcon size={20} className="opacity-10" />}
                             </div>
                             <div className="space-y-1">
@@ -1460,11 +1113,10 @@ export default function App() {
                                 exit={{ opacity: 0, y: -10 }}
                                 className="grid grid-cols-1 lg:grid-cols-12 gap-8"
                               >
-                                {/* Info Panel */}
                                 <div className="lg:col-span-7 space-y-8">
                                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                     <DetailField label="IPQC Auditor" value={selectedAudit.auditors} />
-                                    <DetailField label="MQE Engineer" value={selectedAudit.mqeEngineer} highlight />
+                                    <DetailField label="MQE Engineer" value={selectedAudit.mqeEngineer || '-'} highlight />
                                     <DetailField label="Platform" value={selectedAudit.platform} />
                                     <DetailField label="Station/Area" value={selectedAudit.areaStation} />
                                     <DetailField label="PIC Finding" value={selectedAudit.personOnJob} />
@@ -1491,14 +1143,13 @@ export default function App() {
                                   </div>
                                 </div>
 
-                                {/* Media Panel */}
                                 <div className="lg:col-span-5">
                                   <div className="sticky top-0 bg-slate-50 border border-slate-100 rounded-3xl p-4 shadow-inner">
                                     <div className="flex items-center justify-between mb-4 px-2">
                                       <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400 italic">Visual Evidence</h4>
                                       {selectedAudit.picture && (
                                         <button 
-                                          onClick={() => setPreviewImage(selectedAudit.picture!)}
+                                          onClick={() => setPreviewImage(getImageUrl(selectedAudit.picture!)!)}
                                           className="text-[9px] font-black text-brand-orange uppercase tracking-widest hover:underline"
                                         >
                                           Open Fullscreen
@@ -1508,11 +1159,11 @@ export default function App() {
                                     
                                     {selectedAudit.picture ? (
                                       <div 
-                                        onClick={() => setPreviewImage(selectedAudit.picture!)}
+                                        onClick={() => setPreviewImage(getImageUrl(selectedAudit.picture!)!)}
                                         className="w-full aspect-[4/5] rounded-2xl overflow-hidden border border-slate-200 bg-white relative group cursor-zoom-in"
                                       >
                                         <img 
-                                          src={selectedAudit.picture} 
+                                          src={getImageUrl(selectedAudit.picture)} 
                                           className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" 
                                           alt="Visual Evidence" 
                                           referrerPolicy="no-referrer" 
@@ -1673,7 +1324,7 @@ export default function App() {
                         label="Shift" 
                         value={newAudit.shift} 
                         onChange={(v: string) => setNewAudit({...newAudit, shift: v as any})}
-                        options={['D', 'N']} 
+                        options={['D', 'N', 'A']} 
                       />
                       <FormSelect 
                         label="Department" 
@@ -1782,7 +1433,7 @@ export default function App() {
                           {newAudit.picture ? (
                             <div className="relative w-full h-full">
                               <img 
-                                src={newAudit.picture} 
+                                src={getImageUrl(newAudit.picture)} 
                                 alt="Audit Evidence" 
                                 className="w-full h-full object-contain"
                                 referrerPolicy="no-referrer"
@@ -1851,7 +1502,6 @@ export default function App() {
                 exit={{ opacity: 0, scale: 0.99 }}
                 className="flex-1 flex flex-col min-h-0 space-y-6 pb-20"
               >
-                {/* History Header & Date Selector */}
                 <div className="bg-white p-6 rounded-lg border border-border-subtle flex flex-col md:flex-row justify-between items-center gap-6 shadow-sm">
                   <div className="flex items-center gap-4">
                     <div className="w-12 h-12 bg-brand-orange/10 text-brand-orange rounded-xl flex items-center justify-center">
@@ -1876,7 +1526,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Daily Report View */}
                 <div className="bg-white rounded-lg border border-border-subtle overflow-hidden shadow-sm flex flex-col flex-1 min-h-0">
                   <div className="bg-bg-main p-4 border-b border-border-subtle flex justify-between items-center">
                     <div className="flex items-center gap-2">
@@ -1945,10 +1594,10 @@ export default function App() {
                               <td className="px-4 py-4 text-center">
                                 {record.picture ? (
                                   <div 
-                                    onClick={(e) => { e.stopPropagation(); setPreviewImage(record.picture!); }}
+                                    onClick={(e) => { e.stopPropagation(); setPreviewImage(getImageUrl(record.picture!)!); }}
                                     className="w-40 h-32 rounded-lg border border-slate-200 overflow-hidden mx-auto shadow-md group-hover:scale-105 transition-transform cursor-zoom-in relative"
                                   >
-                                    <img src={record.picture} className="w-full h-full object-cover" referrerPolicy="no-referrer" alt="" />
+                                    <img src={getImageUrl(record.picture)} className="w-full h-full object-cover" referrerPolicy="no-referrer" alt="" />
                                     <div className="absolute inset-0 bg-black/5 opacity-0 hover:opacity-100 flex items-center justify-center transition-opacity">
                                       <Search size={20} className="text-white drop-shadow-md" />
                                     </div>
@@ -2039,7 +1688,6 @@ export default function App() {
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-12">
-                    {/* Auditors Management */}
                     <div className="space-y-4">
                       <div className="flex items-center justify-between">
                         <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
@@ -2061,7 +1709,6 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Platform Management */}
                     <div className="space-y-4">
                       <div className="flex items-center justify-between">
                         <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
@@ -2083,7 +1730,6 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* MQE Mapping Management */}
                     <div className="space-y-4">
                       <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
                         <ClipboardCheck size={14} className="text-brand-orange" />
@@ -2395,7 +2041,7 @@ function getFindingStyle(finding: string) {
     case 'Completed': 
     case 'Closed': return 'bg-[#dcfce7] text-[#15803d]';
     case 'Fail': return 'bg-[#fee2e2] text-[#b91c1c]';
-    case 'Open': return 'bg-[#fce7f3] text-[#be185d]'; // Pink background as in image
+    case 'Open': return 'bg-[#fce7f3] text-[#be185d]';
     case 'Observation': 
     case 'Pending': 
     case 'In Progress': return 'bg-[#fef3c7] text-[#92400e]';
