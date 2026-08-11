@@ -13,21 +13,38 @@ app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static('public/uploads')); // Serve images to frontend
 
-// Connect to MySQL
-const db = mysql.createConnection({
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME
-});
+// Resilient MySQL Connection with Auto-Reconnect
+let db;
 
-db.connect((err) => {
-  if (err) {
-    console.error('Error connecting to MySQL:', err);
-    return;
-  }
-  console.log('Connected to MySQL Database!');
-});
+function handleDisconnect() {
+  db = mysql.createConnection({
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+    connectTimeout: 30000
+  });
+
+  db.connect((err) => {
+    if (err) {
+      console.error('Error connecting to MySQL, retrying in 2s...', err);
+      setTimeout(handleDisconnect, 2000);
+    } else {
+      console.log('Connected to MySQL Database!');
+    }
+  });
+
+  db.on('error', (err) => {
+    console.error('MySQL database error:', err);
+    if (err.code === 'PROTOCOL_CONNECTION_LOST' || err.code === 'ECONNRESET') {
+      handleDisconnect();
+    } else {
+      throw err;
+    }
+  });
+}
+
+handleDisconnect();
 
 // Configure Image Uploads
 const storage = multer.diskStorage({
@@ -93,14 +110,11 @@ app.post('/api/audits', upload.single('picture'), (req, res) => {
   });
 });
 
-
 app.use(express.static('dist'));
-
 
 app.get('*', (req, res) => {
   res.sendFile(path.resolve('dist', 'index.html'));
 });
-
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
