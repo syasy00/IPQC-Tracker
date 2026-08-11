@@ -555,13 +555,7 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-4">
-            <button 
-              onClick={() => { setEditingId(null); setView('add-audit'); }}
-              className="bg-brand-orange hover:brightness-110 text-white px-3 py-2 md:px-4 md:py-2 rounded-md text-[11px] md:text-xs font-semibold transition-all whitespace-nowrap shadow-lg shadow-brand-orange/20 flex items-center gap-2"
-            >
-              <Plus size={16} />
-              <span className="hidden sm:inline">Add Finding</span>
-            </button>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest hidden lg:inline">Active Session: Online</span>
           </div>
         </header>
 
@@ -758,9 +752,9 @@ export default function App() {
                 animate={{ opacity: 1 }}
                 className="flex-1 flex flex-col min-h-0 bg-transparent space-y-4"
               >
-                {/* Clean Tabbed Navigation Bar */}
-                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-                  <div className="flex items-center gap-2 overflow-x-auto w-full sm:w-auto pb-2 sm:pb-0">
+                {/* Upgraded Toolbar with Tabs, Advanced Filter, Export All, and Add Finding Side-by-Side */}
+                <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                  <div className="flex items-center gap-2 overflow-x-auto w-full lg:w-auto pb-2 lg:pb-0">
                     <button 
                       onClick={() => setFilterStatus('')}
                       className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${
@@ -787,7 +781,7 @@ export default function App() {
                     </button>
                   </div>
                   
-                  <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+                  <div className="flex items-center gap-3 w-full lg:w-auto justify-end flex-wrap">
                     <button 
                       onClick={() => setFiltersOpen(!filtersOpen)}
                       className={`flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${
@@ -804,6 +798,14 @@ export default function App() {
                     >
                       <Download size={14} />
                       Export All
+                    </button>
+
+                    <button 
+                      onClick={() => { setEditingId(null); setView('add-audit'); }}
+                      className="flex items-center justify-center gap-2 px-6 py-2.5 bg-brand-orange text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-brand-orange/20 hover:brightness-110 transition-all whitespace-nowrap"
+                    >
+                      <Plus size={16} />
+                      Add Finding
                     </button>
                   </div>
                 </div>
@@ -896,7 +898,6 @@ export default function App() {
                               index % 2 === 0 ? 'bg-white' : 'bg-slate-50/70'
                             }`}
                           >
-                            {/* Fixed No Column with fallback index mapping */}
                             <td className="px-4 py-4 text-center font-bold text-slate-500 border-r border-slate-200 sticky left-0 bg-inherit z-10 shadow-[2px_0_5px_rgba(0,0,0,0.02)] group-hover:text-brand-orange">
                               {record.no || index + 1}
                             </td>
@@ -1109,7 +1110,6 @@ export default function App() {
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                       <FormSelect label="IPQC Auditor Name" required value={newAudit.auditors} onChange={(v: string) => setNewAudit({...newAudit, auditors: v})} options={auditorsList} />
                       
-                      {/* PIC Name as a free-text input */}
                       <FormInput label="PIC Name (Finding)" required value={newAudit.personOnJob} onChange={(v: string) => setNewAudit({...newAudit, personOnJob: v})} />
 
                       <div className="flex flex-col gap-2">
