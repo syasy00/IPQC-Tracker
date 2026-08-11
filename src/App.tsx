@@ -833,85 +833,87 @@ export default function App() {
                 <div className="bg-white rounded-2xl border border-border-subtle overflow-hidden flex flex-col flex-1 shadow-sm min-h-0">
                   <div className="overflow-auto flex-1 custom-scrollbar">
                     <table className="w-full text-left border-collapse min-w-[1600px]">
-                      <thead className="bg-[#f8fafc] sticky top-0 z-20 shadow-sm">
+                      <thead className="bg-slate-100 sticky top-0 z-20 shadow-[0_2px_4px_rgba(0,0,0,0.05)]">
                         <tr>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 text-center sticky left-0 bg-[#f8fafc]">No</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Date</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 text-center">WW</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 text-center">Shift</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Auditor Name</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">PIC Finding</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Department</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Platform</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">MQE Engineer</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 font-bold bg-slate-50/50">Station / Area</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Group Finding</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Category</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Finding Details</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 text-center">Image</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">Remark</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 text-center">ICAR Status</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">ICAR#</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 text-right">Actions</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200 text-center sticky left-0 bg-slate-100 z-30 shadow-[2px_0_5px_rgba(0,0,0,0.03)]">No</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200">Date</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200 text-center">WW</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200 text-center">Shift</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200">Auditor Name</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200">PIC Finding</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200">Department</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200">Platform</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200">MQE Engineer</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200 bg-slate-200/50">Station / Area</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200">Group Finding</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200">Category</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200">Finding Details</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200 text-center">Image</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200">Remark</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200 text-center">ICAR Status</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200">ICAR#</th>
+                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-slate-200 text-right">Actions</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {filteredRecords.map((record) => (
+                      <tbody className="divide-y divide-slate-200">
+                        {filteredRecords.map((record, index) => (
                           <tr 
                             key={record.id} 
                             onClick={() => setSelectedRecord(record)}
-                            className="hover:bg-slate-50 transition-all duration-150 text-[11px] text-slate-600 bg-white cursor-pointer group"
+                            className={`transition-all duration-150 text-[11px] text-slate-700 cursor-pointer group hover:bg-orange-50/50 ${
+                              index % 2 === 0 ? 'bg-white' : 'bg-slate-50/70'
+                            }`}
                           >
-                            <td className="px-4 py-4 text-center font-bold text-slate-400 group-hover:text-brand-orange sticky left-0 bg-white group-hover:bg-slate-50 transition-colors">{record.no}</td>
-                            <td className="px-4 py-4 whitespace-nowrap font-medium">{record.auditDate}</td>
-                            <td className="px-4 py-4 text-center font-black text-slate-400">{record.ww}</td>
-                            <td className="px-4 py-4 text-center font-bold bg-slate-50/30">{record.shift}</td>
-                            <td className="px-4 py-4 font-semibold text-slate-800">{record.auditors}</td>
-                            <td className="px-4 py-4 font-medium text-slate-500">{record.personOnJob}</td>
-                            <td className="px-4 py-4 font-bold text-blue-600/70">{record.department}</td>
-                            <td className="px-4 py-4 font-bold text-brand-orange/80">{record.platform}</td>
-                            <td className="px-4 py-4 font-medium italic text-slate-400">{record.mqeEngineer}</td>
-                            <td className="px-4 py-4 font-black text-slate-900 bg-slate-50/30">{record.areaStation}</td>
-                            <td className="px-4 py-4 italic">{record.groupFinding}</td>
-                            <td className="px-4 py-4 whitespace-nowrap">
-                              <span className="px-2 py-1 bg-slate-100 rounded text-[9px] font-black uppercase tracking-widest text-slate-500">
+                            <td className="px-4 py-4 text-center font-bold text-slate-500 border-r border-slate-200 sticky left-0 bg-inherit z-10 shadow-[2px_0_5px_rgba(0,0,0,0.02)] group-hover:text-brand-orange">{record.no}</td>
+                            <td className="px-4 py-4 whitespace-nowrap font-medium border-r border-slate-100">{record.auditDate}</td>
+                            <td className="px-4 py-4 text-center font-black text-slate-600 border-r border-slate-100">{record.ww}</td>
+                            <td className="px-4 py-4 text-center font-bold border-r border-slate-100">{record.shift}</td>
+                            <td className="px-4 py-4 font-semibold text-slate-900 border-r border-slate-100">{record.auditors}</td>
+                            <td className="px-4 py-4 font-medium text-slate-700 border-r border-slate-100">{record.personOnJob}</td>
+                            <td className="px-4 py-4 font-bold text-blue-700 border-r border-slate-100">{record.department}</td>
+                            <td className="px-4 py-4 font-bold text-brand-orange border-r border-slate-100">{record.platform}</td>
+                            <td className="px-4 py-4 font-medium italic text-slate-600 border-r border-slate-100">{record.mqeEngineer}</td>
+                            <td className="px-4 py-4 font-black text-slate-900 bg-slate-100/50 border-r border-slate-200">{record.areaStation}</td>
+                            <td className="px-4 py-4 italic border-r border-slate-100">{record.groupFinding}</td>
+                            <td className="px-4 py-4 whitespace-nowrap border-r border-slate-100">
+                              <span className="px-2.5 py-1 bg-slate-200/70 rounded text-[9px] font-black uppercase tracking-widest text-slate-700">
                                 {record.category}
                               </span>
                             </td>
-                            <td className="px-4 py-4 max-w-[200px] truncate leading-tight" title={record.detailsFindings}>
+                            <td className="px-4 py-4 max-w-[200px] truncate leading-tight border-r border-slate-100" title={record.detailsFindings}>
                               {record.detailsFindings}
                             </td>
-                            <td className="px-4 py-4 text-center">
+                            <td className="px-4 py-4 text-center border-r border-slate-100">
                               {record.picture ? (
                                 <div 
                                   onClick={(e) => { e.stopPropagation(); setPreviewImage(getImageUrl(record.picture!)!); }}
-                                  className="w-16 h-12 rounded-lg border border-slate-200 overflow-hidden mx-auto shadow-sm group-hover:scale-105 transition-transform cursor-zoom-in relative"
+                                  className="w-16 h-12 rounded-lg border border-slate-300 overflow-hidden mx-auto shadow-sm group-hover:scale-105 transition-transform cursor-zoom-in relative"
                                 >
                                   <img src={getImageUrl(record.picture)} className="w-full h-full object-cover" referrerPolicy="no-referrer" alt="" />
                                 </div>
-                              ) : <ImageIcon size={20} className="mx-auto opacity-25" />}
+                              ) : <ImageIcon size={20} className="mx-auto opacity-30" />}
                             </td>
-                            <td className="px-4 py-4 max-w-[150px] truncate italic text-slate-400">{record.remark || '-'}</td>
-                            <td className="px-4 py-4 text-center">
+                            <td className="px-4 py-4 max-w-[150px] truncate italic text-slate-500 border-r border-slate-100">{record.remark || '-'}</td>
+                            <td className="px-4 py-4 text-center border-r border-slate-100">
                               <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest shadow-sm ${
-                                record.icarStatus === 'Submitted' ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-amber-50 text-amber-600 border border-amber-100'
+                                record.icarStatus === 'Submitted' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold' : 'bg-amber-100 text-amber-800 border border-amber-300 font-bold'
                               }`}>
                                 {record.icarStatus || 'Locked'}
                               </span>
                             </td>
-                            <td className="px-4 py-4 font-mono text-[10px] text-slate-400">{record.icarNum || 'N/A'}</td>
+                            <td className="px-4 py-4 font-mono text-[10px] font-bold text-slate-600 border-r border-slate-100">{record.icarNum || 'N/A'}</td>
                             <td className="px-4 py-4 text-right" onClick={e => e.stopPropagation()}>
                               <div className="flex justify-end items-center gap-2">
                                 <button 
                                   onClick={() => handleEditClick(record)}
-                                  className="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-brand-orange transition-all"
+                                  className="p-2 hover:bg-white rounded-lg text-slate-500 hover:text-brand-orange shadow-sm transition-all border border-slate-200"
                                   title="Edit"
                                 >
                                   <Pencil size={14} />
                                 </button>
                                 <button 
                                   onClick={() => handleDeleteRecord(record.id)}
-                                  className="p-2 hover:bg-rose-50 rounded-lg text-slate-400 hover:text-rose-600 transition-all"
+                                  className="p-2 hover:bg-rose-50 rounded-lg text-slate-500 hover:text-rose-600 shadow-sm transition-all border border-slate-200"
                                   title="Delete"
                                 >
                                   <Trash2 size={14} />
