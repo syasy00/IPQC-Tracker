@@ -752,49 +752,17 @@ export default function App() {
                 animate={{ opacity: 1 }}
                 className="flex-1 flex flex-col min-h-0 bg-transparent space-y-4"
               >
-                {/* Upgraded Toolbar with Tabs, Advanced Filter, Export All, and Add Finding Side-by-Side */}
-                <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-                  <div className="flex items-center gap-2 overflow-x-auto w-full lg:w-auto pb-2 lg:pb-0">
-                    <button 
-                      onClick={() => setFilterStatus('')}
-                      className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${
-                        filterStatus === '' ? 'bg-orange-50 text-brand-orange border border-orange-200 shadow-sm' : 'text-slate-500 hover:bg-slate-50'
-                      }`}
-                    >
-                      All Records ({records.length})
-                    </button>
-                    <button 
-                      onClick={() => setFilterStatus('Locked')}
-                      className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${
-                        filterStatus === 'Locked' ? 'bg-amber-50 text-amber-700 border border-amber-200 shadow-sm' : 'text-slate-500 hover:bg-slate-50'
-                      }`}
-                    >
-                      Locked ICARs ({records.filter(r => r.icarStatus === 'Locked').length})
-                    </button>
-                    <button 
-                      onClick={() => setFilterStatus('Submitted')}
-                      className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${
-                        filterStatus === 'Submitted' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm' : 'text-slate-500 hover:bg-slate-50'
-                      }`}
-                    >
-                      Submitted ICARs ({records.filter(r => r.icarStatus === 'Submitted').length})
-                    </button>
+                {/* Top Action Bar: Export All and Add Finding in Top Right (matching reference layout) */}
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                  <div>
+                    <h2 className="text-base font-black uppercase tracking-tight text-slate-800">IPQC Records Management</h2>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-0.5">Overview & Audit Tracking</p>
                   </div>
-                  
-                  <div className="flex items-center gap-3 w-full lg:w-auto justify-end flex-wrap">
-                    <button 
-                      onClick={() => setFiltersOpen(!filtersOpen)}
-                      className={`flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${
-                        filtersOpen ? 'bg-slate-800 text-white border-slate-800 shadow-md' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-                      }`}
-                    >
-                      <Filter size={14} />
-                      {filtersOpen ? 'Hide Filter Bar' : 'Advanced Filter'}
-                    </button>
-                    
+
+                  <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
                     <button 
                       onClick={() => exportToExcel(records)}
-                      className="flex items-center justify-center gap-2 px-5 py-2.5 bg-emerald-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-700 shadow-md shadow-emerald-600/20 transition-all whitespace-nowrap"
+                      className="flex items-center justify-center gap-2 px-5 py-2.5 bg-white text-emerald-600 border border-emerald-200 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-50 transition-all whitespace-nowrap shadow-sm"
                     >
                       <Download size={14} />
                       Export All
@@ -810,8 +778,36 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Search Bar */}
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 flex flex-col md:flex-row items-center gap-4">
+                {/* Status Navigation Tabs */}
+                <div className="flex items-center gap-2 overflow-x-auto w-full pb-1">
+                  <button 
+                    onClick={() => setFilterStatus('')}
+                    className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${
+                      filterStatus === '' ? 'bg-orange-50 text-brand-orange border border-orange-200 shadow-sm' : 'bg-white text-slate-500 hover:bg-slate-50 border border-slate-200'
+                    }`}
+                  >
+                    All Records ({records.length})
+                  </button>
+                  <button 
+                    onClick={() => setFilterStatus('Locked')}
+                    className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${
+                      filterStatus === 'Locked' ? 'bg-amber-50 text-amber-700 border border-amber-200 shadow-sm' : 'bg-white text-slate-500 hover:bg-slate-50 border border-slate-200'
+                    }`}
+                  >
+                    Locked ICARs ({records.filter(r => r.icarStatus === 'Locked').length})
+                  </button>
+                  <button 
+                    onClick={() => setFilterStatus('Submitted')}
+                    className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${
+                      filterStatus === 'Submitted' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm' : 'bg-white text-slate-500 hover:bg-slate-50 border border-slate-200'
+                    }`}
+                  >
+                    Submitted ICARs ({records.filter(r => r.icarStatus === 'Submitted').length})
+                  </button>
+                </div>
+
+                {/* Filter & Search Bar Band (matching reference layout) */}
+                <div className="bg-[#fffbeb]/50 p-4 rounded-2xl border border-amber-200/60 flex flex-col md:flex-row items-center gap-4 shadow-sm">
                   <div className="relative flex-1 w-full">
                     <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
                     <input 
@@ -819,8 +815,20 @@ export default function App() {
                       placeholder="Search records by keyword, platform, station..." 
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full bg-white border border-slate-200 rounded-xl text-xs font-bold pl-10 pr-4 py-3 outline-none focus:border-brand-orange shadow-sm transition-all"
+                      className="w-full bg-white border border-slate-200 rounded-xl text-xs font-bold pl-10 pr-4 py-3 outline-none focus:border-brand-orange shadow-inner transition-all"
                     />
+                  </div>
+
+                  <div className="flex items-center gap-3 w-full md:w-auto justify-end">
+                    <button 
+                      onClick={() => setFiltersOpen(!filtersOpen)}
+                      className={`w-full md:w-auto flex items-center justify-center gap-2 px-5 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${
+                        filtersOpen ? 'bg-slate-800 text-white border-slate-800 shadow-md' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      <Filter size={14} />
+                      {filtersOpen ? 'Hide Filter' : 'Advanced Filter'}
+                    </button>
                   </div>
                 </div>
 
