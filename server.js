@@ -68,7 +68,6 @@ app.post('/api/audits', upload.single('picture'), (req, res) => {
     remark, status, icarNum, actionTaken, mqeEngineer
   } = req.body;
 
-  // The image URL will be the path where Multer saved it on your server
   const picture = req.file ? `/uploads/${req.file.filename}` : null;
 
   const sql = `
@@ -93,6 +92,15 @@ app.post('/api/audits', upload.single('picture'), (req, res) => {
     res.status(201).json({ message: 'Audit added successfully', id: result.insertId });
   });
 });
+
+
+app.use(express.static('dist'));
+
+
+app.get('*', (req, res) => {
+  res.sendFile(path.resolve('dist', 'index.html'));
+});
+
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
