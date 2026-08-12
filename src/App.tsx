@@ -143,11 +143,24 @@ const CATEGORY_GROUP_MAPPING: Record<string, string> = {
   Training_Certification: 'Man'
 };
 
-const PLATFORM_MQE_MAPPING: Record<string, string> = {
+const INITIAL_PLATFORM_MQE_MAPPING: Record<string, string> = {
   Apex: 'Siti Naimah',
-  PDX: 'Larry',
+  Ascent: 'Syahqila',
+  Cumulus: 'Ivy',
+  Evos: 'Kiri',
+  Ewave: 'Syahqila',
+  HV: 'Farhad',
+  'HV (MV)': 'Farhad',
+  'HV (OL)': 'Farhad',
+  'Insource (Potting)': 'Farhad',
+  Maxstream: 'Larry',
   'Navi I/AZX/LM/LFM/RFG': 'Farid',
-  'Navi II': 'Farid'
+  'Navi II': 'Azren',
+  Paramount: 'Ivy',
+  PDX: 'Larry',
+  'Pinnacle III': 'Syahqila',
+  Scorpius: 'Kornnie',
+  VHF: 'Larry'
 };
 
 const SHIFTS = ['A', 'B', 'C'];
@@ -180,9 +193,14 @@ export default function App() {
   const [showImportModal, setShowImportModal] = useState(false);
   const [importing, setImporting] = useState(false);
 
-  const [auditorsList] = useState(INITIAL_AUDITORS);
+  // Settings State for CRUD Operations
+  const [auditorsList, setAuditorsList] = useState(INITIAL_AUDITORS);
+  const [newAuditorName, setNewAuditorName] = useState('');
+  
   const [platformsList] = useState(PLATFORMS);
-  const [mqeMappings] = useState(PLATFORM_MQE_MAPPING);
+  const [mqeMappings, setMqeMappings] = useState(INITIAL_PLATFORM_MQE_MAPPING);
+  const [selectedPlatformForMapping, setSelectedPlatformForMapping] = useState(PLATFORMS[0]);
+  const [newMqeName, setNewMqeName] = useState('');
 
   const [analyticsDimension, setAnalyticsDimension] = useState<'platform' | 'category' | 'mqe' | 'auditor'>('platform');
 
@@ -255,6 +273,35 @@ export default function App() {
     return mqeMappings[platform as keyof typeof mqeMappings] || 'Unassigned';
   };
 
+  const handleAddAuditor = (e: FormEvent) => {
+    e.preventDefault();
+    if (newAuditorName.trim() && !auditorsList.includes(newAuditorName.trim())) {
+      setAuditorsList([...auditorsList, newAuditorName.trim()]);
+      setNewAuditorName('');
+    }
+  };
+
+  const handleDeleteAuditor = (auditorToDelete: string) => {
+    setAuditorsList(auditorsList.filter(a => a !== auditorToDelete));
+  };
+
+  const handleAddOrUpdateMqeMapping = (e: FormEvent) => {
+    e.preventDefault();
+    if (newMqeName.trim()) {
+      setMqeMappings({
+        ...mqeMappings,
+        [selectedPlatformForMapping]: newMqeName.trim()
+      });
+      setNewMqeName('');
+    }
+  };
+
+  const handleClearMqeMapping = (platform: string) => {
+    const newMappings = { ...mqeMappings };
+    delete newMappings[platform];
+    setMqeMappings(newMappings);
+  };
+
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [filtersOpen, setFiltersOpen] = useState(false);
   
@@ -275,7 +322,7 @@ export default function App() {
     auditDate: new Date().toISOString().split('T')[0],
     ww: calculateWW(new Date().toISOString().split('T')[0]),
     shift: SHIFTS[0],
-    auditors: INITIAL_AUDITORS[0],
+    auditors: auditorsList[0],
     personOnJob: '',
     department: DEPARTMENTS[0],
     platform: PLATFORMS[0],
@@ -286,7 +333,7 @@ export default function App() {
     remark: '',
     icarNum: 'N/A',
     icarStatus: 'Locked',
-    mqeEngineer: PLATFORM_MQE_MAPPING[PLATFORMS[0]] || ''
+    mqeEngineer: INITIAL_PLATFORM_MQE_MAPPING[PLATFORMS[0]] || ''
   });
 
   useEffect(() => {
@@ -403,7 +450,7 @@ export default function App() {
         auditDate: new Date().toISOString().split('T')[0],
         ww: calculateWW(new Date().toISOString().split('T')[0]),
         shift: SHIFTS[0],
-        auditors: INITIAL_AUDITORS[0],
+        auditors: auditorsList[0] || '',
         personOnJob: '',
         department: DEPARTMENTS[0],
         platform: PLATFORMS[0],
@@ -414,7 +461,7 @@ export default function App() {
         remark: '',
         icarNum: 'N/A',
         icarStatus: 'Locked',
-        mqeEngineer: PLATFORM_MQE_MAPPING[PLATFORMS[0]] || '',
+        mqeEngineer: getMqeForPlatform(PLATFORMS[0]),
         picture: '',
       });
       setEditingId(null);
@@ -435,7 +482,7 @@ export default function App() {
       auditDate: record.auditDate || '',
       ww: record.ww || '',
       shift: record.shift || 'A',
-      auditors: record.auditors || INITIAL_AUDITORS[0],
+      auditors: record.auditors || auditorsList[0],
       personOnJob: record.personOnJob || '',
       department: record.department || DEPARTMENTS[0],
       platform: record.platform || PLATFORMS[0],
@@ -1276,49 +1323,6 @@ export default function App() {
               </motion.div>
             )}
 
-            {view === 'import' && (
-              <motion.div 
-                key="import"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="max-w-xl mx-auto space-y-4 pt-10"
-              >
-                <div className="bg-white p-8 rounded-2xl border border-border-subtle shadow-sm space-y-6">
-                  <div>
-                    <h2 className="text-lg font-black text-slate-800 uppercase tracking-tight">Import Historical Records</h2>
-                    <p className="text-xs text-text-muted mt-1">Upload your existing Excel tracker file to sync historical findings directly into the system.</p>
-                  </div>
-                  <div className="border-2 border-dashed border-slate-200 rounded-2xl p-6 text-center bg-slate-50">
-                    <input 
-                      id="excelImport"
-                      type="file"
-                      accept=".xlsx, .xls"
-                      className="text-xs font-bold text-slate-600 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-black file:uppercase file:bg-brand-orange file:text-white hover:file:brightness-110 file:cursor-pointer"
-                    />
-                  </div>
-                  <button 
-                    onClick={async () => {
-                      const fileInput = document.getElementById('excelImport') as HTMLInputElement;
-                      const file = fileInput?.files?.[0];
-                      if (!file) {
-                        alert('Please select an Excel file first');
-                        return;
-                      }
-                      try {
-                        const imported = await importFromExcel(file);
-                        alert(`Parsed ${imported.length} rows successfully.`);
-                      } catch (err) {
-                        alert('Error importing file.');
-                      }
-                    }}
-                    className="w-full py-3 bg-brand-orange text-white rounded-xl text-xs font-black uppercase tracking-widest shadow-lg shadow-brand-orange/20 hover:brightness-110 transition-all"
-                  >
-                    Process Import
-                  </button>
-                </div>
-              </motion.div>
-            )}
-
             {view === 'settings' && isAdmin && (
               <motion.div 
                 key="settings"
@@ -1340,45 +1344,108 @@ export default function App() {
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
                     <div className="space-y-4">
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                         <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
                           <Users size={14} className="text-brand-orange" />
                           IPQC Auditors
                         </h3>
                       </div>
-                      <div className="space-y-1">
+                      
+                      <form onSubmit={handleAddAuditor} className="flex gap-2">
+                        <input 
+                          type="text"
+                          value={newAuditorName}
+                          onChange={(e) => setNewAuditorName(e.target.value)}
+                          placeholder="New Auditor Name..."
+                          className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-bold outline-none focus:border-brand-orange transition-all"
+                        />
+                        <button type="submit" disabled={!newAuditorName.trim()} className="bg-brand-orange text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase disabled:opacity-50 hover:brightness-110 transition-all">
+                          Add
+                        </button>
+                      </form>
+
+                      <div className="space-y-2 max-h-[300px] overflow-y-auto custom-scrollbar pr-2">
                         {auditorsList.map((auditor, i) => (
-                          <div key={i} className="flex items-center justify-between p-3 bg-slate-50 border border-slate-100 rounded-xl">
+                          <div key={i} className="flex items-center justify-between p-3 bg-slate-50 border border-slate-100 rounded-xl group hover:border-slate-200 transition-all">
                             <span className="text-xs font-bold text-slate-700">{auditor}</span>
+                            <button 
+                              onClick={() => handleDeleteAuditor(auditor)}
+                              className="text-slate-300 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all"
+                              title="Remove Auditor"
+                            >
+                              <X size={14} />
+                            </button>
                           </div>
                         ))}
                       </div>
                     </div>
 
                     <div className="space-y-4">
-                      <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
-                        <Layers size={14} className="text-brand-orange" />
-                        Platform - MQE Mapping
-                      </h3>
-                      <div className="overflow-hidden border border-slate-100 rounded-2xl">
-                        <table className="w-full text-left">
-                          <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-widest text-slate-400">
-                            <tr>
-                              <th className="px-4 py-3">Platform</th>
-                              <th className="px-4 py-3">Responsible MQE</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-50">
-                            {platformsList.map((platform) => (
-                              <tr key={platform} className="hover:bg-slate-50/50 transition-all text-xs font-bold text-slate-700">
-                                <td className="px-4 py-3 font-black text-slate-400">{platform}</td>
-                                <td className="px-4 py-3 text-brand-orange uppercase tracking-tight">
-                                  {mqeMappings[platform] || 'Unassigned'}
-                                </td>
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                        <h3 className="text-xs font-black uppercase tracking-widest flex items-center gap-2">
+                          <Layers size={14} className="text-brand-orange" />
+                          Platform - MQE Mapping
+                        </h3>
+                      </div>
+
+                      <form onSubmit={handleAddOrUpdateMqeMapping} className="flex flex-col gap-3 bg-slate-50 p-4 rounded-xl border border-slate-100">
+                        <div className="grid grid-cols-2 gap-2">
+                          <select 
+                            value={selectedPlatformForMapping} 
+                            onChange={(e) => setSelectedPlatformForMapping(e.target.value)}
+                            className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold outline-none cursor-pointer"
+                          >
+                            {platformsList.map(p => <option key={p} value={p}>{p}</option>)}
+                          </select>
+                          <input 
+                            type="text"
+                            value={newMqeName}
+                            onChange={(e) => setNewMqeName(e.target.value)}
+                            placeholder="MQE Name..."
+                            className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold outline-none focus:border-brand-orange transition-all"
+                          />
+                        </div>
+                        <button type="submit" disabled={!newMqeName.trim()} className="w-full bg-slate-800 text-white py-2 rounded-lg text-[10px] font-black uppercase tracking-widest disabled:opacity-50 hover:bg-slate-700 transition-all">
+                          Update Mapping
+                        </button>
+                      </form>
+
+                      <div className="overflow-hidden border border-slate-200 rounded-2xl">
+                        <div className="max-h-[300px] overflow-y-auto custom-scrollbar">
+                          <table className="w-full text-left">
+                            <thead className="bg-slate-100 text-[9px] font-black uppercase tracking-widest text-slate-500 sticky top-0">
+                              <tr>
+                                <th className="px-4 py-3 border-b border-slate-200">Platform</th>
+                                <th className="px-4 py-3 border-b border-slate-200">Responsible MQE</th>
+                                <th className="px-4 py-3 border-b border-slate-200 w-10 text-center"></th>
                               </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 bg-white">
+                              {platformsList.map((platform) => {
+                                const assignedMqe = mqeMappings[platform];
+                                return (
+                                  <tr key={platform} className="hover:bg-slate-50/50 transition-all group">
+                                    <td className="px-4 py-3 text-xs font-black text-slate-600">{platform}</td>
+                                    <td className={`px-4 py-3 text-xs font-bold tracking-tight uppercase ${assignedMqe ? 'text-brand-orange' : 'text-slate-400 italic'}`}>
+                                      {assignedMqe || 'Unassigned'}
+                                    </td>
+                                    <td className="px-4 py-3 text-center">
+                                      {assignedMqe && (
+                                        <button 
+                                          onClick={() => handleClearMqeMapping(platform)}
+                                          className="text-slate-300 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all"
+                                          title="Clear Assignment"
+                                        >
+                                          <Trash2 size={12} />
+                                        </button>
+                                      )}
+                                    </td>
+                                  </tr>
+                                )
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
                       </div>
                     </div>
                   </div>
