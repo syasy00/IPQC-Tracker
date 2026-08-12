@@ -186,12 +186,16 @@ export default function App() {
   const [records, setRecords] = useState<AuditRecord[]>([]); 
   const [powerBiUrl, setPowerBiUrl] = useState<string>(''); 
   const [dashboardMode, setDashboardMode] = useState<'system' | 'powerbi'>('system');
-  const [isAdmin, setIsAdmin] = useState(false);
-  
-  // Proper Login State
+  // Auth: a signed token from the server is the source of truth for admin
+  // access, not a UI-only boolean. Persisted so a refresh doesn't log you out.
+  const [authToken, setAuthToken] = useState<string | null>(() => localStorage.getItem('ipqc_admin_token'));
+  const isAdmin = !!authToken;
+
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [loggingIn, setLoggingIn] = useState(false);
   
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
@@ -223,6 +227,22 @@ export default function App() {
       }
     };
     fetchAudits();
+  }, []);
+
+  // On load, confirm a saved token is still valid rather than trusting it
+  // blindly - an expired or tampered token gets cleared immediately.
+  useEffect(() => {
+    if (!authToken) return;
+    fetch(`${API_BASE_URL}/api/verify`, { headers: { Authorization: `Bearer ${authToken}` } })
+      .then(response => {
+        if (!response.ok) {
+          localStorage.removeItem('ipqc_admin_token');
+          setAuthToken(null);
+        }
+      })
+      .catch(() => {
+        // Network error - leave the token as-is; authFetch will reconcile on next write.
+      });
   }, []);
 
   const analyticsData = useMemo(() => {
@@ -259,21 +279,53 @@ export default function App() {
     };
   }, [records]);
 
-  const handleLogin = (e: FormEvent) => {
+  const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
-    if ((loginUsername === 'admin' || loginUsername === 'Admin') && loginPassword === 'admin123') {
-      setIsAdmin(true);
-      setShowLoginModal(false);
-      setLoginPassword('');
-      setLoginUsername('');
-    } else {
-      alert('Invalid username or password');
+    setLoginError('');
+    setLoggingIn(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: loginUsername, password: loginPassword }),
+      });
+      const data = await response.json();
+      if (response.ok && data.token) {
+        localStorage.setItem('ipqc_admin_token', data.token);
+        setAuthToken(data.token);
+        setShowLoginModal(false);
+        setLoginPassword('');
+        setLoginUsername('');
+      } else {
+        setLoginError(data.error || 'Invalid username or password');
+      }
+    } catch (err) {
+      setLoginError('Could not reach the server. Please try again.');
+    } finally {
+      setLoggingIn(false);
     }
   };
 
   const logout = () => {
-    setIsAdmin(false);
+    localStorage.removeItem('ipqc_admin_token');
+    setAuthToken(null);
     if (view === 'settings') setView('ipqc');
+  };
+
+  // Attaches the admin token to write requests (POST/PUT/DELETE). If the
+  // server rejects it as expired/invalid, we log out locally so the UI
+  // reflects the real state instead of pretending the session is still good.
+  const authFetch = async (url: string, options: RequestInit = {}) => {
+    const headers: Record<string, string> = {
+      ...(options.headers as Record<string, string> | undefined),
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    };
+    const response = await fetch(url, { ...options, headers });
+    if (response.status === 401) {
+      localStorage.removeItem('ipqc_admin_token');
+      setAuthToken(null);
+    }
+    return response;
   };
 
   const getMqeForPlatform = (platform: string) => {
@@ -437,7 +489,7 @@ export default function App() {
 
     try {
       if (editingId) {
-        const response = await fetch(`${API_BASE_URL}/api/records/${editingId}`, {
+        const response = await authFetch(`${API_BASE_URL}/api/records/${editingId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -449,7 +501,7 @@ export default function App() {
           alert('Failed to update record.');
         }
       } else {
-        const response = await fetch(`${API_BASE_URL}/api/records`, {
+        const response = await authFetch(`${API_BASE_URL}/api/records`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -521,7 +573,7 @@ export default function App() {
   const handleDeleteRecord = async (id: string) => {
     if (confirm('Are you sure you want to delete this audit record?')) {
       try {
-        await fetch(`${API_BASE_URL}/api/records/${id}`, { method: 'DELETE' });
+        await authFetch(`${API_BASE_URL}/api/records/${id}`, { method: 'DELETE' });
         setRecords(records.filter(r => String(r.id) !== String(id)));
       } catch (err) {
         alert('Failed to delete record.');
@@ -563,7 +615,7 @@ export default function App() {
           picture: row.picture || null
         };
 
-        const response = await fetch(`${API_BASE_URL}/api/records`, {
+        const response = await authFetch(`${API_BASE_URL}/api/records`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -635,23 +687,6 @@ export default function App() {
             onClick={() => { setView('ipqc'); if (window.innerWidth < 768) setSidebarOpen(false); }}
           />
 
-          <div className="px-3 mt-6 mb-2">
-            <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] italic opacity-50">System</span>
-          </div>
-          <NavItem 
-            icon={isAdmin ? <Settings size={18} /> : <Lock size={18} />} 
-            label={isAdmin ? "Settings" : "Admin Login"} 
-            active={view === 'settings'} 
-            collapsed={!sidebarOpen && window.innerWidth >= 768}
-            onClick={() => {
-              if (isAdmin) {
-                setView('settings');
-              } else {
-                setShowLoginModal(true);
-              }
-              if (window.innerWidth < 768) setSidebarOpen(false);
-            }}
-          />
         </nav>
       </aside>
 
@@ -669,16 +704,27 @@ export default function App() {
 
           <div className="flex items-center gap-4">
             {isAdmin ? (
-              <button 
-                onClick={logout}
-                className="flex items-center gap-2 px-3 py-1.5 bg-rose-50 text-rose-600 rounded-xl hover:bg-rose-100 transition-colors group border border-rose-100"
-                title="Sign Out"
-              >
-                <div className="w-6 h-6 rounded-full bg-rose-200 flex items-center justify-center text-rose-700">
-                  <UserCircle size={14} />
-                </div>
-                <span className="text-[10px] font-bold uppercase tracking-widest hidden sm:inline group-hover:text-rose-700">Admin</span>
-              </button>
+              <>
+                <button
+                  onClick={() => setView('settings')}
+                  className={`p-2 rounded-xl transition-colors border ${
+                    view === 'settings' ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50 hover:text-brand-orange'
+                  }`}
+                  title="Settings"
+                >
+                  <Settings size={16} />
+                </button>
+                <button 
+                  onClick={logout}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-rose-50 text-rose-600 rounded-xl hover:bg-rose-100 transition-colors group border border-rose-100"
+                  title="Sign Out"
+                >
+                  <div className="w-6 h-6 rounded-full bg-rose-200 flex items-center justify-center text-rose-700">
+                    <UserCircle size={14} />
+                  </div>
+                  <span className="text-[10px] font-bold uppercase tracking-widest hidden sm:inline group-hover:text-rose-700">Admin</span>
+                </button>
+              </>
             ) : (
               <button 
                 onClick={() => setShowLoginModal(true)}
@@ -891,7 +937,9 @@ export default function App() {
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
                   <div>
                     <h2 className="text-base font-black uppercase tracking-tight text-slate-800">IPQC Records Management</h2>
-                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-0.5">Overview & Audit Tracking</p>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-0.5">
+                      {records.length} Total &middot; {records.filter(r => r.icarStatus === 'Locked').length} Locked &middot; {records.filter(r => r.icarStatus === 'Submitted').length} Submitted
+                    </p>
                   </div>
 
                   <div className="flex items-center gap-3 w-full sm:w-auto justify-end flex-wrap">
@@ -919,34 +967,6 @@ export default function App() {
                       Add Finding
                     </button>
                   </div>
-                </div>
-
-                {/* Status Navigation Tabs */}
-                <div className="flex items-center gap-2 overflow-x-auto w-full pb-1">
-                  <button 
-                    onClick={() => setFilterStatus('')}
-                    className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${
-                      filterStatus === '' ? 'bg-orange-50 text-brand-orange border border-orange-200 shadow-sm' : 'bg-white text-slate-500 hover:bg-slate-50 border border-slate-200'
-                    }`}
-                  >
-                    All Records ({records.length})
-                  </button>
-                  <button 
-                    onClick={() => setFilterStatus('Locked')}
-                    className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${
-                      filterStatus === 'Locked' ? 'bg-amber-50 text-amber-700 border border-amber-200 shadow-sm' : 'bg-white text-slate-500 hover:bg-slate-50 border border-slate-200'
-                    }`}
-                  >
-                    Locked ICARs ({records.filter(r => r.icarStatus === 'Locked').length})
-                  </button>
-                  <button 
-                    onClick={() => setFilterStatus('Submitted')}
-                    className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${
-                      filterStatus === 'Submitted' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm' : 'bg-white text-slate-500 hover:bg-slate-50 border border-slate-200'
-                    }`}
-                  >
-                    Submitted ICARs ({records.filter(r => r.icarStatus === 'Submitted').length})
-                  </button>
                 </div>
 
                 {/* Filter & Search Bar Band */}
@@ -991,6 +1011,7 @@ export default function App() {
                         <FilterInput label="Department" type="select" options={DEPARTMENTS} value={filterDept} onChange={setFilterDept} />
                         <FilterInput label="Platform" type="select" options={platformsList} value={filterPlatform} onChange={setFilterPlatform} />
                         <FilterInput label="Category" type="select" options={CATEGORIES} value={filterCategory} onChange={setFilterCategory} />
+                        <FilterInput label="ICAR Status" type="select" options={['Locked', 'Submitted']} value={filterStatus} onChange={setFilterStatus} />
                         <div className="flex items-end lg:col-span-2">
                           <button 
                             onClick={() => {
@@ -1641,23 +1662,29 @@ export default function App() {
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/5 outline-none transition-all placeholder:text-slate-300 font-bold"
                   />
                 </div>
+                {loginError && (
+                  <p className="text-[11px] font-bold text-rose-600 bg-rose-50 border border-rose-100 rounded-lg px-3 py-2 text-center">
+                    {loginError}
+                  </p>
+                )}
+
                 <div className="flex gap-3 pt-2">
                   <button 
                     type="button"
-                    onClick={() => setShowLoginModal(false)}
+                    onClick={() => { setShowLoginModal(false); setLoginError(''); }}
                     className="flex-1 py-3 text-xs font-black uppercase tracking-widest text-slate-400 hover:text-slate-600 transition-colors"
                   >
                     Cancel
                   </button>
                   <button 
                     type="submit"
-                    className="flex-1 bg-brand-orange text-white py-3 rounded-xl text-xs font-black uppercase tracking-widest shadow-lg shadow-brand-orange/20 hover:brightness-110 active:scale-95 transition-all"
+                    disabled={loggingIn}
+                    className="flex-1 bg-brand-orange text-white py-3 rounded-xl text-xs font-black uppercase tracking-widest shadow-lg shadow-brand-orange/20 hover:brightness-110 active:scale-95 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
                   >
-                    Sign In
+                    {loggingIn ? 'Signing In...' : 'Sign In'}
                   </button>
                 </div>
               </form>
-              <p className="text-[9px] text-center text-slate-400 mt-8 font-bold italic uppercase tracking-tighter">Tip: admin / admin123</p>
             </motion.div>
           </div>
         )}

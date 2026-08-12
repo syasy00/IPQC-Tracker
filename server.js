@@ -5,6 +5,8 @@ import dotenv from 'dotenv';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 
 dotenv.config();
 
@@ -13,6 +15,75 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use('/uploads', express.static('public/uploads')); // Serve images to frontend
+
+// ==========================================
+// Admin Authentication (single admin account)
+// ==========================================
+// Credentials never live in the frontend bundle. The username is plain env
+// config; the password is stored server-side as a bcrypt hash (see
+// scripts/generate-password-hash.js to create ADMIN_PASSWORD_HASH).
+const { JWT_SECRET, ADMIN_USERNAME, ADMIN_PASSWORD_HASH } = process.env;
+
+if (!JWT_SECRET || !ADMIN_USERNAME || !ADMIN_PASSWORD_HASH) {
+  console.warn(
+    'WARNING: JWT_SECRET, ADMIN_USERNAME, or ADMIN_PASSWORD_HASH is missing from .env. ' +
+    'Admin login and all protected write routes will fail until these are set. ' +
+    'Run `node scripts/generate-password-hash.js` to create a hash.'
+  );
+}
+
+// Verifies a Bearer token on protected routes. Rejects the request outright
+// if it's missing or invalid, rather than just hiding a UI button.
+const authenticateAdmin = (req, res, next) => {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+
+  if (!token) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+
+  try {
+    req.admin = jwt.verify(token, JWT_SECRET);
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: 'Invalid or expired session, please log in again' });
+  }
+};
+
+// API: Admin Login - issues a short-lived signed token
+app.post('/api/login', async (req, res) => {
+  const { username, password } = req.body || {};
+
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password are required' });
+  }
+
+  if (!JWT_SECRET || !ADMIN_USERNAME || !ADMIN_PASSWORD_HASH) {
+    return res.status(500).json({ error: 'Server auth is not configured. Contact the administrator.' });
+  }
+
+  if (username !== ADMIN_USERNAME) {
+    return res.status(401).json({ error: 'Invalid username or password' });
+  }
+
+  try {
+    const passwordMatches = await bcrypt.compare(password, ADMIN_PASSWORD_HASH);
+    if (!passwordMatches) {
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
+
+    const token = jwt.sign({ role: 'admin', username }, JWT_SECRET, { expiresIn: '8h' });
+    res.status(200).json({ token, expiresIn: '8h' });
+  } catch (err) {
+    console.error('Login error:', err);
+    res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+// API: Verify an existing token is still valid (used to restore sessions on page load)
+app.get('/api/verify', authenticateAdmin, (req, res) => {
+  res.status(200).json({ valid: true, username: req.admin.username });
+});
 
 // Resilient MySQL Connection Pool with Keep-Alive
 const db = mysql.createPool({
@@ -52,8 +123,11 @@ const upload = multer({ storage: storage });
 
 // ==========================================
 // TEMPORARY API: Wipe Database Clean
+// This is a dangerous, irreversible operation. It is locked behind admin
+// auth below, but the safest move is to delete this route entirely once
+// you're done testing - it has no place in a production build.
 // ==========================================
-app.delete('/api/reset-database', (req, res) => {
+app.delete('/api/reset-database', authenticateAdmin, (req, res) => {
   db.query('TRUNCATE TABLE audit_records', (err) => {
     if (err) {
       console.error('Failed to clear database:', err);
@@ -82,7 +156,7 @@ app.get('/api/records', (req, res) => {
 });
 
 // API: Add a New Record (CREATE)
-app.post('/api/records', upload.single('picture'), (req, res) => {
+app.post('/api/records', authenticateAdmin, upload.single('picture'), (req, res) => {
   const {
     no, auditDate, ww, shift, auditors, personOnJob, department,
     platform, areaStation, groupFinding, category, detailsFindings,
@@ -124,7 +198,7 @@ app.post('/api/records', upload.single('picture'), (req, res) => {
 });
 
 // API: Update an Existing Record (UPDATE) - FIXED MISSING 'NO' FIELD
-app.put('/api/records/:id', upload.single('picture'), (req, res) => {
+app.put('/api/records/:id', authenticateAdmin, upload.single('picture'), (req, res) => {
   const { id } = req.params;
   const {
     no, auditDate, ww, shift, auditors, personOnJob, department,
@@ -164,7 +238,7 @@ app.put('/api/records/:id', upload.single('picture'), (req, res) => {
 });
 
 // API: Delete a Record (DELETE)
-app.delete('/api/records/:id', (req, res) => {
+app.delete('/api/records/:id', authenticateAdmin, (req, res) => {
   const { id } = req.params;
   db.query('DELETE FROM audit_records WHERE id = ?', [id], (err) => {
     if (err) return res.status(500).json(err);
