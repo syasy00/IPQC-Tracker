@@ -187,8 +187,12 @@ export default function App() {
   const [powerBiUrl, setPowerBiUrl] = useState<string>(''); 
   const [dashboardMode, setDashboardMode] = useState<'system' | 'powerbi'>('system');
   const [isAdmin, setIsAdmin] = useState(false);
+  
+  // Proper Login State
   const [showLoginModal, setShowLoginModal] = useState(false);
+  const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
+  
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -257,12 +261,13 @@ export default function App() {
 
   const handleLogin = (e: FormEvent) => {
     e.preventDefault();
-    if (loginPassword === 'admin123') {
+    if ((loginUsername === 'admin' || loginUsername === 'Admin') && loginPassword === 'admin123') {
       setIsAdmin(true);
       setShowLoginModal(false);
       setLoginPassword('');
+      setLoginUsername('');
     } else {
-      alert('Invalid admin password');
+      alert('Invalid username or password');
     }
   };
 
@@ -916,6 +921,34 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Status Navigation Tabs */}
+                <div className="flex items-center gap-2 overflow-x-auto w-full pb-1">
+                  <button 
+                    onClick={() => setFilterStatus('')}
+                    className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${
+                      filterStatus === '' ? 'bg-orange-50 text-brand-orange border border-orange-200 shadow-sm' : 'bg-white text-slate-500 hover:bg-slate-50 border border-slate-200'
+                    }`}
+                  >
+                    All Records ({records.length})
+                  </button>
+                  <button 
+                    onClick={() => setFilterStatus('Locked')}
+                    className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${
+                      filterStatus === 'Locked' ? 'bg-amber-50 text-amber-700 border border-amber-200 shadow-sm' : 'bg-white text-slate-500 hover:bg-slate-50 border border-slate-200'
+                    }`}
+                  >
+                    Locked ICARs ({records.filter(r => r.icarStatus === 'Locked').length})
+                  </button>
+                  <button 
+                    onClick={() => setFilterStatus('Submitted')}
+                    className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${
+                      filterStatus === 'Submitted' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm' : 'bg-white text-slate-500 hover:bg-slate-50 border border-slate-200'
+                    }`}
+                  >
+                    Submitted ICARs ({records.filter(r => r.icarStatus === 'Submitted').length})
+                  </button>
+                </div>
+
                 {/* Filter & Search Bar Band */}
                 <div className="bg-[#fffbeb]/50 p-4 rounded-2xl border border-amber-200/60 flex flex-col md:flex-row items-center gap-4 shadow-sm">
                   <div className="relative flex-1 w-full">
@@ -958,9 +991,7 @@ export default function App() {
                         <FilterInput label="Department" type="select" options={DEPARTMENTS} value={filterDept} onChange={setFilterDept} />
                         <FilterInput label="Platform" type="select" options={platformsList} value={filterPlatform} onChange={setFilterPlatform} />
                         <FilterInput label="Category" type="select" options={CATEGORIES} value={filterCategory} onChange={setFilterCategory} />
-                        <FilterInput label="ICAR Status" type="select" options={['Locked', 'Submitted']} value={filterStatus} onChange={setFilterStatus} />
-                        
-                        <div className="flex items-end">
+                        <div className="flex items-end lg:col-span-2">
                           <button 
                             onClick={() => {
                               setFilterDate('');
@@ -1585,13 +1616,23 @@ export default function App() {
                 <div className="w-16 h-16 bg-brand-orange/10 text-brand-orange rounded-2xl flex items-center justify-center mx-auto mb-4">
                   <Lock size={32} />
                 </div>
-                <h3 className="text-2xl font-black tracking-tight text-slate-800">Admin Login</h3>
-                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mt-2">Restricted Access only</p>
+                <h3 className="text-2xl font-black tracking-tight text-slate-800">Admin Authentication</h3>
+                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mt-2">Quality Management System</p>
               </div>
 
-              <form onSubmit={handleLogin} className="space-y-6">
+              <form onSubmit={handleLogin} className="space-y-4">
                 <div>
-                  <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2 block ml-1">Master Password</label>
+                  <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2 block ml-1">Username / Admin ID</label>
+                  <input 
+                    type="text" 
+                    value={loginUsername}
+                    onChange={(e) => setLoginUsername(e.target.value)}
+                    placeholder="e.g. admin"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/5 outline-none transition-all placeholder:text-slate-300 font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2 block ml-1">Password</label>
                   <input 
                     type="password" 
                     value={loginPassword}
@@ -1600,7 +1641,7 @@ export default function App() {
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/5 outline-none transition-all placeholder:text-slate-300 font-bold"
                   />
                 </div>
-                <div className="flex gap-3">
+                <div className="flex gap-3 pt-2">
                   <button 
                     type="button"
                     onClick={() => setShowLoginModal(false)}
@@ -1612,11 +1653,11 @@ export default function App() {
                     type="submit"
                     className="flex-1 bg-brand-orange text-white py-3 rounded-xl text-xs font-black uppercase tracking-widest shadow-lg shadow-brand-orange/20 hover:brightness-110 active:scale-95 transition-all"
                   >
-                    Authorize
+                    Sign In
                   </button>
                 </div>
               </form>
-              <p className="text-[9px] text-center text-slate-400 mt-8 font-bold italic uppercase tracking-tighter">Tip: Try admin123</p>
+              <p className="text-[9px] text-center text-slate-400 mt-8 font-bold italic uppercase tracking-tighter">Tip: admin / admin123</p>
             </motion.div>
           </div>
         )}
