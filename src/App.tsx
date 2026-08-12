@@ -270,6 +270,7 @@ export default function App() {
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const [newAudit, setNewAudit] = useState<Partial<AuditRecord>>({
+    no: undefined,
     auditDate: new Date().toISOString().split('T')[0],
     ww: calculateWW(new Date().toISOString().split('T')[0]),
     shift: SHIFTS[0],
@@ -328,15 +329,15 @@ export default function App() {
         value !== null && value !== undefined && String(value).toLowerCase().includes(searchQuery.toLowerCase())
       );
       
-      const matchesAuditor = !filterAuditor || r.auditors === filterAuditor;
-      const matchesDept = !filterDept || r.department === filterDept;
-      const matchesFindings = !filterFindings || r.groupFinding === filterFindings;
-      const matchesDate = !filterDate || r.auditDate === filterDate;
-      const matchesWW = !filterWW || r.ww === filterWW;
-      const matchesCategory = !filterCategory || r.category === filterCategory;
-      const matchesStatus = !filterStatus || r.icarStatus === filterStatus;
-      const matchesShift = !filterShift || r.shift === filterShift;
-      const matchesPlatform = !filterPlatform || r.platform === filterPlatform;
+      const matchesAuditor = !filterAuditor || String(r.auditors) === String(filterAuditor);
+      const matchesDept = !filterDept || String(r.department) === String(filterDept);
+      const matchesFindings = !filterFindings || String(r.groupFinding) === String(filterFindings);
+      const matchesDate = !filterDate || String(r.auditDate) === String(filterDate);
+      const matchesWW = !filterWW || String(r.ww) === String(filterWW);
+      const matchesCategory = !filterCategory || String(r.category) === String(filterCategory);
+      const matchesStatus = !filterStatus || String(r.icarStatus) === String(filterStatus);
+      const matchesShift = !filterShift || String(r.shift) === String(filterShift);
+      const matchesPlatform = !filterPlatform || String(r.platform) === String(filterPlatform);
 
       return matchesSearch && matchesAuditor && matchesDept && matchesFindings && 
              matchesDate && matchesWW && matchesCategory && matchesStatus && 
@@ -397,6 +398,7 @@ export default function App() {
       }
 
       setNewAudit({
+        no: undefined,
         auditDate: new Date().toISOString().split('T')[0],
         ww: calculateWW(new Date().toISOString().split('T')[0]),
         shift: SHIFTS[0],
@@ -428,6 +430,7 @@ export default function App() {
 
   const handleEditClick = (record: AuditRecord) => {
     setNewAudit({
+      no: record.no,
       auditDate: record.auditDate || '',
       ww: record.ww || '',
       shift: record.shift || 'A',
@@ -460,7 +463,6 @@ export default function App() {
     }
   };
 
-  // Fixed Excel Import Handler: Parses file and POSTs each row to the database API
   const handleExcelImportProcess = async () => {
     const fileInput = document.getElementById('excelImportModalInput') as HTMLInputElement;
     const file = fileInput?.files?.[0];
@@ -506,7 +508,6 @@ export default function App() {
         }
       }
 
-      // Re-fetch records from backend database to sync state and display on UI
       const refreshResponse = await fetch(`${API_BASE_URL}/api/records`);
       if (refreshResponse.ok) {
         const latestData = await refreshResponse.json();

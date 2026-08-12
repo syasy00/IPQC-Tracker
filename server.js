@@ -50,7 +50,20 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
-// API: Get All Records (READ)
+// ==========================================
+// TEMPORARY API: Wipe Database Clean
+// ==========================================
+app.delete('/api/reset-database', (req, res) => {
+  db.query('TRUNCATE TABLE audit_records', (err) => {
+    if (err) {
+      console.error('Failed to clear database:', err);
+      return res.status(500).json({ error: 'Failed to reset database' });
+    }
+    res.status(200).json({ message: 'Database wiped clean! Auto-increment reset to 1.' });
+  });
+});
+
+// API: Get All Records (READ) - FIXED TO ASCENDING ORDER
 app.get('/api/records', (req, res) => {
   const sql = `
     SELECT 
@@ -60,7 +73,7 @@ app.get('/api/records', (req, res) => {
       category, finding_details as detailsFindings, picture, remark, 
       icar_status as icarStatus, icar_num as icarNum, mqe_engineer as mqeEngineer 
     FROM audit_records 
-    ORDER BY id DESC
+    ORDER BY id ASC
   `;
   db.query(sql, (err, results) => {
     if (err) return res.status(500).json(err);
@@ -77,10 +90,6 @@ app.post('/api/records', upload.single('picture'), (req, res) => {
   } = req.body;
 
   const picture = req.file ? `/uploads/${req.file.filename}` : (req.body.picture || null);
-
-  // 'no' comes from the imported Excel row when available; manual "Add Finding"
-  // entries won't have one, so fall back to null (the table already displays
-  // the row's position as a fallback when 'no' is missing).
   const rowNo = no !== undefined && no !== null && no !== '' ? no : null;
 
   const sql = `
@@ -103,7 +112,6 @@ app.post('/api/records', upload.single('picture'), (req, res) => {
       return res.status(500).json({ error: 'Database insertion failed' });
     }
     
-    // Return the newly created record object back to the frontend
     const newRecord = {
       id: result.insertId,
       no: rowNo || result.insertId,
@@ -115,11 +123,11 @@ app.post('/api/records', upload.single('picture'), (req, res) => {
   });
 });
 
-// API: Update an Existing Record (UPDATE)
+// API: Update an Existing Record (UPDATE) - FIXED MISSING 'NO' FIELD
 app.put('/api/records/:id', upload.single('picture'), (req, res) => {
   const { id } = req.params;
   const {
-    auditDate, ww, shift, auditors, personOnJob, department,
+    no, auditDate, ww, shift, auditors, personOnJob, department,
     platform, areaStation, groupFinding, category, detailsFindings,
     remark, icarNum, icarStatus, mqeEngineer
   } = req.body;
@@ -128,14 +136,14 @@ app.put('/api/records/:id', upload.single('picture'), (req, res) => {
 
   const sql = `
     UPDATE audit_records SET 
-      audit_date = ?, ww = ?, shift = ?, auditor_name = ?, pic_finding = ?, department = ?,
+      no = ?, audit_date = ?, ww = ?, shift = ?, auditor_name = ?, pic_finding = ?, department = ?,
       platform = ?, area_station = ?, group_finding = ?, category = ?, finding_details = ?,
       picture = COALESCE(?, picture), remark = ?, icar_status = ?, icar_num = ?, mqe_engineer = ?
     WHERE id = ?
   `;
 
   const values = [
-    auditDate, ww, shift, auditors, personOnJob, department,
+    no, auditDate, ww, shift, auditors, personOnJob, department,
     platform, areaStation, groupFinding, category, detailsFindings,
     picture, remark, icarStatus || 'Locked', icarNum || 'N/A', mqeEngineer, id
   ];
@@ -147,7 +155,7 @@ app.put('/api/records/:id', upload.single('picture'), (req, res) => {
     }
 
     const updatedRecord = {
-      id, auditDate, ww, shift, auditors, personOnJob, department,
+      id, no, auditDate, ww, shift, auditors, personOnJob, department,
       platform, areaStation, groupFinding, category, detailsFindings,
       picture, remark, icarStatus: icarStatus || 'Locked', icarNum: icarNum || 'N/A', mqeEngineer
     };
