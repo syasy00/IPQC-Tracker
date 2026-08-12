@@ -71,23 +71,28 @@ app.get('/api/records', (req, res) => {
 // API: Add a New Record (CREATE)
 app.post('/api/records', upload.single('picture'), (req, res) => {
   const {
-    auditDate, ww, shift, auditors, personOnJob, department,
+    no, auditDate, ww, shift, auditors, personOnJob, department,
     platform, areaStation, groupFinding, category, detailsFindings,
     remark, icarNum, icarStatus, mqeEngineer
   } = req.body;
 
   const picture = req.file ? `/uploads/${req.file.filename}` : (req.body.picture || null);
 
+  // 'no' comes from the imported Excel row when available; manual "Add Finding"
+  // entries won't have one, so fall back to null (the table already displays
+  // the row's position as a fallback when 'no' is missing).
+  const rowNo = no !== undefined && no !== null && no !== '' ? no : null;
+
   const sql = `
     INSERT INTO audit_records (
-      audit_date, ww, shift, auditor_name, pic_finding, department,
+      no, audit_date, ww, shift, auditor_name, pic_finding, department,
       platform, area_station, group_finding, category, finding_details,
       picture, remark, icar_status, icar_num, mqe_engineer
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
   const values = [
-    auditDate, ww, shift, auditors, personOnJob, department,
+    rowNo, auditDate, ww, shift, auditors, personOnJob, department,
     platform, areaStation, groupFinding, category, detailsFindings,
     picture, remark, icarStatus || 'Locked', icarNum || 'N/A', mqeEngineer
   ];
@@ -101,7 +106,7 @@ app.post('/api/records', upload.single('picture'), (req, res) => {
     // Return the newly created record object back to the frontend
     const newRecord = {
       id: result.insertId,
-      no: result.insertId,
+      no: rowNo || result.insertId,
       auditDate, ww, shift, auditors, personOnJob, department,
       platform, areaStation, groupFinding, category, detailsFindings,
       picture, remark, icarStatus: icarStatus || 'Locked', icarNum: icarNum || 'N/A', mqeEngineer

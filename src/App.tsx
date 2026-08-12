@@ -264,7 +264,7 @@ export default function App() {
   const [filterStatus, setFilterStatus] = useState('');
   const [filterShift, setFilterShift] = useState('');
   const [filterPlatform, setFilterPlatform] = useState('');
-  const [filterWW, setFilterWW] = useState(calculateWW(new Date().toISOString().split('T')[0]));
+  const [filterWW, setFilterWW] = useState('');
   const [filterDate, setFilterDate] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -476,6 +476,7 @@ export default function App() {
 
       for (const row of importedRows) {
         const payload = {
+          no: row.no,
           auditDate: row.auditDate || new Date().toISOString().split('T')[0],
           ww: row.ww || calculateWW(row.auditDate || new Date().toISOString().split('T')[0]),
           shift: row.shift || SHIFTS[0],
