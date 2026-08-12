@@ -20,7 +20,8 @@ import {
   Layers,
   TrendingUp,
   Download,
-  Upload
+  Upload,
+  UserCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -587,18 +588,6 @@ export default function App() {
             }}
           />
         </nav>
-
-        {isAdmin && (
-          <div className="p-4 mt-auto border-t border-white/5">
-             <button 
-              onClick={logout}
-              className="w-full flex items-center justify-center gap-2 py-2 bg-rose-500/10 text-rose-500 text-[10px] font-black uppercase tracking-widest rounded-lg hover:bg-rose-500 hover:text-white transition-all shadow-sm"
-            >
-              <Unlock size={14} />
-              Logout
-            </button>
-          </div>
-        )}
       </aside>
 
       <div className="flex-1 flex flex-col min-w-0">
@@ -614,7 +603,29 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-4">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest hidden lg:inline">Active Session: Online</span>
+            {isAdmin ? (
+              <button 
+                onClick={logout}
+                className="flex items-center gap-2 px-3 py-1.5 bg-rose-50 text-rose-600 rounded-xl hover:bg-rose-100 transition-colors group border border-rose-100"
+                title="Sign Out"
+              >
+                <div className="w-6 h-6 rounded-full bg-rose-200 flex items-center justify-center text-rose-700">
+                  <UserCircle size={14} />
+                </div>
+                <span className="text-[10px] font-bold uppercase tracking-widest hidden sm:inline group-hover:text-rose-700">Admin</span>
+              </button>
+            ) : (
+              <button 
+                onClick={() => setShowLoginModal(true)}
+                className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 text-slate-500 rounded-xl hover:bg-slate-100 transition-colors group border border-slate-200"
+                title="Admin Login"
+              >
+                <div className="w-6 h-6 rounded-full bg-slate-200 flex items-center justify-center text-slate-600">
+                  <UserCircle size={14} />
+                </div>
+                <span className="text-[10px] font-bold uppercase tracking-widest hidden sm:inline group-hover:text-slate-800">Login</span>
+              </button>
+            )}
           </div>
         </header>
 
