@@ -845,34 +845,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Status Navigation Tabs */}
-                <div className="flex items-center gap-2 overflow-x-auto w-full pb-1">
-                  <button 
-                    onClick={() => setFilterStatus('')}
-                    className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${
-                      filterStatus === '' ? 'bg-orange-50 text-brand-orange border border-orange-200 shadow-sm' : 'bg-white text-slate-500 hover:bg-slate-50 border border-slate-200'
-                    }`}
-                  >
-                    All Records ({records.length})
-                  </button>
-                  <button 
-                    onClick={() => setFilterStatus('Locked')}
-                    className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${
-                      filterStatus === 'Locked' ? 'bg-amber-50 text-amber-700 border border-amber-200 shadow-sm' : 'bg-white text-slate-500 hover:bg-slate-50 border border-slate-200'
-                    }`}
-                  >
-                    Locked ICARs ({records.filter(r => r.icarStatus === 'Locked').length})
-                  </button>
-                  <button 
-                    onClick={() => setFilterStatus('Submitted')}
-                    className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${
-                      filterStatus === 'Submitted' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm' : 'bg-white text-slate-500 hover:bg-slate-50 border border-slate-200'
-                    }`}
-                  >
-                    Submitted ICARs ({records.filter(r => r.icarStatus === 'Submitted').length})
-                  </button>
-                </div>
-
                 {/* Filter & Search Bar Band */}
                 <div className="bg-[#fffbeb]/50 p-4 rounded-2xl border border-amber-200/60 flex flex-col md:flex-row items-center gap-4 shadow-sm">
                   <div className="relative flex-1 w-full">
@@ -915,7 +887,9 @@ export default function App() {
                         <FilterInput label="Department" type="select" options={DEPARTMENTS} value={filterDept} onChange={setFilterDept} />
                         <FilterInput label="Platform" type="select" options={platformsList} value={filterPlatform} onChange={setFilterPlatform} />
                         <FilterInput label="Category" type="select" options={CATEGORIES} value={filterCategory} onChange={setFilterCategory} />
-                        <div className="flex items-end lg:col-span-2">
+                        <FilterInput label="ICAR Status" type="select" options={['Locked', 'Submitted']} value={filterStatus} onChange={setFilterStatus} />
+                        
+                        <div className="flex items-end">
                           <button 
                             onClick={() => {
                               setFilterDate('');
@@ -931,7 +905,7 @@ export default function App() {
                             }}
                             className="w-full bg-slate-100 border border-slate-200 rounded-xl text-slate-600 text-[10px] font-black uppercase p-3 hover:bg-slate-200 transition-colors"
                           >
-                            Clear All Filters
+                            Clear Filters
                           </button>
                         </div>
                       </div>
@@ -1287,6 +1261,49 @@ export default function App() {
                       </button>
                     </div>
                   </form>
+                </div>
+              </motion.div>
+            )}
+
+            {view === 'import' && (
+              <motion.div 
+                key="import"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="max-w-xl mx-auto space-y-4 pt-10"
+              >
+                <div className="bg-white p-8 rounded-2xl border border-border-subtle shadow-sm space-y-6">
+                  <div>
+                    <h2 className="text-lg font-black text-slate-800 uppercase tracking-tight">Import Historical Records</h2>
+                    <p className="text-xs text-text-muted mt-1">Upload your existing Excel tracker file to sync historical findings directly into the system.</p>
+                  </div>
+                  <div className="border-2 border-dashed border-slate-200 rounded-2xl p-6 text-center bg-slate-50">
+                    <input 
+                      id="excelImport"
+                      type="file"
+                      accept=".xlsx, .xls"
+                      className="text-xs font-bold text-slate-600 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-black file:uppercase file:bg-brand-orange file:text-white hover:file:brightness-110 file:cursor-pointer"
+                    />
+                  </div>
+                  <button 
+                    onClick={async () => {
+                      const fileInput = document.getElementById('excelImport') as HTMLInputElement;
+                      const file = fileInput?.files?.[0];
+                      if (!file) {
+                        alert('Please select an Excel file first');
+                        return;
+                      }
+                      try {
+                        const imported = await importFromExcel(file);
+                        alert(`Parsed ${imported.length} rows successfully.`);
+                      } catch (err) {
+                        alert('Error importing file.');
+                      }
+                    }}
+                    className="w-full py-3 bg-brand-orange text-white rounded-xl text-xs font-black uppercase tracking-widest shadow-lg shadow-brand-orange/20 hover:brightness-110 transition-all"
+                  >
+                    Process Import
+                  </button>
                 </div>
               </motion.div>
             )}
