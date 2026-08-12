@@ -196,6 +196,8 @@ export default function App() {
   // Settings State for CRUD Operations
   const [auditorsList, setAuditorsList] = useState(INITIAL_AUDITORS);
   const [newAuditorName, setNewAuditorName] = useState('');
+  const [editingAuditorIndex, setEditingAuditorIndex] = useState<number | null>(null);
+  const [editAuditorValue, setEditAuditorValue] = useState('');
   
   const [platformsList] = useState(PLATFORMS);
   const [mqeMappings, setMqeMappings] = useState(INITIAL_PLATFORM_MQE_MAPPING);
@@ -273,11 +275,21 @@ export default function App() {
     return mqeMappings[platform as keyof typeof mqeMappings] || 'Unassigned';
   };
 
+  // --- CRUD Handlers for Settings ---
   const handleAddAuditor = (e: FormEvent) => {
     e.preventDefault();
     if (newAuditorName.trim() && !auditorsList.includes(newAuditorName.trim())) {
       setAuditorsList([...auditorsList, newAuditorName.trim()]);
       setNewAuditorName('');
+    }
+  };
+
+  const handleSaveEditAuditor = (index: number) => {
+    if (editAuditorValue.trim()) {
+      const updated = [...auditorsList];
+      updated[index] = editAuditorValue.trim();
+      setAuditorsList(updated);
+      setEditingAuditorIndex(null);
     }
   };
 
@@ -301,6 +313,7 @@ export default function App() {
     delete newMappings[platform];
     setMqeMappings(newMappings);
   };
+  // ----------------------------------
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -1366,15 +1379,57 @@ export default function App() {
 
                       <div className="space-y-2 max-h-[300px] overflow-y-auto custom-scrollbar pr-2">
                         {auditorsList.map((auditor, i) => (
-                          <div key={i} className="flex items-center justify-between p-3 bg-slate-50 border border-slate-100 rounded-xl group hover:border-slate-200 transition-all">
-                            <span className="text-xs font-bold text-slate-700">{auditor}</span>
-                            <button 
-                              onClick={() => handleDeleteAuditor(auditor)}
-                              className="text-slate-300 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all"
-                              title="Remove Auditor"
-                            >
-                              <X size={14} />
-                            </button>
+                          <div key={i} className="flex items-center justify-between p-3 bg-slate-50 border border-slate-100 rounded-xl group hover:border-slate-200 transition-all min-h-[44px]">
+                            {editingAuditorIndex === i ? (
+                              <div className="flex items-center gap-2 w-full">
+                                <input
+                                  type="text"
+                                  value={editAuditorValue}
+                                  onChange={(e) => setEditAuditorValue(e.target.value)}
+                                  className="flex-1 bg-white border border-brand-orange rounded px-2 py-1 text-xs font-bold outline-none shadow-inner"
+                                  autoFocus
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') handleSaveEditAuditor(i);
+                                    if (e.key === 'Escape') setEditingAuditorIndex(null);
+                                  }}
+                                />
+                                <button
+                                  onClick={() => handleSaveEditAuditor(i)}
+                                  className="text-emerald-500 hover:text-emerald-600 bg-emerald-50 p-1.5 rounded"
+                                >
+                                  <CheckCircle2 size={16} />
+                                </button>
+                                <button
+                                  onClick={() => setEditingAuditorIndex(null)}
+                                  className="text-slate-400 hover:text-rose-500 bg-slate-100 p-1.5 rounded"
+                                >
+                                  <X size={16} />
+                                </button>
+                              </div>
+                            ) : (
+                              <>
+                                <span className="text-xs font-bold text-slate-700">{auditor}</span>
+                                <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                                  <button 
+                                    onClick={() => {
+                                      setEditingAuditorIndex(i);
+                                      setEditAuditorValue(auditor);
+                                    }}
+                                    className="text-slate-400 hover:text-blue-500"
+                                    title="Edit Auditor"
+                                  >
+                                    <Pencil size={14} />
+                                  </button>
+                                  <button 
+                                    onClick={() => handleDeleteAuditor(auditor)}
+                                    className="text-slate-400 hover:text-rose-500"
+                                    title="Remove Auditor"
+                                  >
+                                    <X size={14} />
+                                  </button>
+                                </div>
+                              </>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -1413,11 +1468,11 @@ export default function App() {
                       <div className="overflow-hidden border border-slate-200 rounded-2xl">
                         <div className="max-h-[300px] overflow-y-auto custom-scrollbar">
                           <table className="w-full text-left">
-                            <thead className="bg-slate-100 text-[9px] font-black uppercase tracking-widest text-slate-500 sticky top-0">
+                            <thead className="bg-slate-100 text-[9px] font-black uppercase tracking-widest text-slate-500 sticky top-0 z-10 shadow-sm">
                               <tr>
                                 <th className="px-4 py-3 border-b border-slate-200">Platform</th>
                                 <th className="px-4 py-3 border-b border-slate-200">Responsible MQE</th>
-                                <th className="px-4 py-3 border-b border-slate-200 w-10 text-center"></th>
+                                <th className="px-4 py-3 border-b border-slate-200 w-16 text-center"></th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-100 bg-white">
@@ -1430,15 +1485,27 @@ export default function App() {
                                       {assignedMqe || 'Unassigned'}
                                     </td>
                                     <td className="px-4 py-3 text-center">
-                                      {assignedMqe && (
+                                      <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-all">
                                         <button 
-                                          onClick={() => handleClearMqeMapping(platform)}
-                                          className="text-slate-300 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all"
-                                          title="Clear Assignment"
+                                          onClick={() => {
+                                            setSelectedPlatformForMapping(platform);
+                                            setNewMqeName(assignedMqe || '');
+                                          }}
+                                          className="text-slate-400 hover:text-blue-500"
+                                          title="Edit Assignment"
                                         >
-                                          <Trash2 size={12} />
+                                          <Pencil size={12} />
                                         </button>
-                                      )}
+                                        {assignedMqe && (
+                                          <button 
+                                            onClick={() => handleClearMqeMapping(platform)}
+                                            className="text-slate-400 hover:text-rose-500"
+                                            title="Clear Assignment"
+                                          >
+                                            <Trash2 size={12} />
+                                          </button>
+                                        )}
+                                      </div>
                                     </td>
                                   </tr>
                                 )
