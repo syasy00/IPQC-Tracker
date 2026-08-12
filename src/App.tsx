@@ -176,6 +176,8 @@ export default function App() {
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [loginPassword, setLoginPassword] = useState('');
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importing, setImporting] = useState(false);
 
   const [auditorsList] = useState(INITIAL_AUDITORS);
   const [platformsList] = useState(PLATFORMS);
@@ -458,6 +460,68 @@ export default function App() {
     }
   };
 
+  // Fixed Excel Import Handler: Parses file and POSTs each row to the database API
+  const handleExcelImportProcess = async () => {
+    const fileInput = document.getElementById('excelImportModalInput') as HTMLInputElement;
+    const file = fileInput?.files?.[0];
+    if (!file) {
+      alert('Please select an Excel file first.');
+      return;
+    }
+
+    setImporting(true);
+    try {
+      const importedRows = await importFromExcel(file);
+      let successCount = 0;
+
+      for (const row of importedRows) {
+        const payload = {
+          auditDate: row.auditDate || new Date().toISOString().split('T')[0],
+          ww: row.ww || calculateWW(row.auditDate || new Date().toISOString().split('T')[0]),
+          shift: row.shift || SHIFTS[0],
+          auditors: row.auditors || INITIAL_AUDITORS[0],
+          personOnJob: row.personOnJob || '',
+          department: row.department || DEPARTMENTS[0],
+          platform: row.platform || PLATFORMS[0],
+          areaStation: row.areaStation || '',
+          groupFinding: row.groupFinding || CATEGORY_GROUP_MAPPING[CATEGORIES[0]],
+          category: row.category || CATEGORIES[0],
+          detailsFindings: row.detailsFindings || FINDING_DETAILS[0],
+          remark: row.remark || '',
+          icarNum: row.icarNum || 'N/A',
+          icarStatus: row.icarStatus || 'Locked',
+          mqeEngineer: row.mqeEngineer || getMqeForPlatform(row.platform || PLATFORMS[0]),
+          picture: row.picture || null
+        };
+
+        const response = await fetch(`${API_BASE_URL}/api/records`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (response.ok) {
+          successCount++;
+        }
+      }
+
+      // Re-fetch records from backend database to sync state and display on UI
+      const refreshResponse = await fetch(`${API_BASE_URL}/api/records`);
+      if (refreshResponse.ok) {
+        const latestData = await refreshResponse.json();
+        setRecords(latestData);
+      }
+
+      alert(`Successfully imported and saved ${successCount} out of ${importedRows.length} records to the database!`);
+      setShowImportModal(false);
+    } catch (err) {
+      console.error('Import error:', err);
+      alert('Error parsing or saving Excel file to database.');
+    } finally {
+      setImporting(false);
+    }
+  };
+
   return (
     <div className="flex h-screen bg-bg-main font-sans text-text-main">
       <AnimatePresence>
@@ -501,13 +565,6 @@ export default function App() {
             active={view === 'ipqc'} 
             collapsed={!sidebarOpen && window.innerWidth >= 768}
             onClick={() => { setView('ipqc'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-          />
-          <NavItem 
-            icon={<Upload size={18} />} 
-            label="Import Excel" 
-            active={view === 'import'} 
-            collapsed={!sidebarOpen && window.innerWidth >= 768}
-            onClick={() => { setView('import'); if (window.innerWidth < 768) setSidebarOpen(false); }}
           />
 
           <div className="px-3 mt-6 mb-2">
@@ -752,14 +809,22 @@ export default function App() {
                 animate={{ opacity: 1 }}
                 className="flex-1 flex flex-col min-h-0 bg-transparent space-y-4"
               >
-                {/* Top Action Bar: Export All and Add Finding in Top Right (matching reference layout) */}
+                {/* Top Action Bar: Import Excel, Export All, and Add Finding on Top Right */}
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
                   <div>
                     <h2 className="text-base font-black uppercase tracking-tight text-slate-800">IPQC Records Management</h2>
                     <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-0.5">Overview & Audit Tracking</p>
                   </div>
 
-                  <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+                  <div className="flex items-center gap-3 w-full sm:w-auto justify-end flex-wrap">
+                    <button 
+                      onClick={() => setShowImportModal(true)}
+                      className="flex items-center justify-center gap-2 px-5 py-2.5 bg-white text-blue-600 border border-blue-200 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-50 transition-all whitespace-nowrap shadow-sm"
+                    >
+                      <Upload size={14} />
+                      Import Excel
+                    </button>
+
                     <button 
                       onClick={() => exportToExcel(records)}
                       className="flex items-center justify-center gap-2 px-5 py-2.5 bg-white text-emerald-600 border border-emerald-200 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-50 transition-all whitespace-nowrap shadow-sm"
@@ -806,7 +871,7 @@ export default function App() {
                   </button>
                 </div>
 
-                {/* Filter & Search Bar Band (matching reference layout) */}
+                {/* Filter & Search Bar Band */}
                 <div className="bg-[#fffbeb]/50 p-4 rounded-2xl border border-amber-200/60 flex flex-col md:flex-row items-center gap-4 shadow-sm">
                   <div className="relative flex-1 w-full">
                     <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -1224,49 +1289,6 @@ export default function App() {
               </motion.div>
             )}
 
-            {view === 'import' && (
-              <motion.div 
-                key="import"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="max-w-xl mx-auto space-y-4 pt-10"
-              >
-                <div className="bg-white p-8 rounded-2xl border border-border-subtle shadow-sm space-y-6">
-                  <div>
-                    <h2 className="text-lg font-black text-slate-800 uppercase tracking-tight">Import Historical Records</h2>
-                    <p className="text-xs text-text-muted mt-1">Upload your existing Excel tracker file to sync historical findings directly into the system.</p>
-                  </div>
-                  <div className="border-2 border-dashed border-slate-200 rounded-2xl p-6 text-center bg-slate-50">
-                    <input 
-                      id="excelImport"
-                      type="file"
-                      accept=".xlsx, .xls"
-                      className="text-xs font-bold text-slate-600 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-black file:uppercase file:bg-brand-orange file:text-white hover:file:brightness-110 file:cursor-pointer"
-                    />
-                  </div>
-                  <button 
-                    onClick={async () => {
-                      const fileInput = document.getElementById('excelImport') as HTMLInputElement;
-                      const file = fileInput?.files?.[0];
-                      if (!file) {
-                        alert('Please select an Excel file first');
-                        return;
-                      }
-                      try {
-                        const imported = await importFromExcel(file);
-                        alert(`Parsed ${imported.length} rows successfully.`);
-                      } catch (err) {
-                        alert('Error importing file.');
-                      }
-                    }}
-                    className="w-full py-3 bg-brand-orange text-white rounded-xl text-xs font-black uppercase tracking-widest shadow-lg shadow-brand-orange/20 hover:brightness-110 transition-all"
-                  >
-                    Process Import
-                  </button>
-                </div>
-              </motion.div>
-            )}
-
             {view === 'settings' && isAdmin && (
               <motion.div 
                 key="settings"
@@ -1336,6 +1358,55 @@ export default function App() {
           </AnimatePresence>
         </main>
       </div>
+
+      {/* Excel Import Modal */}
+      <AnimatePresence>
+        {showImportModal && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl border border-slate-200 p-8 space-y-6"
+            >
+              <div className="flex justify-between items-center border-b border-slate-100 pb-4">
+                <div>
+                  <h3 className="text-base font-black text-slate-800 uppercase tracking-tight">Import Historical Records</h3>
+                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-0.5">Sync Excel tracker directly into MySQL database</p>
+                </div>
+                <button onClick={() => setShowImportModal(false)} className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-slate-100 text-slate-400">
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="border-2 border-dashed border-slate-300 rounded-2xl p-8 text-center bg-slate-50 hover:bg-slate-100/50 transition-colors">
+                <input 
+                  id="excelImportModalInput"
+                  type="file"
+                  accept=".xlsx, .xls"
+                  className="text-xs font-bold text-slate-600 file:mr-4 file:py-2.5 file:px-5 file:rounded-xl file:border-0 file:text-xs file:font-black file:uppercase file:bg-brand-orange file:text-white hover:file:brightness-110 file:cursor-pointer"
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+                <button 
+                  onClick={() => setShowImportModal(false)}
+                  className="px-5 py-2.5 text-xs font-black uppercase tracking-widest text-slate-400 hover:text-slate-600 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button 
+                  disabled={importing}
+                  onClick={handleExcelImportProcess}
+                  className="bg-brand-orange text-white px-8 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest shadow-lg shadow-brand-orange/20 hover:brightness-110 active:scale-95 transition-all disabled:opacity-50"
+                >
+                  {importing ? 'Processing & Saving...' : 'Process & Save to DB'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {showLoginModal && (
