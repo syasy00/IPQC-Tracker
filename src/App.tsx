@@ -687,6 +687,21 @@ export default function App() {
             onClick={() => { setView('ipqc'); if (window.innerWidth < 768) setSidebarOpen(false); }}
           />
 
+          <div className="px-3 mt-6 mb-2">
+            <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] italic opacity-50">System</span>
+          </div>
+          <NavItem 
+            icon={isAdmin ? <Settings size={18} /> : <Lock size={18} />} 
+            label="Admin Panel" 
+            active={view === 'settings'} 
+            collapsed={!sidebarOpen && window.innerWidth >= 768}
+            disabled={!isAdmin}
+            onClick={() => {
+              setView('settings');
+              if (window.innerWidth < 768) setSidebarOpen(false);
+            }}
+          />
+
         </nav>
       </aside>
 
@@ -704,27 +719,16 @@ export default function App() {
 
           <div className="flex items-center gap-4">
             {isAdmin ? (
-              <>
-                <button
-                  onClick={() => setView('settings')}
-                  className={`p-2 rounded-xl transition-colors border ${
-                    view === 'settings' ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50 hover:text-brand-orange'
-                  }`}
-                  title="Settings"
-                >
-                  <Settings size={16} />
-                </button>
-                <button 
-                  onClick={logout}
-                  className="flex items-center gap-2 px-3 py-1.5 bg-rose-50 text-rose-600 rounded-xl hover:bg-rose-100 transition-colors group border border-rose-100"
-                  title="Sign Out"
-                >
-                  <div className="w-6 h-6 rounded-full bg-rose-200 flex items-center justify-center text-rose-700">
-                    <UserCircle size={14} />
-                  </div>
-                  <span className="text-[10px] font-bold uppercase tracking-widest hidden sm:inline group-hover:text-rose-700">Admin</span>
-                </button>
-              </>
+              <button 
+                onClick={logout}
+                className="flex items-center gap-2 px-3 py-1.5 bg-rose-50 text-rose-600 rounded-xl hover:bg-rose-100 transition-colors group border border-rose-100"
+                title="Sign Out"
+              >
+                <div className="w-6 h-6 rounded-full bg-rose-200 flex items-center justify-center text-rose-700">
+                  <UserCircle size={14} />
+                </div>
+                <span className="text-[10px] font-bold uppercase tracking-widest hidden sm:inline group-hover:text-rose-700">Admin</span>
+              </button>
             ) : (
               <button 
                 onClick={() => setShowLoginModal(true)}
@@ -1722,17 +1726,21 @@ export default function App() {
   );
 }
 
-function NavItem({ icon, label, active, collapsed, onClick }: { icon: any, label: string, active: boolean, collapsed: boolean, onClick: () => void }) {
+function NavItem({ icon, label, active, collapsed, onClick, disabled }: { icon: any, label: string, active: boolean, collapsed: boolean, onClick: () => void, disabled?: boolean }) {
   return (
     <button 
-      onClick={onClick}
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      title={disabled ? 'Requires admin login' : undefined}
       className={`w-full flex items-center gap-3 px-5 py-3 transition-all duration-200 text-[11px] font-semibold border-l-2 ${
-        active 
-          ? 'bg-sidebar-active text-white border-brand-orange shadow-[inset_0_0_20px_rgba(241,93,34,0.1)]' 
-          : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border-transparent'
+        disabled
+          ? 'text-slate-600 opacity-40 cursor-not-allowed border-transparent'
+          : active 
+            ? 'bg-sidebar-active text-white border-brand-orange shadow-[inset_0_0_20px_rgba(241,93,34,0.1)]' 
+            : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border-transparent'
       }`}
     >
-      <div className={`shrink-0 transition-colors ${active ? 'text-brand-orange' : ''}`}>{icon}</div>
+      <div className={`shrink-0 transition-colors ${active && !disabled ? 'text-brand-orange' : ''}`}>{icon}</div>
       {!collapsed && <span className="tracking-wide uppercase whitespace-nowrap">{label}</span>}
     </button>
   );
