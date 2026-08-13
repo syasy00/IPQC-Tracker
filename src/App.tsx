@@ -608,7 +608,7 @@ export default function App() {
 
     try {
       if (editingId) {
-        const response = await authFetch(`${API_BASE_URL}/api/records/${editingId}`, {
+        const response = await fetch(`${API_BASE_URL}/api/records/${editingId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -620,7 +620,7 @@ export default function App() {
           alert('Failed to update record.');
         }
       } else {
-        const response = await authFetch(`${API_BASE_URL}/api/records`, {
+        const response = await fetch(`${API_BASE_URL}/api/records`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -692,7 +692,7 @@ export default function App() {
   const handleDeleteRecord = async (id: string) => {
     if (confirm('Are you sure you want to delete this audit record?')) {
       try {
-        await authFetch(`${API_BASE_URL}/api/records/${id}`, { method: 'DELETE' });
+        await fetch(`${API_BASE_URL}/api/records/${id}`, { method: 'DELETE' });
         setRecords(records.filter(r => String(r.id) !== String(id)));
       } catch (err) {
         alert('Failed to delete record.');
@@ -734,7 +734,7 @@ export default function App() {
           picture: row.picture || null
         };
 
-        const response = await authFetch(`${API_BASE_URL}/api/records`, {
+        const response = await fetch(`${API_BASE_URL}/api/records`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)

@@ -230,7 +230,7 @@ app.get('/api/records', (req, res) => {
 });
 
 // API: Add a New Record (CREATE)
-app.post('/api/records', authenticateAdmin, upload.single('picture'), (req, res) => {
+app.post('/api/records', upload.single('picture'), (req, res) => {
   const {
     no, auditDate, ww, shift, auditors, personOnJob, department,
     platform, areaStation, groupFinding, category, detailsFindings,
@@ -272,7 +272,7 @@ app.post('/api/records', authenticateAdmin, upload.single('picture'), (req, res)
 });
 
 // API: Update an Existing Record (UPDATE) - FIXED MISSING 'NO' FIELD
-app.put('/api/records/:id', authenticateAdmin, upload.single('picture'), (req, res) => {
+app.put('/api/records/:id', upload.single('picture'), (req, res) => {
   const { id } = req.params;
   const {
     no, auditDate, ww, shift, auditors, personOnJob, department,
@@ -312,7 +312,7 @@ app.put('/api/records/:id', authenticateAdmin, upload.single('picture'), (req, r
 });
 
 // API: Delete a Record (DELETE)
-app.delete('/api/records/:id', authenticateAdmin, (req, res) => {
+app.delete('/api/records/:id', (req, res) => {
   const { id } = req.params;
   db.query('DELETE FROM audit_records WHERE id = ?', [id], (err) => {
     if (err) return res.status(500).json(err);
