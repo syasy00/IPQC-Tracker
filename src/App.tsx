@@ -21,11 +21,12 @@ import {
   TrendingUp,
   Download,
   Upload,
-  UserCircle,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
-  ChevronsRight
+  ChevronsRight,
+  LogIn,
+  LogOut
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -195,6 +196,7 @@ export default function App() {
   // Auth: a signed token from the server is the source of truth for admin
   // access, not a UI-only boolean. Persisted so a refresh doesn't log you out.
   const [authToken, setAuthToken] = useState<string | null>(() => localStorage.getItem('ipqc_admin_token'));
+  const [adminUsername, setAdminUsername] = useState<string | null>(() => localStorage.getItem('ipqc_admin_username'));
   const isAdmin = !!authToken;
 
   const [showLoginModal, setShowLoginModal] = useState(false);
@@ -202,6 +204,9 @@ export default function App() {
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [loggingIn, setLoggingIn] = useState(false);
+  // Distinguishes "your token expired mid-session" from a fresh login attempt,
+  // so we can explain *why* the modal popped up instead of just showing it.
+  const [sessionExpired, setSessionExpired] = useState(false);
   
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
@@ -263,10 +268,18 @@ export default function App() {
   useEffect(() => {
     if (!authToken) return;
     fetch(`${API_BASE_URL}/api/verify`, { headers: { Authorization: `Bearer ${authToken}` } })
-      .then(response => {
+      .then(async response => {
         if (!response.ok) {
           localStorage.removeItem('ipqc_admin_token');
+          localStorage.removeItem('ipqc_admin_username');
           setAuthToken(null);
+          setAdminUsername(null);
+        } else {
+          const data = await response.json();
+          if (data.username) {
+            localStorage.setItem('ipqc_admin_username', data.username);
+            setAdminUsername(data.username);
+          }
         }
       })
       .catch(() => {
@@ -338,8 +351,11 @@ export default function App() {
       const data = await response.json();
       if (response.ok && data.token) {
         localStorage.setItem('ipqc_admin_token', data.token);
+        localStorage.setItem('ipqc_admin_username', loginUsername);
         setAuthToken(data.token);
+        setAdminUsername(loginUsername);
         setShowLoginModal(false);
+        setSessionExpired(false);
         setLoginPassword('');
         setLoginUsername('');
       } else {
@@ -354,7 +370,10 @@ export default function App() {
 
   const logout = () => {
     localStorage.removeItem('ipqc_admin_token');
+    localStorage.removeItem('ipqc_admin_username');
     setAuthToken(null);
+    setAdminUsername(null);
+    setSessionExpired(false);
     if (view === 'settings') setView('ipqc');
   };
 
@@ -369,7 +388,11 @@ export default function App() {
     const response = await fetch(url, { ...options, headers });
     if (response.status === 401) {
       localStorage.removeItem('ipqc_admin_token');
+      localStorage.removeItem('ipqc_admin_username');
       setAuthToken(null);
+      setAdminUsername(null);
+      setSessionExpired(true);
+      setShowLoginModal(true);
     }
     return response;
   };
@@ -586,67 +609,27 @@ export default function App() {
     });
   }, [records, searchQuery, filterAuditor, filterDept, filterFindings, filterDate, filterWW, filterCategory, filterStatus, filterShift, filterPlatform]);
 
-  // --- Pagination ---
-  // Paginated client-side: the full record set is already fetched and filtered
-  // in memory, so slicing it here is cheap. If the table grows into the
-  // tens-of-thousands-of-rows range, move this to server-side LIMIT/OFFSET
-  // (add page/pageSize query params to GET /api/records) instead.
+  // Pagination - client-side slice of the already-filtered records. Resets
+  // to page 1 whenever the filtered set changes (new search/filter), so
+  // users don't get stranded on an empty page.
   const [currentPage, setCurrentPage] = useState(1);
-  const [rowsPerPage, setRowsPerPage] = useState(25);
+  const [pageSize, setPageSize] = useState(50);
 
-  const totalPages = Math.max(1, Math.ceil(filteredRecords.length / rowsPerPage));
+  const totalPages = Math.max(1, Math.ceil(filteredRecords.length / pageSize));
 
-  // Any change to the filters/search should always land the user back on
-  // page 1 - otherwise a narrower result set can leave them stranded on a
-  // page number that no longer exists.
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, filterAuditor, filterDept, filterFindings, filterDate, filterWW, filterCategory, filterStatus, filterShift, filterPlatform, rowsPerPage]);
+  }, [searchQuery, filterAuditor, filterDept, filterFindings, filterDate, filterWW, filterCategory, filterStatus, filterShift, filterPlatform, pageSize]);
 
-  // Safety net for the remaining edge case: a record on the current page gets
-  // deleted and the page count shrinks out from under the user.
   useEffect(() => {
     if (currentPage > totalPages) setCurrentPage(totalPages);
   }, [totalPages, currentPage]);
 
   const paginatedRecords = useMemo(() => {
-    const start = (currentPage - 1) * rowsPerPage;
-    return filteredRecords.slice(start, start + rowsPerPage);
-  }, [filteredRecords, currentPage, rowsPerPage]);
+    const start = (currentPage - 1) * pageSize;
+    return filteredRecords.slice(start, start + pageSize);
+  }, [filteredRecords, currentPage, pageSize]);
 
-  // --- Jump-to-record after add/edit ---
-  // After a submit, we know the record's id but not which page it lands on
-  // (that depends on the current filters/sort). Once filteredRecords updates
-  // to include it, look up its index and flip to that page automatically.
-  const [highlightRecordId, setHighlightRecordId] = useState<string | number | null>(null);
-  const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
-
-  useEffect(() => {
-    if (highlightRecordId === null) return;
-    const idx = filteredRecords.findIndex(r => String(r.id) === String(highlightRecordId));
-    // Not found usually means an active filter is hiding the record you just
-    // saved - nothing sensible to jump to, so just leave it as-is.
-    if (idx === -1) return;
-    setCurrentPage(Math.floor(idx / rowsPerPage) + 1);
-  }, [highlightRecordId, filteredRecords, rowsPerPage]);
-
-  // Once the target page has actually rendered with the record on it, scroll
-  // it into view and let the highlight fade after a couple seconds.
-  useEffect(() => {
-    if (highlightRecordId === null) return;
-    const isOnCurrentPage = paginatedRecords.some(r => String(r.id) === String(highlightRecordId));
-    if (!isOnCurrentPage) return;
-
-    rowRefs.current[String(highlightRecordId)]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-
-    if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
-    highlightTimeoutRef.current = setTimeout(() => setHighlightRecordId(null), 2500);
-
-    return () => {
-      if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
-    };
-  }, [highlightRecordId, paginatedRecords]);
 
   const [selectedRecord, setSelectedRecord] = useState<AuditRecord | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -682,7 +665,6 @@ export default function App() {
         if (response.ok) {
           const updated = await response.json();
           setRecords(records.map(r => String(r.id) === String(editingId) ? updated : r));
-          setHighlightRecordId(updated.id);
         } else {
           alert('Failed to update record.');
         }
@@ -696,7 +678,6 @@ export default function App() {
         if (response.ok) {
           const created = await response.json();
           setRecords([...records, created]);
-          setHighlightRecordId(created.id);
         } else {
           alert('Failed to save the audit record to database.');
         }
@@ -906,26 +887,42 @@ export default function App() {
 
           <div className="flex items-center gap-4">
             {isAdmin ? (
-              <button 
-                onClick={logout}
-                className="flex items-center gap-2 px-3 py-1.5 bg-rose-50 text-rose-600 rounded-xl hover:bg-rose-100 transition-colors group border border-rose-100"
-                title="Sign Out"
-              >
-                <div className="w-6 h-6 rounded-full bg-rose-200 flex items-center justify-center text-rose-700">
-                  <UserCircle size={14} />
+              <div className="flex items-center gap-2">
+                {/* Identity chip - shows who's signed in. Not clickable, so
+                    hovering/tapping it can never trigger a sign-out by accident. */}
+                <div
+                  className="flex items-center gap-2 pl-2 pr-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-xl border border-emerald-100"
+                  title={adminUsername ? `Signed in as ${adminUsername}` : 'Signed in as admin'}
+                >
+                  <span className="relative flex h-2 w-2 shrink-0">
+                    <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                  </span>
+                  <span className="text-[10px] font-black uppercase tracking-widest hidden sm:inline max-w-[120px] truncate">
+                    {adminUsername || 'Admin'}
+                  </span>
                 </div>
-                <span className="text-[10px] font-bold uppercase tracking-widest hidden sm:inline group-hover:text-rose-700">Admin</span>
-              </button>
+
+                {/* Explicit, separate sign-out action - deliberately its own
+                    target so it reads as a distinct destructive action, not
+                    part of the identity chip. */}
+                <button
+                  onClick={logout}
+                  className="flex items-center justify-center w-9 h-9 rounded-xl text-slate-400 bg-white border border-slate-200 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 transition-colors"
+                  title="Sign out"
+                  aria-label="Sign out"
+                >
+                  <LogOut size={15} />
+                </button>
+              </div>
             ) : (
               <button 
                 onClick={() => setShowLoginModal(true)}
-                className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 text-slate-500 rounded-xl hover:bg-slate-100 transition-colors group border border-slate-200"
+                className="flex items-center gap-2 pl-3 pr-4 py-1.5 bg-slate-800 text-white rounded-xl hover:bg-slate-900 transition-colors shadow-sm"
                 title="Admin Login"
               >
-                <div className="w-6 h-6 rounded-full bg-slate-200 flex items-center justify-center text-slate-600">
-                  <UserCircle size={14} />
-                </div>
-                <span className="text-[10px] font-bold uppercase tracking-widest hidden sm:inline group-hover:text-slate-800">Login</span>
+                <LogIn size={14} />
+                <span className="text-[10px] font-black uppercase tracking-widest">Log In</span>
               </button>
             )}
           </div>
@@ -1323,16 +1320,13 @@ export default function App() {
                         {paginatedRecords.map((record, index) => (
                           <tr 
                             key={record.id} 
-                            ref={(el) => { rowRefs.current[String(record.id)] = el; }}
                             onClick={() => setSelectedRecord(record)}
-                            className={`transition-colors duration-500 text-[11px] text-slate-700 cursor-pointer group hover:bg-orange-50/60 ${
-                              String(record.id) === String(highlightRecordId)
-                                ? 'bg-amber-100/80 ring-2 ring-inset ring-brand-orange'
-                                : index % 2 === 0 ? 'bg-white' : 'bg-slate-50/70'
+                            className={`transition-all duration-150 text-[11px] text-slate-700 cursor-pointer group hover:bg-orange-50/60 ${
+                              index % 2 === 0 ? 'bg-white' : 'bg-slate-50/70'
                             }`}
                           >
                             <td className="px-4 py-4 text-center font-bold text-slate-500 border-r border-slate-200 sticky left-0 bg-inherit z-10 shadow-[2px_0_5px_rgba(0,0,0,0.02)] group-hover:text-brand-orange">
-                              {record.no || (currentPage - 1) * rowsPerPage + index + 1}
+                              {(currentPage - 1) * pageSize + index + 1}
                             </td>
                             <td className="px-4 py-4 whitespace-nowrap font-medium border-r border-slate-100">{record.auditDate}</td>
                             <td className="px-4 py-4 text-center font-black text-slate-600 border-r border-slate-100">{record.ww}</td>
@@ -1406,66 +1400,61 @@ export default function App() {
                   )}
 
                   {filteredRecords.length > 0 && (
-                    <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-3">
-                      <div className="flex items-center gap-3 order-2 sm:order-1">
-                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest whitespace-nowrap">
-                          Showing <span className="text-slate-700">{(currentPage - 1) * rowsPerPage + 1}</span>
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-5 py-3 bg-white border-t border-slate-200 shrink-0">
+                      <div className="flex items-center gap-3 text-[11px] font-bold text-slate-500">
+                        <span>
+                          Showing <span className="text-slate-800">{(currentPage - 1) * pageSize + 1}</span>
                           {'–'}
-                          <span className="text-slate-700">{Math.min(currentPage * rowsPerPage, filteredRecords.length)}</span>
+                          <span className="text-slate-800">{Math.min(currentPage * pageSize, filteredRecords.length)}</span>
                           {' of '}
-                          <span className="text-slate-700">{filteredRecords.length}</span>
+                          <span className="text-slate-800">{filteredRecords.length}</span>
                         </span>
-                        <div className="relative">
-                          <select
-                            value={rowsPerPage}
-                            onChange={(e) => setRowsPerPage(Number(e.target.value))}
-                            className="bg-slate-50 border border-slate-200 rounded-lg py-1.5 pl-2.5 pr-7 text-[10px] font-black text-slate-600 uppercase tracking-widest focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/5 outline-none appearance-none cursor-pointer"
-                          >
-                            {[10, 25, 50, 100].map(n => (
-                              <option key={n} value={n}>{n} / page</option>
-                            ))}
-                          </select>
-                          <MoreVertical size={10} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-300" />
-                        </div>
+                        <select
+                          value={pageSize}
+                          onChange={(e) => setPageSize(Number(e.target.value))}
+                          className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-black text-slate-600 outline-none focus:border-brand-orange cursor-pointer"
+                        >
+                          <option value={25}>25 / page</option>
+                          <option value={50}>50 / page</option>
+                          <option value={100}>100 / page</option>
+                        </select>
                       </div>
 
-                      <div className="flex items-center gap-1 order-1 sm:order-2">
+                      <div className="flex items-center gap-1">
                         <button
                           onClick={() => setCurrentPage(1)}
                           disabled={currentPage === 1}
-                          className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-brand-orange transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-slate-500"
+                          className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent transition-colors"
                           title="First page"
                         >
-                          <ChevronsLeft size={14} />
+                          <ChevronsLeft size={15} />
                         </button>
                         <button
                           onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
                           disabled={currentPage === 1}
-                          className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-brand-orange transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-slate-500"
+                          className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent transition-colors"
                           title="Previous page"
                         >
-                          <ChevronLeft size={14} />
+                          <ChevronLeft size={15} />
                         </button>
-
-                        <span className="px-3 text-[10px] font-black text-slate-600 uppercase tracking-widest whitespace-nowrap">
-                          Page {currentPage} / {totalPages}
+                        <span className="px-3 text-[11px] font-black text-slate-600 tabular-nums">
+                          Page {currentPage} of {totalPages}
                         </span>
-
                         <button
                           onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
                           disabled={currentPage === totalPages}
-                          className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-brand-orange transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-slate-500"
+                          className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent transition-colors"
                           title="Next page"
                         >
-                          <ChevronRight size={14} />
+                          <ChevronRight size={15} />
                         </button>
                         <button
                           onClick={() => setCurrentPage(totalPages)}
                           disabled={currentPage === totalPages}
-                          className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-brand-orange transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-slate-500"
+                          className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent transition-colors"
                           title="Last page"
                         >
-                          <ChevronsRight size={14} />
+                          <ChevronsRight size={15} />
                         </button>
                       </div>
                     </div>
@@ -1986,6 +1975,12 @@ export default function App() {
                 <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mt-2">Quality Management System</p>
               </div>
 
+              {sessionExpired && (
+                <p className="text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 text-center mb-4">
+                  Your session expired. Please sign in again.
+                </p>
+              )}
+
               <form onSubmit={handleLogin} className="space-y-4">
                 <div>
                   <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2 block ml-1">Username / Admin ID</label>
@@ -2016,7 +2011,7 @@ export default function App() {
                 <div className="flex gap-3 pt-2">
                   <button 
                     type="button"
-                    onClick={() => { setShowLoginModal(false); setLoginError(''); }}
+                    onClick={() => { setShowLoginModal(false); setLoginError(''); setSessionExpired(false); }}
                     className="flex-1 py-3 text-xs font-black uppercase tracking-widest text-slate-400 hover:text-slate-600 transition-colors"
                   >
                     Cancel
@@ -2207,4 +2202,3 @@ function FormSelect({ label, value, onChange, options }: any) {
     </div>
   );
 }
-
