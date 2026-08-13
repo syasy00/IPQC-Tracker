@@ -21,7 +21,11 @@ import {
   TrendingUp,
   Download,
   Upload,
-  UserCircle
+  UserCircle,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -581,6 +585,34 @@ export default function App() {
              matchesShift && matchesPlatform;
     });
   }, [records, searchQuery, filterAuditor, filterDept, filterFindings, filterDate, filterWW, filterCategory, filterStatus, filterShift, filterPlatform]);
+
+  // --- Pagination ---
+  // Paginated client-side: the full record set is already fetched and filtered
+  // in memory, so slicing it here is cheap. If the table grows into the
+  // tens-of-thousands-of-rows range, move this to server-side LIMIT/OFFSET
+  // (add page/pageSize query params to GET /api/records) instead.
+  const [currentPage, setCurrentPage] = useState(1);
+  const [rowsPerPage, setRowsPerPage] = useState(25);
+
+  const totalPages = Math.max(1, Math.ceil(filteredRecords.length / rowsPerPage));
+
+  // Any change to the filters/search should always land the user back on
+  // page 1 - otherwise a narrower result set can leave them stranded on a
+  // page number that no longer exists.
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, filterAuditor, filterDept, filterFindings, filterDate, filterWW, filterCategory, filterStatus, filterShift, filterPlatform, rowsPerPage]);
+
+  // Safety net for the remaining edge case: a record on the current page gets
+  // deleted and the page count shrinks out from under the user.
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [totalPages, currentPage]);
+
+  const paginatedRecords = useMemo(() => {
+    const start = (currentPage - 1) * rowsPerPage;
+    return filteredRecords.slice(start, start + rowsPerPage);
+  }, [filteredRecords, currentPage, rowsPerPage]);
 
   const [selectedRecord, setSelectedRecord] = useState<AuditRecord | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1252,7 +1284,7 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-200">
-                        {filteredRecords.map((record, index) => (
+                        {paginatedRecords.map((record, index) => (
                           <tr 
                             key={record.id} 
                             onClick={() => setSelectedRecord(record)}
@@ -1261,7 +1293,7 @@ export default function App() {
                             }`}
                           >
                             <td className="px-4 py-4 text-center font-bold text-slate-500 border-r border-slate-200 sticky left-0 bg-inherit z-10 shadow-[2px_0_5px_rgba(0,0,0,0.02)] group-hover:text-brand-orange">
-                              {record.no || index + 1}
+                              {record.no || (currentPage - 1) * rowsPerPage + index + 1}
                             </td>
                             <td className="px-4 py-4 whitespace-nowrap font-medium border-r border-slate-100">{record.auditDate}</td>
                             <td className="px-4 py-4 text-center font-black text-slate-600 border-r border-slate-100">{record.ww}</td>
@@ -1331,6 +1363,72 @@ export default function App() {
                       </div>
                       <h4 className="font-bold text-text-muted uppercase tracking-widest text-sm">No Results Found</h4>
                       <p className="text-xs text-text-muted/60 mt-2">Try adjusting your filters or search query.</p>
+                    </div>
+                  )}
+
+                  {filteredRecords.length > 0 && (
+                    <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-3">
+                      <div className="flex items-center gap-3 order-2 sm:order-1">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest whitespace-nowrap">
+                          Showing <span className="text-slate-700">{(currentPage - 1) * rowsPerPage + 1}</span>
+                          {'–'}
+                          <span className="text-slate-700">{Math.min(currentPage * rowsPerPage, filteredRecords.length)}</span>
+                          {' of '}
+                          <span className="text-slate-700">{filteredRecords.length}</span>
+                        </span>
+                        <div className="relative">
+                          <select
+                            value={rowsPerPage}
+                            onChange={(e) => setRowsPerPage(Number(e.target.value))}
+                            className="bg-slate-50 border border-slate-200 rounded-lg py-1.5 pl-2.5 pr-7 text-[10px] font-black text-slate-600 uppercase tracking-widest focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/5 outline-none appearance-none cursor-pointer"
+                          >
+                            {[10, 25, 50, 100].map(n => (
+                              <option key={n} value={n}>{n} / page</option>
+                            ))}
+                          </select>
+                          <MoreVertical size={10} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-300" />
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1 order-1 sm:order-2">
+                        <button
+                          onClick={() => setCurrentPage(1)}
+                          disabled={currentPage === 1}
+                          className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-brand-orange transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-slate-500"
+                          title="First page"
+                        >
+                          <ChevronsLeft size={14} />
+                        </button>
+                        <button
+                          onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                          disabled={currentPage === 1}
+                          className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-brand-orange transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-slate-500"
+                          title="Previous page"
+                        >
+                          <ChevronLeft size={14} />
+                        </button>
+
+                        <span className="px-3 text-[10px] font-black text-slate-600 uppercase tracking-widest whitespace-nowrap">
+                          Page {currentPage} / {totalPages}
+                        </span>
+
+                        <button
+                          onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                          disabled={currentPage === totalPages}
+                          className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-brand-orange transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-slate-500"
+                          title="Next page"
+                        >
+                          <ChevronRight size={14} />
+                        </button>
+                        <button
+                          onClick={() => setCurrentPage(totalPages)}
+                          disabled={currentPage === totalPages}
+                          className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-brand-orange transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-slate-500"
+                          title="Last page"
+                        >
+                          <ChevronsRight size={14} />
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -2070,3 +2168,4 @@ function FormSelect({ label, value, onChange, options }: any) {
     </div>
   );
 }
+
