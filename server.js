@@ -108,6 +108,80 @@ db.getConnection((err, connection) => {
   }
 });
 
+// ==========================================
+// App Settings (auditor list & platform-MQE mapping)
+// Stored as a single row so every user sees the same list instead of each
+// browser tab resetting to hardcoded defaults on reload.
+// ==========================================
+const ensureSettingsTable = () => {
+  db.query(
+    `CREATE TABLE IF NOT EXISTS app_settings (
+      id INT PRIMARY KEY,
+      auditors JSON NOT NULL,
+      mqe_mappings JSON NOT NULL
+    )`,
+    (err) => {
+      if (err) {
+        console.error('Failed to ensure app_settings table:', err);
+        return;
+      }
+      db.query('SELECT id FROM app_settings WHERE id = 1', (err, rows) => {
+        if (err) return console.error('Failed to check app_settings row:', err);
+        if (rows.length === 0) {
+          db.query(
+            'INSERT INTO app_settings (id, auditors, mqe_mappings) VALUES (1, ?, ?)',
+            [JSON.stringify([]), JSON.stringify({})],
+            (err) => {
+              if (err) console.error('Failed to seed app_settings row:', err);
+            }
+          );
+        }
+      });
+    }
+  );
+};
+ensureSettingsTable();
+
+// API: Get current auditors + platform-MQE mapping.
+// Public (no auth) - anyone creating an audit record needs these lists to
+// populate dropdowns, not just admins. Empty arrays/objects mean no admin
+// has saved custom values yet, in which case the frontend falls back to
+// its built-in defaults.
+app.get('/api/settings', (req, res) => {
+  db.query('SELECT auditors, mqe_mappings FROM app_settings WHERE id = 1', (err, rows) => {
+    if (err) {
+      console.error('Failed to fetch settings:', err);
+      return res.status(500).json({ error: 'Failed to fetch settings' });
+    }
+    if (rows.length === 0) {
+      return res.status(200).json({ auditors: [], mqeMappings: {} });
+    }
+    const row = rows[0];
+    const auditors = typeof row.auditors === 'string' ? JSON.parse(row.auditors) : row.auditors;
+    const mqeMappings = typeof row.mqe_mappings === 'string' ? JSON.parse(row.mqe_mappings) : row.mqe_mappings;
+    res.status(200).json({ auditors, mqeMappings });
+  });
+});
+
+// API: Replace auditors + platform-MQE mapping (admin only)
+app.put('/api/settings', authenticateAdmin, (req, res) => {
+  const { auditors, mqeMappings } = req.body || {};
+  if (!Array.isArray(auditors) || typeof mqeMappings !== 'object' || mqeMappings === null) {
+    return res.status(400).json({ error: 'auditors must be an array and mqeMappings must be an object' });
+  }
+  db.query(
+    'UPDATE app_settings SET auditors = ?, mqe_mappings = ? WHERE id = 1',
+    [JSON.stringify(auditors), JSON.stringify(mqeMappings)],
+    (err) => {
+      if (err) {
+        console.error('Failed to update settings:', err);
+        return res.status(500).json({ error: 'Failed to update settings' });
+      }
+      res.status(200).json({ auditors, mqeMappings });
+    }
+  );
+});
+
 // Configure Image Uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {

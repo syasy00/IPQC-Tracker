@@ -28,6 +28,8 @@ import {
   ResponsiveContainer,
   AreaChart,
   Area,
+  BarChart,
+  Bar,
   PieChart,
   Pie,
   Cell,
@@ -229,6 +231,29 @@ export default function App() {
     fetchAudits();
   }, []);
 
+  // Load the saved auditor list & platform-MQE mapping from the database.
+  // Empty results mean no admin has saved custom values yet, in which case
+  // we just keep the built-in defaults these states were initialized with.
+  useEffect(() => {
+    const fetchSettings = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/settings`);
+        if (response.ok) {
+          const data = await response.json();
+          if (Array.isArray(data.auditors) && data.auditors.length > 0) {
+            setAuditorsList(data.auditors);
+          }
+          if (data.mqeMappings && Object.keys(data.mqeMappings).length > 0) {
+            setMqeMappings(data.mqeMappings);
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching settings from database:', error);
+      }
+    };
+    fetchSettings();
+  }, []);
+
   // On load, confirm a saved token is still valid rather than trusting it
   // blindly - an expired or tampered token gets cleared immediately.
   useEffect(() => {
@@ -278,6 +303,23 @@ export default function App() {
         .map(([name, value]) => ({ name, value }))
     };
   }, [records]);
+
+  const DIMENSION_LABELS: Record<'platform' | 'category' | 'mqe' | 'auditor', string> = {
+    platform: 'Platform',
+    category: 'Category',
+    mqe: 'MQE Engineer',
+    auditor: 'Auditor'
+  };
+
+  const currentDimensionData = useMemo(() => {
+    const source = {
+      platform: analyticsData.platforms,
+      category: analyticsData.categories,
+      mqe: analyticsData.mqes,
+      auditor: analyticsData.auditors
+    }[analyticsDimension];
+    return [...source].sort((a, b) => b.value - a.value);
+  }, [analyticsData, analyticsDimension]);
 
   const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
@@ -333,11 +375,35 @@ export default function App() {
   };
 
   // --- CRUD Handlers for Settings ---
+  // Every edit here is persisted to /api/settings immediately so all users
+  // see the same list, instead of it living only in this browser tab's memory.
+  const [savingSettings, setSavingSettings] = useState(false);
+  const saveSettings = async (nextAuditors: string[], nextMqeMappings: Record<string, string>) => {
+    setSavingSettings(true);
+    try {
+      const response = await authFetch(`${API_BASE_URL}/api/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auditors: nextAuditors, mqeMappings: nextMqeMappings }),
+      });
+      if (!response.ok) {
+        alert('Failed to save this change to the database. It may be lost on refresh - please try again.');
+      }
+    } catch (err) {
+      console.error('Error saving settings:', err);
+      alert('Could not reach the server to save this change. It may be lost on refresh.');
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
   const handleAddAuditor = (e: FormEvent) => {
     e.preventDefault();
     if (newAuditorName.trim() && !auditorsList.includes(newAuditorName.trim())) {
-      setAuditorsList([...auditorsList, newAuditorName.trim()]);
+      const updated = [...auditorsList, newAuditorName.trim()];
+      setAuditorsList(updated);
       setNewAuditorName('');
+      saveSettings(updated, mqeMappings);
     }
   };
 
@@ -347,28 +413,81 @@ export default function App() {
       updated[index] = editAuditorValue.trim();
       setAuditorsList(updated);
       setEditingAuditorIndex(null);
+      saveSettings(updated, mqeMappings);
     }
   };
 
   const handleDeleteAuditor = (auditorToDelete: string) => {
-    setAuditorsList(auditorsList.filter(a => a !== auditorToDelete));
+    const updated = auditorsList.filter(a => a !== auditorToDelete);
+    setAuditorsList(updated);
+    saveSettings(updated, mqeMappings);
   };
 
   const handleAddOrUpdateMqeMapping = (e: FormEvent) => {
     e.preventDefault();
     if (newMqeName.trim()) {
-      setMqeMappings({
+      const updated = {
         ...mqeMappings,
         [selectedPlatformForMapping]: newMqeName.trim()
-      });
+      };
+      setMqeMappings(updated);
       setNewMqeName('');
+      saveSettings(auditorsList, updated);
     }
   };
 
   const handleClearMqeMapping = (platform: string) => {
-    const newMappings = { ...mqeMappings };
-    delete newMappings[platform];
-    setMqeMappings(newMappings);
+    const updated = { ...mqeMappings };
+    delete updated[platform];
+    setMqeMappings(updated);
+    saveSettings(auditorsList, updated);
+  };
+
+  // Backfills mqeEngineer on existing records using the current Platform-MQE
+  // mapping - fixes records that were added/imported before a platform had
+  // a mapping assigned. Only touches records whose stored MQE no longer
+  // matches what the current mapping says (so it's safe to re-run anytime).
+  const [recalculating, setRecalculating] = useState(false);
+  const handleRecalculateMqe = async () => {
+    const toFix = records.filter(r => {
+      const correctMqe = getMqeForPlatform(r.platform);
+      return (r.mqeEngineer || 'Unassigned') !== correctMqe;
+    });
+
+    if (toFix.length === 0) {
+      alert('All records already match the current Platform - MQE mapping.');
+      return;
+    }
+
+    if (!confirm(`This will update ${toFix.length} record(s) to match the current Platform - MQE mapping. Continue?`)) {
+      return;
+    }
+
+    setRecalculating(true);
+    let successCount = 0;
+    try {
+      for (const record of toFix) {
+        const correctMqe = getMqeForPlatform(record.platform);
+        const response = await authFetch(`${API_BASE_URL}/api/records/${record.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...record, mqeEngineer: correctMqe }),
+        });
+        if (response.ok) successCount++;
+      }
+
+      const refreshResponse = await fetch(`${API_BASE_URL}/api/records`);
+      if (refreshResponse.ok) {
+        setRecords(await refreshResponse.json());
+      }
+
+      alert(`Updated ${successCount} out of ${toFix.length} record(s).`);
+    } catch (err) {
+      console.error('Recalculate MQE error:', err);
+      alert('Something went wrong while updating records. Some records may not have been updated.');
+    } finally {
+      setRecalculating(false);
+    }
   };
   // ----------------------------------
 
@@ -887,6 +1006,73 @@ export default function App() {
                           </div>
                         </div>
                       </div>
+
+                      <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
+                        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+                          <div>
+                            <h3 className="font-black text-xs text-slate-400 uppercase tracking-[0.2em] flex items-center gap-2">
+                              <Layers size={14} className="text-brand-orange" />
+                              Findings Breakdown by {DIMENSION_LABELS[analyticsDimension]}
+                            </h3>
+                            {currentDimensionData.length > 0 && (
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1.5">
+                                Highest: <span className="text-brand-orange">{currentDimensionData[0].name}</span> &middot; {currentDimensionData[0].value} Submitted Finding{currentDimensionData[0].value === 1 ? '' : 's'}
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex bg-bg-main p-1 rounded-md border border-border-subtle w-full sm:w-auto overflow-x-auto">
+                            {(Object.keys(DIMENSION_LABELS) as Array<'platform' | 'category' | 'mqe' | 'auditor'>).map(dim => (
+                              <button
+                                key={dim}
+                                onClick={() => setAnalyticsDimension(dim)}
+                                className={`flex-1 sm:flex-none px-4 py-1.5 rounded text-[10px] font-bold uppercase whitespace-nowrap transition-all ${
+                                  analyticsDimension === dim ? 'bg-white shadow-sm text-brand-orange' : 'text-text-muted hover:text-text-main'
+                                }`}
+                              >
+                                {DIMENSION_LABELS[dim]}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {currentDimensionData.length === 0 ? (
+                          <p className="text-xs font-bold text-slate-400 uppercase tracking-widest text-center py-12">
+                            No submitted findings yet for this breakdown.
+                          </p>
+                        ) : (
+                          <div style={{ height: Math.max(240, currentDimensionData.length * 40) }}>
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart
+                                data={currentDimensionData}
+                                layout="vertical"
+                                margin={{ top: 0, right: 30, left: 0, bottom: 0 }}
+                              >
+                                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
+                                <XAxis
+                                  type="number"
+                                  allowDecimals={false}
+                                  axisLine={false}
+                                  tickLine={false}
+                                  tick={{ fontSize: 9, fontWeight: 700, fill: '#94a3b8' }}
+                                />
+                                <YAxis
+                                  type="category"
+                                  dataKey="name"
+                                  axisLine={false}
+                                  tickLine={false}
+                                  width={150}
+                                  tick={{ fontSize: 10, fontWeight: 700, fill: '#334155' }}
+                                />
+                                <RechartsTooltip
+                                  cursor={{ fill: '#f8fafc' }}
+                                  contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)', fontSize: '10px', fontWeight: 700 }}
+                                />
+                                <Bar dataKey="value" name="Submitted Findings" fill="#F15D22" radius={[0, 6, 6, 0]} maxBarSize={22} />
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </div>
+                        )}
+                      </div>
                     </motion.div>
                   ) : (
                     <motion.div 
@@ -1401,14 +1587,19 @@ export default function App() {
                 className="space-y-6 pb-20 max-w-4xl mx-auto"
               >
                 <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
-                  <div className="flex items-center gap-4 mb-8">
-                    <div className="w-12 h-12 bg-slate-100 rounded-xl flex items-center justify-center text-slate-600">
-                      <Settings size={24} />
+                  <div className="flex items-center justify-between gap-4 mb-8">
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 bg-slate-100 rounded-xl flex items-center justify-center text-slate-600">
+                        <Settings size={24} />
+                      </div>
+                      <div>
+                        <h2 className="text-xl font-bold tracking-tight">System Settings</h2>
+                        <p className="text-xs text-text-muted italic uppercase font-bold tracking-widest mt-1">Manage auditors and MQE assignments</p>
+                      </div>
                     </div>
-                    <div>
-                      <h2 className="text-xl font-bold tracking-tight">System Settings</h2>
-                      <p className="text-xs text-text-muted italic uppercase font-bold tracking-widest mt-1">Manage auditors and MQE assignments</p>
-                    </div>
+                    {savingSettings && (
+                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest animate-pulse shrink-0">Saving...</span>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
@@ -1498,6 +1689,19 @@ export default function App() {
                           Platform - MQE Mapping
                         </h3>
                       </div>
+
+                      <button
+                        type="button"
+                        onClick={handleRecalculateMqe}
+                        disabled={recalculating}
+                        className="w-full flex items-center justify-center gap-2 bg-slate-800 text-white text-[10px] font-black uppercase tracking-widest py-2.5 rounded-lg hover:bg-slate-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <TrendingUp size={14} />
+                        {recalculating ? 'Updating Records...' : 'Recalculate MQE Assignments'}
+                      </button>
+                      <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wide -mt-2">
+                        Re-applies this mapping to every existing record. Use this after adding a mapping for a platform that already has records.
+                      </p>
 
                       <form onSubmit={handleAddOrUpdateMqeMapping} className="flex flex-col gap-3 bg-slate-50 p-4 rounded-xl border border-slate-100">
                         <div className="grid grid-cols-2 gap-2">
