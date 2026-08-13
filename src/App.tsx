@@ -614,6 +614,40 @@ export default function App() {
     return filteredRecords.slice(start, start + rowsPerPage);
   }, [filteredRecords, currentPage, rowsPerPage]);
 
+  // --- Jump-to-record after add/edit ---
+  // After a submit, we know the record's id but not which page it lands on
+  // (that depends on the current filters/sort). Once filteredRecords updates
+  // to include it, look up its index and flip to that page automatically.
+  const [highlightRecordId, setHighlightRecordId] = useState<string | number | null>(null);
+  const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
+
+  useEffect(() => {
+    if (highlightRecordId === null) return;
+    const idx = filteredRecords.findIndex(r => String(r.id) === String(highlightRecordId));
+    // Not found usually means an active filter is hiding the record you just
+    // saved - nothing sensible to jump to, so just leave it as-is.
+    if (idx === -1) return;
+    setCurrentPage(Math.floor(idx / rowsPerPage) + 1);
+  }, [highlightRecordId, filteredRecords, rowsPerPage]);
+
+  // Once the target page has actually rendered with the record on it, scroll
+  // it into view and let the highlight fade after a couple seconds.
+  useEffect(() => {
+    if (highlightRecordId === null) return;
+    const isOnCurrentPage = paginatedRecords.some(r => String(r.id) === String(highlightRecordId));
+    if (!isOnCurrentPage) return;
+
+    rowRefs.current[String(highlightRecordId)]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+    if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
+    highlightTimeoutRef.current = setTimeout(() => setHighlightRecordId(null), 2500);
+
+    return () => {
+      if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
+    };
+  }, [highlightRecordId, paginatedRecords]);
+
   const [selectedRecord, setSelectedRecord] = useState<AuditRecord | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -648,6 +682,7 @@ export default function App() {
         if (response.ok) {
           const updated = await response.json();
           setRecords(records.map(r => String(r.id) === String(editingId) ? updated : r));
+          setHighlightRecordId(updated.id);
         } else {
           alert('Failed to update record.');
         }
@@ -661,6 +696,7 @@ export default function App() {
         if (response.ok) {
           const created = await response.json();
           setRecords([...records, created]);
+          setHighlightRecordId(created.id);
         } else {
           alert('Failed to save the audit record to database.');
         }
@@ -1287,9 +1323,12 @@ export default function App() {
                         {paginatedRecords.map((record, index) => (
                           <tr 
                             key={record.id} 
+                            ref={(el) => { rowRefs.current[String(record.id)] = el; }}
                             onClick={() => setSelectedRecord(record)}
-                            className={`transition-all duration-150 text-[11px] text-slate-700 cursor-pointer group hover:bg-orange-50/60 ${
-                              index % 2 === 0 ? 'bg-white' : 'bg-slate-50/70'
+                            className={`transition-colors duration-500 text-[11px] text-slate-700 cursor-pointer group hover:bg-orange-50/60 ${
+                              String(record.id) === String(highlightRecordId)
+                                ? 'bg-amber-100/80 ring-2 ring-inset ring-brand-orange'
+                                : index % 2 === 0 ? 'bg-white' : 'bg-slate-50/70'
                             }`}
                           >
                             <td className="px-4 py-4 text-center font-bold text-slate-500 border-r border-slate-200 sticky left-0 bg-inherit z-10 shadow-[2px_0_5px_rgba(0,0,0,0.02)] group-hover:text-brand-orange">
