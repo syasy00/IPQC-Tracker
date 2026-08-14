@@ -615,7 +615,7 @@ export default function App() {
       const matchesDate = !filterDate || String(r.auditDate) === String(filterDate);
       const matchesWW = !filterWW || String(r.ww) === String(filterWW);
       const matchesCategory = !filterCategory || String(r.category) === String(filterCategory);
-      const matchesStatus = !filterStatus || String(r.icarStatus) === String(filterStatus);
+      const matchesStatus = !filterStatus || (filterStatus === 'Open' ? (!r.icarStatus || r.icarStatus === 'Locked' || r.icarStatus === 'Open') : String(r.icarStatus) === String(filterStatus));
       const matchesShift = !filterShift || String(r.shift) === String(filterShift);
       const matchesPlatform = !filterPlatform || String(r.platform) === String(filterPlatform);
 
@@ -1236,31 +1236,31 @@ export default function App() {
             )}
 
             {view === 'ipqc' && (
-              <motion.div 
+              <motion.div
                 key="ipqc"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                className="flex-1 flex flex-col min-h-0 bg-transparent space-y-4"
+                className="flex-1 flex flex-col min-h-0 space-y-3"
               >
-                {/* Primary command bar: keep the user workflow in one horizontal layer. */}
-                <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-[0_4px_18px_rgba(15,23,42,0.04)]">
-                  <div className="flex flex-col 2xl:flex-row 2xl:items-center gap-3">
+                {/* Compact command area: search, filter and actions share one horizontal workflow. */}
+                <section className="shrink-0">
+                  <div className="flex flex-col xl:flex-row xl:items-center gap-2.5">
                     {/* Search */}
                     <div className="relative flex-1 min-w-0">
                       <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
                       <input
                         type="text"
-                        placeholder="Search by keyword, platform, station, auditor..."
+                        placeholder="Search keyword, platform, station or auditor..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        className="w-full h-11 rounded-xl border border-slate-200 bg-slate-50/60 py-2.5 pl-11 pr-11 text-xs font-semibold text-slate-700 outline-none transition-all placeholder:text-slate-400 focus:border-brand-orange focus:bg-white focus:ring-4 focus:ring-brand-orange/5"
+                        className="w-full h-11 rounded-xl border border-slate-200 bg-white pl-11 pr-10 text-xs font-semibold text-slate-700 outline-none transition-all placeholder:text-slate-400 shadow-[0_1px_2px_rgba(15,23,42,0.03)] focus:border-slate-300 focus:ring-4 focus:ring-slate-900/5"
                         aria-label="Search IPQC records"
                       />
                       {searchQuery && (
                         <button
                           type="button"
                           onClick={() => setSearchQuery('')}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors"
                           title="Clear search"
                           aria-label="Clear search"
                         >
@@ -1274,7 +1274,7 @@ export default function App() {
                       type="button"
                       onClick={() => setFiltersOpen(!filtersOpen)}
                       aria-expanded={filtersOpen}
-                      className={`h-11 shrink-0 inline-flex items-center justify-center gap-2 rounded-xl border px-4 text-[10px] font-black uppercase tracking-widest transition-all focus:outline-none focus:ring-4 focus:ring-slate-500/10 ${
+                      className={`h-11 shrink-0 inline-flex items-center justify-center gap-2 rounded-xl border px-4 text-[10px] font-black uppercase tracking-[0.12em] transition-all ${
                         filtersOpen
                           ? 'border-slate-800 bg-slate-800 text-white shadow-sm'
                           : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
@@ -1283,21 +1283,22 @@ export default function App() {
                       <Filter size={14} />
                       Filters
                       {activeFilterCount > 0 && (
-                        <span className={`min-w-5 h-5 px-1.5 rounded-full inline-flex items-center justify-center text-[9px] font-black ${filtersOpen ? 'bg-white text-slate-800' : 'bg-brand-orange text-white'}`}>
+                        <span className={`min-w-5 h-5 px-1.5 rounded-full inline-flex items-center justify-center text-[9px] font-black ${
+                          filtersOpen ? 'bg-white text-slate-800' : 'bg-brand-orange text-white'
+                        }`}>
                           {activeFilterCount}
                         </span>
                       )}
                     </button>
 
-                    {/* Divider */}
-                    <div className="hidden 2xl:block h-7 w-px bg-slate-200" aria-hidden="true" />
+                    <div className="hidden xl:block h-7 w-px bg-slate-200" aria-hidden="true" />
 
                     {/* Secondary actions */}
                     <div className="flex items-center gap-2 shrink-0">
                       <button
                         type="button"
                         onClick={() => setShowImportModal(true)}
-                        className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-[10px] font-black uppercase tracking-widest text-slate-600 transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-500/10"
+                        className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-[10px] font-black uppercase tracking-[0.12em] text-slate-600 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-all hover:border-slate-300 hover:bg-slate-50 hover:text-slate-800"
                       >
                         <Upload size={14} className="text-blue-600" />
                         Import
@@ -1305,7 +1306,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => exportToExcel(records)}
-                        className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-[10px] font-black uppercase tracking-widest text-slate-600 transition-all hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700 focus:outline-none focus:ring-4 focus:ring-emerald-500/10"
+                        className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-[10px] font-black uppercase tracking-[0.12em] text-slate-600 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-all hover:border-slate-300 hover:bg-slate-50 hover:text-slate-800"
                       >
                         <Download size={14} className="text-emerald-600" />
                         Export
@@ -1313,7 +1314,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => { setEditingId(null); setView('add-audit'); }}
-                        className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-brand-orange px-5 text-[10px] font-black uppercase tracking-widest text-white shadow-[0_8px_18px_rgba(241,93,34,0.18)] transition-all hover:-translate-y-0.5 hover:brightness-110 focus:outline-none focus:ring-4 focus:ring-brand-orange/20 active:translate-y-0"
+                        className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-brand-orange px-5 text-[10px] font-black uppercase tracking-[0.12em] text-white shadow-[0_8px_18px_rgba(241,93,34,0.16)] transition-all hover:brightness-110 active:translate-y-px"
                       >
                         <Plus size={16} />
                         Add Finding
@@ -1321,74 +1322,63 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Quiet status summary: useful context without competing with the command bar. */}
-                  <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[10px] font-semibold text-slate-400">
-                    {(() => {
-                      const openCount = records.filter(r => !r.icarStatus || r.icarStatus === 'Locked' || r.icarStatus === 'Open').length;
-                      const closedCount = records.filter(r => r.icarStatus === 'Closed').length;
-                      const submittedCount = records.filter(r => r.icarStatus === 'Submitted').length;
-                      return (
+                  {/* Quiet secondary information row. */}
+                  <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 px-0.5">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-semibold text-slate-400">
+                      {(() => {
+                        const openCount = records.filter(r => !r.icarStatus || r.icarStatus === 'Locked' || r.icarStatus === 'Open').length;
+                        const closedCount = records.filter(r => r.icarStatus === 'Closed').length;
+                        const submittedCount = records.filter(r => r.icarStatus === 'Submitted').length;
+                        return (
+                          <>
+                            <button type="button" onClick={() => setFilterStatus(filterStatus === 'Locked' ? '' : 'Locked')} className="hover:text-slate-700 transition-colors">
+                              <span className="font-black text-slate-700">{openCount.toLocaleString()}</span> open
+                            </button>
+                            <span className="text-slate-300">·</span>
+                            <button type="button" onClick={() => setFilterStatus(filterStatus === 'Closed' ? '' : 'Closed')} className="hover:text-slate-700 transition-colors">
+                              <span className="font-black text-slate-700">{closedCount.toLocaleString()}</span> closed
+                            </button>
+                            <span className="text-slate-300">·</span>
+                            <button type="button" onClick={() => setFilterStatus(filterStatus === 'Submitted' ? '' : 'Submitted')} className="hover:text-slate-700 transition-colors">
+                              <span className="font-black text-slate-700">{submittedCount.toLocaleString()}</span> submitted ICAR
+                            </button>
+                            <span className="text-slate-300">·</span>
+                            <span><span className="font-black text-slate-700">{records.length.toLocaleString()}</span> total</span>
+                          </>
+                        );
+                      })()}
+                    </div>
+
+                    <div className="flex items-center gap-3 text-[10px] font-semibold text-slate-400">
+                      {(searchQuery || activeFilterCount > 0) && (
+                        <span>Showing <span className="font-black text-slate-700">{filteredRecords.length.toLocaleString()}</span> matching</span>
+                      )}
+                      {hasActiveQuery && (
                         <>
+                          <span className="h-3 w-px bg-slate-200" aria-hidden="true" />
                           <button
                             type="button"
-                            onClick={() => setFilterStatus(filterStatus === 'Locked' ? '' : 'Locked')}
-                            className={`transition-colors hover:text-slate-700 ${filterStatus === 'Locked' ? 'text-brand-orange' : ''}`}
+                            onClick={() => {
+                              setFilterDate('');
+                              setFilterAuditor('');
+                              setFilterFindings('');
+                              setFilterDept('');
+                              setFilterCategory('');
+                              setFilterStatus('');
+                              setFilterShift('');
+                              setFilterPlatform('');
+                              setSearchQuery('');
+                              setFilterWW('');
+                            }}
+                            className="font-black uppercase tracking-[0.12em] text-slate-400 hover:text-slate-700 transition-colors"
                           >
-                            <span className="font-black text-slate-700">{openCount.toLocaleString()}</span> open
+                            Clear all
                           </button>
-                          <span className="text-slate-300">•</span>
-                          <button
-                            type="button"
-                            onClick={() => setFilterStatus(filterStatus === 'Closed' ? '' : 'Closed')}
-                            className={`transition-colors hover:text-slate-700 ${filterStatus === 'Closed' ? 'text-brand-orange' : ''}`}
-                          >
-                            <span className="font-black text-slate-700">{closedCount.toLocaleString()}</span> closed
-                          </button>
-                          <span className="text-slate-300">•</span>
-                          <button
-                            type="button"
-                            onClick={() => setFilterStatus(filterStatus === 'Submitted' ? '' : 'Submitted')}
-                            className={`transition-colors hover:text-slate-700 ${filterStatus === 'Submitted' ? 'text-emerald-600' : ''}`}
-                          >
-                            <span className="font-black text-slate-700">{submittedCount.toLocaleString()}</span> submitted ICAR
-                          </button>
-                          <span className="text-slate-300">•</span>
-                          <span><span className="font-black text-slate-700">{records.length.toLocaleString()}</span> total</span>
-
-                          {hasActiveQuery && (
-                            <>
-                              <span className="hidden sm:inline text-slate-300">•</span>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setFilterDate('');
-                                  setFilterAuditor('');
-                                  setFilterFindings('');
-                                  setFilterDept('');
-                                  setFilterCategory('');
-                                  setFilterStatus('');
-                                  setFilterShift('');
-                                  setFilterPlatform('');
-                                  setSearchQuery('');
-                                  setFilterWW('');
-                                }}
-                                className="font-black uppercase tracking-widest text-slate-400 hover:text-slate-700 transition-colors"
-                              >
-                                Clear all
-                              </button>
-                            </>
-                          )}
-
-                          {(searchQuery || activeFilterCount > 0) && (
-                            <span className="ml-auto hidden md:inline text-slate-400">
-                              Showing <span className="font-black text-slate-700">{filteredRecords.length.toLocaleString()}</span> matching
-                            </span>
-                          )}
                         </>
-                      );
-                    })()}
+                      )}
+                    </div>
                   </div>
-                </div>
+                </section>
 
                 <AnimatePresence>
                   {filtersOpen && (
@@ -1416,7 +1406,7 @@ export default function App() {
                         <FilterInput label="Department" type="select" options={DEPARTMENTS} value={filterDept} onChange={setFilterDept} />
                         <FilterInput label="Platform" type="select" options={platformsList} value={filterPlatform} onChange={setFilterPlatform} />
                         <FilterInput label="Category" type="select" options={CATEGORIES} value={filterCategory} onChange={setFilterCategory} />
-                        <FilterInput label="ICAR Status" type="select" options={['Locked', 'Open', 'Closed', 'Submitted']} value={filterStatus} onChange={setFilterStatus} />
+                        <FilterInput label="ICAR Status" type="select" options={['Open', 'Closed', 'Submitted']} value={filterStatus} onChange={setFilterStatus} />
                         <div className="flex items-end lg:col-span-2">
                           <button 
                             onClick={() => {
