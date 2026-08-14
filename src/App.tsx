@@ -1242,19 +1242,71 @@ export default function App() {
                 animate={{ opacity: 1 }}
                 className="flex-1 flex flex-col min-h-0 bg-transparent space-y-4"
               >
-                {/* Page toolbar: clear hierarchy, primary action, and contextual record count */}
-                <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-4">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-base font-black text-slate-800 tracking-tight">IPQC Records</h3>
-                      <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-[9px] font-black uppercase tracking-widest text-slate-500">
-                        {records.length.toLocaleString()} total
-                      </span>
-                    </div>
-                    <p className="mt-1 text-[11px] font-medium text-slate-400">Review, filter and manage inspection findings from one workspace.</p>
+                {/* Page summary: the global header already identifies this page, so this area focuses on status at a glance and actions. */}
+                <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 flex-1">
+                    {(() => {
+                      const openCount = records.filter(r => !r.icarStatus || r.icarStatus === 'Locked' || r.icarStatus === 'Open').length;
+                      const closedCount = records.filter(r => r.icarStatus === 'Closed').length;
+                      const submittedCount = records.filter(r => r.icarStatus === 'Submitted').length;
+                      return (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setFilterStatus('Locked')}
+                            className={`group flex items-center justify-between rounded-2xl border bg-white px-4 py-3 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md ${filterStatus === 'Locked' ? 'border-brand-orange ring-4 ring-brand-orange/10' : 'border-slate-200'}`}
+                          >
+                            <span className="flex items-center gap-3">
+                              <span className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
+                                <Clock size={17} />
+                              </span>
+                              <span>
+                                <span className="block text-[10px] font-black uppercase tracking-widest text-slate-400">Open</span>
+                                <span className="block mt-0.5 text-xl font-black text-slate-800 tabular-nums">{openCount.toLocaleString()}</span>
+                              </span>
+                            </span>
+                            <ChevronRight size={15} className="text-slate-300 group-hover:text-slate-500" />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setFilterStatus('Closed')}
+                            className={`group flex items-center justify-between rounded-2xl border bg-white px-4 py-3 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md ${filterStatus === 'Closed' ? 'border-brand-orange ring-4 ring-brand-orange/10' : 'border-slate-200'}`}
+                          >
+                            <span className="flex items-center gap-3">
+                              <span className="w-9 h-9 rounded-xl bg-slate-100 text-slate-600 flex items-center justify-center">
+                                <CheckCircle2 size={17} />
+                              </span>
+                              <span>
+                                <span className="block text-[10px] font-black uppercase tracking-widest text-slate-400">Closed</span>
+                                <span className="block mt-0.5 text-xl font-black text-slate-800 tabular-nums">{closedCount.toLocaleString()}</span>
+                              </span>
+                            </span>
+                            <ChevronRight size={15} className="text-slate-300 group-hover:text-slate-500" />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setFilterStatus('Submitted')}
+                            className={`group flex items-center justify-between rounded-2xl border bg-white px-4 py-3 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md ${filterStatus === 'Submitted' ? 'border-brand-orange ring-4 ring-brand-orange/10' : 'border-slate-200'}`}
+                          >
+                            <span className="flex items-center gap-3">
+                              <span className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                                <ClipboardCheck size={17} />
+                              </span>
+                              <span>
+                                <span className="block text-[10px] font-black uppercase tracking-widest text-slate-400">Submitted ICAR</span>
+                                <span className="block mt-0.5 text-xl font-black text-slate-800 tabular-nums">{submittedCount.toLocaleString()}</span>
+                              </span>
+                            </span>
+                            <ChevronRight size={15} className="text-slate-300 group-hover:text-slate-500" />
+                          </button>
+                        </>
+                      );
+                    })()}
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2 xl:justify-end shrink-0">
                     <button
                       onClick={() => setShowImportModal(true)}
                       className="group inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-[10px] font-black uppercase tracking-widest text-slate-600 shadow-sm transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-500/10"
@@ -1376,7 +1428,7 @@ export default function App() {
                         <FilterInput label="Department" type="select" options={DEPARTMENTS} value={filterDept} onChange={setFilterDept} />
                         <FilterInput label="Platform" type="select" options={platformsList} value={filterPlatform} onChange={setFilterPlatform} />
                         <FilterInput label="Category" type="select" options={CATEGORIES} value={filterCategory} onChange={setFilterCategory} />
-                        <FilterInput label="ICAR Status" type="select" options={['Locked', 'Submitted']} value={filterStatus} onChange={setFilterStatus} />
+                        <FilterInput label="ICAR Status" type="select" options={['Locked', 'Open', 'Closed', 'Submitted']} value={filterStatus} onChange={setFilterStatus} />
                         <div className="flex items-end lg:col-span-2">
                           <button 
                             onClick={() => {
