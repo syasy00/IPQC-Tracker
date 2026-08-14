@@ -1,4 +1,4 @@
-import { useState, useMemo, FormEvent, useRef, ChangeEvent, useEffect, type ReactNode } from 'react';
+import { useState, useMemo, FormEvent, useRef, ChangeEvent, useEffect } from 'react';
 import { 
   LayoutDashboard, 
   ClipboardCheck, 
@@ -648,6 +648,7 @@ export default function App() {
 
 
   const [selectedRecord, setSelectedRecord] = useState<AuditRecord | null>(null);
+  const [openRowAction, setOpenRowAction] = useState<string | number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleImageChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -839,6 +840,11 @@ export default function App() {
     settings: 'Admin Panel',
   };
   const headerTitle = viewTitles[view] || 'IPQC Tracker';
+  const activeFilterCount = [
+    filterAuditor, filterDept, filterFindings, filterCategory, filterStatus,
+    filterShift, filterPlatform, filterWW, filterDate
+  ].filter(Boolean).length;
+  const hasActiveQuery = searchQuery.trim().length > 0 || activeFilterCount > 0;
 
   return (
     <div className="flex h-screen bg-bg-main font-sans text-text-main">
@@ -854,78 +860,53 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <aside className={`fixed md:static inset-y-0 left-0 z-50 bg-[#0b1324] transition-all duration-300 flex flex-col shrink-0 overflow-hidden border-r border-white/[0.06] shadow-[14px_0_40px_rgba(2,8,23,0.08)] ${sidebarOpen ? 'w-[252px] translate-x-0' : 'w-0 -translate-x-full md:w-[76px] md:translate-x-0'}`}>
-        {/* Brand */}
-        <div className={`${sidebarOpen ? 'px-5' : 'px-3'} py-5 border-b border-white/[0.06]`}>
-          <div className={`flex items-center ${sidebarOpen ? 'gap-3' : 'justify-center'}`}>
-            <div className="relative w-10 h-10 rounded-[13px] flex items-center justify-center shrink-0 overflow-hidden bg-brand-orange text-white font-black text-sm shadow-[0_8px_24px_rgba(241,93,34,0.28)]">
-              Q
-              <span className="absolute inset-x-2 bottom-1 h-px bg-white/30" />
-            </div>
-            {sidebarOpen && (
-              <div className="min-w-0">
-                <h1 className="text-sm font-black tracking-tight text-white uppercase whitespace-nowrap">IPQC Tracker</h1>
-                <p className="mt-0.5 text-[9px] font-bold tracking-[0.18em] text-slate-500 uppercase whitespace-nowrap">Quality Control Hub</p>
-              </div>
-            )}
+      <aside className={`fixed md:static inset-y-0 left-0 z-50 bg-sidebar-bg transition-all duration-300 flex flex-col shrink-0 overflow-hidden ${sidebarOpen ? 'w-[220px] translate-x-0' : 'w-0 -translate-x-full md:w-20 md:translate-x-0'}`}>
+        <div className="p-6 flex items-center gap-3 border-b border-white/5">
+          <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 overflow-hidden bg-brand-orange text-white font-black text-xs">
+            Q
           </div>
+          <h1 className="font-black text-xs tracking-widest text-white uppercase whitespace-nowrap">IPQC TRACKER</h1>
         </div>
 
-        {/* Navigation */}
-        <nav className={`${sidebarOpen ? 'px-3' : 'px-2'} flex-1 overflow-y-auto py-5 custom-scrollbar`}>
-          <NavSection label="Insights" collapsed={!sidebarOpen}>
-            <NavItem
-              icon={<LayoutDashboard size={18} strokeWidth={1.9} />}
-              label="Analytics"
-              active={view === 'dashboard'}
-              collapsed={!sidebarOpen}
-              onClick={() => { setView('dashboard'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-            />
-          </NavSection>
+        <nav className="flex-1 space-y-1 mt-6 overflow-y-auto px-3">
+          <div className="px-3 mb-2">
+            <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] italic opacity-50">Insights</span>
+          </div>
+          <NavItem 
+            icon={<LayoutDashboard size={18} />} 
+            label="Analytics" 
+            active={view === 'dashboard'} 
+            collapsed={!sidebarOpen && window.innerWidth >= 768}
+            onClick={() => { setView('dashboard'); if (window.innerWidth < 768) setSidebarOpen(false); }}
+          />
 
-          <NavSection label="Operations" collapsed={!sidebarOpen} className="mt-7">
-            <NavItem
-              icon={<ClipboardCheck size={18} strokeWidth={1.9} />}
-              label="IPQC Records"
-              badge={records.length > 0 ? records.length : undefined}
-              active={view === 'ipqc'}
-              collapsed={!sidebarOpen}
-              onClick={() => { setView('ipqc'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-            />
-          </NavSection>
+          <div className="px-3 mt-6 mb-2">
+            <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] italic opacity-50">Operations</span>
+          </div>
+          <NavItem 
+            icon={<ClipboardCheck size={18} />} 
+            label="IPQC Records" 
+            active={view === 'ipqc'} 
+            collapsed={!sidebarOpen && window.innerWidth >= 768}
+            onClick={() => { setView('ipqc'); if (window.innerWidth < 768) setSidebarOpen(false); }}
+          />
 
-          <NavSection label="System" collapsed={!sidebarOpen} className="mt-7">
-            <NavItem
-              icon={isAdmin ? <Settings size={18} strokeWidth={1.9} /> : <Lock size={17} strokeWidth={1.9} />}
-              label="Admin Panel"
-              active={view === 'settings'}
-              collapsed={!sidebarOpen}
-              disabled={!isAdmin}
-              onClick={() => {
-                setView('settings');
-                if (window.innerWidth < 768) setSidebarOpen(false);
-              }}
-            />
-          </NavSection>
+          <div className="px-3 mt-6 mb-2">
+            <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] italic opacity-50">System</span>
+          </div>
+          <NavItem 
+            icon={isAdmin ? <Settings size={18} /> : <Lock size={18} />} 
+            label="Admin Panel" 
+            active={view === 'settings'} 
+            collapsed={!sidebarOpen && window.innerWidth >= 768}
+            disabled={!isAdmin}
+            onClick={() => {
+              setView('settings');
+              if (window.innerWidth < 768) setSidebarOpen(false);
+            }}
+          />
+
         </nav>
-
-        {/* Sidebar footer */}
-        <div className={`${sidebarOpen ? 'px-3' : 'px-2'} pb-4`}>
-          <div className={`rounded-2xl border border-white/[0.06] bg-white/[0.035] ${sidebarOpen ? 'p-3' : 'p-2'} transition-colors`}>
-            <div className={`flex items-center ${sidebarOpen ? 'gap-3' : 'justify-center'}`}>
-              <div className={`relative ${sidebarOpen ? 'w-9 h-9' : 'w-10 h-10'} rounded-full flex items-center justify-center text-white font-black text-xs shrink-0 ${isAdmin ? 'bg-emerald-500' : 'bg-slate-600'} ring-4 ring-white/[0.03]`}>
-                {isAdmin ? (adminUsername ? adminUsername.charAt(0).toUpperCase() : 'A') : <User size={16} />}
-                <span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full ${isAdmin ? 'bg-emerald-300' : 'bg-slate-500'} border-2 border-[#101a2e]`} />
-              </div>
-              {sidebarOpen && (
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-[11px] font-black text-slate-200">{isAdmin ? (adminUsername || 'Admin') : 'Guest User'}</p>
-                  <p className="mt-0.5 text-[9px] font-bold uppercase tracking-[0.14em] text-slate-500">{isAdmin ? 'Administrator' : 'View only'}</p>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
       </aside>
 
       <div className="flex-1 flex flex-col min-w-0">
@@ -1001,7 +982,7 @@ export default function App() {
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto p-6 min-h-0 bg-slate-50/30 flex flex-col">
+        <main className="flex-1 overflow-y-auto p-5 md:p-6 min-h-0 bg-[#f6f8fb] flex flex-col">
           <AnimatePresence mode="wait">
             {view === 'dashboard' && (
               <motion.div 
@@ -1261,57 +1242,112 @@ export default function App() {
                 animate={{ opacity: 1 }}
                 className="flex-1 flex flex-col min-h-0 bg-transparent space-y-4"
               >
-                {/* Action Bar: Import Excel, Export Excel, and Add Finding */}
-                <div className="flex items-center gap-3 justify-end flex-wrap">
-                  <button 
-                    onClick={() => setShowImportModal(true)}
-                    className="flex items-center justify-center gap-2 px-5 py-2.5 bg-white text-blue-600 border border-blue-200 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-50 transition-all whitespace-nowrap shadow-sm"
-                  >
-                    <Upload size={14} />
-                    Import Excel
-                  </button>
-
-                  <button 
-                    onClick={() => exportToExcel(records)}
-                    className="flex items-center justify-center gap-2 px-5 py-2.5 bg-white text-emerald-600 border border-emerald-200 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-50 transition-all whitespace-nowrap shadow-sm"
-                  >
-                    <Download size={14} />
-                    Export Excel
-                  </button>
-
-                  <button 
-                    onClick={() => { setEditingId(null); setView('add-audit'); }}
-                    className="flex items-center justify-center gap-2 px-6 py-2.5 bg-brand-orange text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-brand-orange/20 hover:brightness-110 transition-all whitespace-nowrap"
-                  >
-                    <Plus size={16} />
-                    Add Finding
-                  </button>
-                </div>
-
-                {/* Filter & Search Bar Band */}
-                <div className="bg-[#fffbeb]/50 p-4 rounded-2xl border border-amber-200/60 flex flex-col md:flex-row items-center gap-4 shadow-sm">
-                  <div className="relative flex-1 w-full">
-                    <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input 
-                      type="text" 
-                      placeholder="Search records by keyword, platform, station..." 
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full bg-white border border-slate-200 rounded-xl text-xs font-bold pl-10 pr-4 py-3 outline-none focus:border-brand-orange shadow-inner transition-all"
-                    />
+                {/* Page toolbar: clear hierarchy, primary action, and contextual record count */}
+                <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-base font-black text-slate-800 tracking-tight">IPQC Records</h3>
+                      <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-[9px] font-black uppercase tracking-widest text-slate-500">
+                        {records.length.toLocaleString()} total
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[11px] font-medium text-slate-400">Review, filter and manage inspection findings from one workspace.</p>
                   </div>
 
-                  <div className="flex items-center gap-3 w-full md:w-auto justify-end">
-                    <button 
-                      onClick={() => setFiltersOpen(!filtersOpen)}
-                      className={`w-full md:w-auto flex items-center justify-center gap-2 px-5 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${
-                        filtersOpen ? 'bg-slate-800 text-white border-slate-800 shadow-md' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-                      }`}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={() => setShowImportModal(true)}
+                      className="group inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-[10px] font-black uppercase tracking-widest text-slate-600 shadow-sm transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-500/10"
                     >
-                      <Filter size={14} />
-                      {filtersOpen ? 'Hide Filter' : 'Advanced Filter'}
+                      <Upload size={14} className="text-blue-600 transition-transform group-hover:-translate-y-0.5" />
+                      Import
+                    </button>
+                    <button
+                      onClick={() => exportToExcel(records)}
+                      className="group inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-[10px] font-black uppercase tracking-widest text-slate-600 shadow-sm transition-all hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700 focus:outline-none focus:ring-4 focus:ring-emerald-500/10"
+                    >
+                      <Download size={14} className="text-emerald-600 transition-transform group-hover:translate-y-0.5" />
+                      Export
+                    </button>
+                    <button
+                      onClick={() => { setEditingId(null); setView('add-audit'); }}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand-orange px-5 py-2.5 text-[10px] font-black uppercase tracking-widest text-white shadow-lg shadow-brand-orange/20 transition-all hover:-translate-y-0.5 hover:brightness-110 focus:outline-none focus:ring-4 focus:ring-brand-orange/20 active:translate-y-0"
+                    >
+                      <Plus size={16} />
+                      Add Finding
                     </button>
                   </div>
+                </div>
+
+                {/* Search + filter controls: one clear interaction band */}
+                <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+                  <div className="flex flex-col lg:flex-row lg:items-center gap-3">
+                    <div className="relative flex-1 min-w-0">
+                      <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="text"
+                        placeholder="Search by keyword, platform, station, auditor..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50/70 py-3 pl-11 pr-16 text-xs font-semibold text-slate-700 outline-none transition-all placeholder:text-slate-400 focus:border-brand-orange focus:bg-white focus:ring-4 focus:ring-brand-orange/5"
+                      />
+                      {searchQuery && (
+                        <button
+                          onClick={() => setSearchQuery('')}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                          title="Clear search"
+                        >
+                          <X size={14} />
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        onClick={() => setFiltersOpen(!filtersOpen)}
+                        aria-expanded={filtersOpen}
+                        className={`inline-flex h-[46px] items-center justify-center gap-2 rounded-xl border px-4 text-[10px] font-black uppercase tracking-widest transition-all focus:outline-none focus:ring-4 focus:ring-slate-500/10 ${
+                          filtersOpen
+                            ? 'border-slate-800 bg-slate-800 text-white shadow-md'
+                            : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
+                        }`}
+                      >
+                        <Filter size={14} />
+                        Filters
+                        {activeFilterCount > 0 && (
+                          <span className={`min-w-5 h-5 px-1.5 rounded-full inline-flex items-center justify-center text-[9px] font-black ${filtersOpen ? 'bg-white text-slate-800' : 'bg-brand-orange text-white'}`}>
+                            {activeFilterCount}
+                          </span>
+                        )}
+                      </button>
+                      {hasActiveQuery && (
+                        <button
+                          onClick={() => {
+                            setFilterDate('');
+                            setFilterAuditor('');
+                            setFilterFindings('');
+                            setFilterDept('');
+                            setFilterCategory('');
+                            setFilterStatus('');
+                            setFilterShift('');
+                            setFilterPlatform('');
+                            setFilterWW('');
+                            setSearchQuery('');
+                          }}
+                          className="h-[46px] rounded-xl px-3 text-[10px] font-black uppercase tracking-widest text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                        >
+                          Clear all
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {(searchQuery || activeFilterCount > 0) && (
+                    <div className="mt-2 flex items-center justify-between px-1 text-[10px] font-semibold text-slate-400">
+                      <span>Showing <span className="font-black text-slate-700">{filteredRecords.length.toLocaleString()}</span> matching record{filteredRecords.length === 1 ? '' : 's'}</span>
+                      <span className="hidden sm:inline">Tip: click a row to open the full finding</span>
+                    </div>
+                  )}
                 </div>
 
                 <AnimatePresence>
@@ -1322,7 +1358,17 @@ export default function App() {
                       exit={{ height: 0, opacity: 0, marginBottom: 0 }}
                       className="overflow-hidden"
                     >
-                      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+                      <div className="bg-slate-50/70 p-5 rounded-2xl border border-slate-200 shadow-inner">
+                        <div className="flex items-center justify-between mb-4">
+                          <div>
+                            <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-700">Advanced filters</h4>
+                            <p className="mt-1 text-[10px] font-medium text-slate-400">Narrow records by date, ownership, status and production context.</p>
+                          </div>
+                          {activeFilterCount > 0 && (
+                            <span className="rounded-full bg-brand-orange/10 px-2.5 py-1 text-[9px] font-black uppercase tracking-widest text-brand-orange">{activeFilterCount} active</span>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
                         <FilterInput label="Work Week (WW)" type="select" options={WWS} value={filterWW} onChange={setFilterWW} />
                         <FilterInput label="Date" type="date" value={filterDate} onChange={setFilterDate} />
                         <FilterInput label="Shift" type="select" options={SHIFTS} value={filterShift} onChange={setFilterShift} />
@@ -1350,34 +1396,35 @@ export default function App() {
                             Clear Filters
                           </button>
                         </div>
+                        </div>
                       </div>
                     </motion.div>
                   )}
                 </AnimatePresence>
 
-                <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden flex flex-col flex-1 shadow-sm min-h-0">
+                <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden flex flex-col flex-1 shadow-[0_8px_30px_rgba(15,23,42,0.05)] min-h-0">
                   <div className="overflow-auto flex-1 custom-scrollbar">
                     <table className="w-full text-left border-collapse min-w-[1650px]">
-                      <thead className="bg-slate-100 sticky top-0 z-20 shadow-[0_2px_4px_rgba(0,0,0,0.05)]">
+                      <thead className="bg-slate-50/95 backdrop-blur sticky top-0 z-20 shadow-[0_1px_0_rgba(15,23,42,0.08)]">
                         <tr>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200 text-center sticky left-0 bg-slate-100 z-30 shadow-[2px_0_5px_rgba(0,0,0,0.03)] w-16">No</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200">Date</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200 text-center">WW</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200 text-center">Shift</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200">Auditor Name</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200">PIC Finding</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200">Department</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200">Platform</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200">MQE Engineer</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200 bg-slate-200/50">Station / Area</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200">Group Finding</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200">Category</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200">Finding Details</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200 text-center">Image</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200">Remark</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200 text-center">ICAR Status</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-r border-slate-200">ICAR#</th>
-                          <th className="px-4 py-4 text-[9px] font-black text-slate-600 uppercase tracking-widest border-b border-slate-200 text-right">Actions</th>
+                          <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200 text-center sticky left-0 bg-slate-100 z-30 shadow-[2px_0_5px_rgba(0,0,0,0.03)] w-16">No</th>
+                          <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200">Date</th>
+                          <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200 text-center">WW</th>
+                          <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200 text-center">Shift</th>
+                          <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200">Auditor Name</th>
+                          <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200">PIC Finding</th>
+                          <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200">Department</th>
+                          <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200">Platform</th>
+                          <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200">MQE Engineer</th>
+                          <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200 bg-slate-200/50">Station / Area</th>
+                          <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200">Group Finding</th>
+                          <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200">Category</th>
+                          <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200">Finding Details</th>
+                          <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200 text-center">Image</th>
+                          <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200">Remark</th>
+                          <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200 text-center">ICAR Status</th>
+                          <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200">ICAR#</th>
+                          <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 text-right">Actions</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-200">
@@ -1385,8 +1432,8 @@ export default function App() {
                           <tr 
                             key={record.id} 
                             onClick={() => setSelectedRecord(record)}
-                            className={`transition-all duration-150 text-[11px] text-slate-700 cursor-pointer group hover:bg-orange-50/60 ${
-                              index % 2 === 0 ? 'bg-white' : 'bg-slate-50/70'
+                            className={`transition-colors duration-150 text-[11px] text-slate-700 cursor-pointer group border-l-2 border-transparent hover:bg-orange-50/40 hover:border-l-brand-orange/60 ${
+                              index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'
                             }`}
                           >
                             <td className="px-4 py-4 text-center font-bold text-slate-500 border-r border-slate-200 sticky left-0 bg-inherit z-10 shadow-[2px_0_5px_rgba(0,0,0,0.02)] group-hover:text-brand-orange">
@@ -1430,21 +1477,54 @@ export default function App() {
                             </td>
                             <td className="px-4 py-4 font-mono text-[10px] font-bold text-slate-600 border-r border-slate-100">{record.icarNum || 'N/A'}</td>
                             <td className="px-4 py-4 text-right" onClick={e => e.stopPropagation()}>
-                              <div className="flex justify-end items-center gap-2">
-                                <button 
-                                  onClick={() => handleEditClick(record)}
-                                  className="p-2 hover:bg-white rounded-lg text-slate-500 hover:text-brand-orange shadow-sm transition-all border border-slate-200"
-                                  title="Edit"
+                              <div className="relative flex justify-end">
+                                <button
+                                  onClick={() => setOpenRowAction(openRowAction === record.id ? null : record.id)}
+                                  className={`inline-flex h-9 w-9 items-center justify-center rounded-lg border transition-all ${
+                                    openRowAction === record.id
+                                      ? 'border-slate-300 bg-slate-100 text-slate-800 shadow-sm'
+                                      : 'border-transparent text-slate-400 hover:border-slate-200 hover:bg-slate-50 hover:text-slate-700'
+                                  }`}
+                                  title="Row actions"
+                                  aria-label={`Actions for finding ${record.no ?? ''}`}
+                                  aria-expanded={openRowAction === record.id}
                                 >
-                                  <Pencil size={14} />
+                                  <MoreVertical size={16} />
                                 </button>
-                                <button 
-                                  onClick={() => handleDeleteRecord(record.id)}
-                                  className="p-2 hover:bg-rose-50 rounded-lg text-slate-500 hover:text-rose-600 shadow-sm transition-all border border-slate-200"
-                                  title="Delete"
-                                >
-                                  <Trash2 size={14} />
-                                </button>
+
+                                <AnimatePresence>
+                                  {openRowAction === record.id && (
+                                    <motion.div
+                                      initial={{ opacity: 0, y: -4, scale: 0.98 }}
+                                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                                      exit={{ opacity: 0, y: -4, scale: 0.98 }}
+                                      transition={{ duration: 0.12 }}
+                                      className="absolute right-0 top-full mt-2 z-50 w-44 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl"
+                                    >
+                                      <button
+                                        onClick={() => { setSelectedRecord(record); setOpenRowAction(null); }}
+                                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-[11px] font-bold text-slate-700 transition-colors hover:bg-slate-50"
+                                      >
+                                        <Layers size={14} className="text-slate-400" />
+                                        View details
+                                      </button>
+                                      <button
+                                        onClick={() => { handleEditClick(record); setOpenRowAction(null); }}
+                                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-[11px] font-bold text-slate-700 transition-colors hover:bg-orange-50 hover:text-brand-orange"
+                                      >
+                                        <Pencil size={14} />
+                                        Edit finding
+                                      </button>
+                                      <button
+                                        onClick={() => { setOpenRowAction(null); handleDeleteRecord(record.id); }}
+                                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-[11px] font-bold text-rose-600 transition-colors hover:bg-rose-50"
+                                      >
+                                        <Trash2 size={14} />
+                                        Delete finding
+                                      </button>
+                                    </motion.div>
+                                  )}
+                                </AnimatePresence>
                               </div>
                             </td>
                           </tr>
@@ -1464,7 +1544,7 @@ export default function App() {
                   )}
 
                   {filteredRecords.length > 0 && (
-                    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-5 py-3 bg-white border-t border-slate-200 shrink-0">
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-5 py-3.5 bg-slate-50/70 border-t border-slate-200 shrink-0">
                       <div className="flex items-center gap-3 text-[11px] font-bold text-slate-500">
                         <span>
                           Showing <span className="text-slate-800">{(currentPage - 1) * pageSize + 1}</span>
@@ -1476,7 +1556,7 @@ export default function App() {
                         <select
                           value={pageSize}
                           onChange={(e) => setPageSize(Number(e.target.value))}
-                          className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] font-black text-slate-600 outline-none focus:border-brand-orange cursor-pointer"
+                          className="bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-[11px] font-black text-slate-600 outline-none focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/5 cursor-pointer"
                         >
                           <option value={25}>25 / page</option>
                           <option value={50}>50 / page</option>
@@ -2126,56 +2206,22 @@ export default function App() {
   );
 }
 
-function NavSection({ label, collapsed, className = '', children }: { label: string, collapsed: boolean, className?: string, children: ReactNode }) {
+function NavItem({ icon, label, active, collapsed, onClick, disabled }: { icon: any, label: string, active: boolean, collapsed: boolean, onClick: () => void, disabled?: boolean }) {
   return (
-    <section className={className}>
-      {!collapsed && (
-        <div className="px-3 mb-2 flex items-center gap-2">
-          <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em]">{label}</span>
-          <span className="h-px flex-1 bg-white/[0.05]" />
-        </div>
-      )}
-      {children}
-    </section>
-  );
-}
-
-function NavItem({ icon, label, active, collapsed, onClick, disabled, badge }: { icon: any, label: string, active: boolean, collapsed: boolean, onClick: () => void, disabled?: boolean, badge?: number }) {
-  return (
-    <button
+    <button 
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
-      title={disabled ? 'Requires admin login' : label}
-      aria-current={active ? 'page' : undefined}
-      className={`group relative w-full min-h-[48px] flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3.5'} rounded-[14px] transition-all duration-200 text-[11px] font-semibold ${
+      title={disabled ? 'Requires admin login' : undefined}
+      className={`w-full flex items-center gap-3 px-5 py-3 transition-all duration-200 text-[11px] font-semibold border-l-2 ${
         disabled
-          ? 'text-slate-600 opacity-45 cursor-not-allowed'
-          : active
-            ? 'bg-brand-orange/[0.12] text-white ring-1 ring-brand-orange/20 shadow-[0_8px_24px_rgba(241,93,34,0.08)]'
-            : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.045]'
+          ? 'text-slate-600 opacity-40 cursor-not-allowed border-transparent'
+          : active 
+            ? 'bg-sidebar-active text-white border-brand-orange shadow-[inset_0_0_20px_rgba(241,93,34,0.1)]' 
+            : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border-transparent'
       }`}
     >
-      {active && !disabled && <span className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-7 rounded-r-full bg-brand-orange" />}
-      <div className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-[11px] transition-all ${
-        disabled
-          ? 'text-slate-600 bg-white/[0.02]'
-          : active
-            ? 'bg-brand-orange/15 text-brand-orange shadow-[inset_0_0_0_1px_rgba(241,93,34,0.12)]'
-            : 'text-slate-500 bg-white/[0.025] group-hover:text-slate-200 group-hover:bg-white/[0.055]'
-      }`}>
-        {icon}
-      </div>
-      {!collapsed && (
-        <span className="min-w-0 flex-1 truncate text-left tracking-[0.04em]">{label}</span>
-      )}
-      {!collapsed && badge !== undefined && !disabled && (
-        <span className={`min-w-[22px] px-1.5 py-1 rounded-full text-center text-[9px] font-black leading-none ${active ? 'bg-brand-orange text-white' : 'bg-white/[0.06] text-slate-400'}`}>
-          {badge > 999 ? '999+' : badge}
-        </span>
-      )}
-      {collapsed && badge !== undefined && !disabled && badge > 0 && (
-        <span className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-brand-orange ring-2 ring-[#0b1324]" />
-      )}
+      <div className={`shrink-0 transition-colors ${active && !disabled ? 'text-brand-orange' : ''}`}>{icon}</div>
+      {!collapsed && <span className="tracking-wide uppercase whitespace-nowrap">{label}</span>}
     </button>
   );
 }
@@ -2220,7 +2266,7 @@ function FilterInput({ label, value, onChange, type = 'text', options = [], plac
             {options.map((opt: any) => <option key={opt} value={opt}>{opt}</option>)}
           </select>
           <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-300">
-            <MoreVertical size={12} />
+            <ChevronDown size={13} />
           </div>
         </div>
       ) : (
