@@ -913,11 +913,6 @@ export default function App() {
               <Menu size={20} />
             </button>
             <h2 className="text-sm md:text-lg font-black text-slate-800 uppercase tracking-tight truncate">{headerTitle}</h2>
-            {view === 'ipqc' && (
-              <span className="hidden md:inline text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap border-l border-slate-200 pl-3 ml-1">
-                {records.length} Total &middot; {records.filter(r => r.icarStatus === 'Locked').length} Locked &middot; {records.filter(r => r.icarStatus === 'Submitted').length} Submitted
-              </span>
-            )}
           </div>
 
           <div className="flex items-center gap-4">
@@ -1242,7 +1237,7 @@ export default function App() {
                 className="flex-1 flex flex-col min-h-0 bg-transparent space-y-4"
               >
                 {/* Action Bar: Import Excel, Export Excel, and Add Finding */}
-                <div className="flex items-center gap-3 w-full justify-end flex-wrap bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+                <div className="flex items-center gap-3 justify-end flex-wrap">
                   <button 
                     onClick={() => setShowImportModal(true)}
                     className="flex items-center justify-center gap-2 px-5 py-2.5 bg-white text-blue-600 border border-blue-200 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-50 transition-all whitespace-nowrap shadow-sm"
