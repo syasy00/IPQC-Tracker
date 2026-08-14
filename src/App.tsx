@@ -1,4 +1,4 @@
-import { useState, useMemo, FormEvent, useRef, ChangeEvent, useEffect } from 'react';
+import { useState, useMemo, FormEvent, useRef, ChangeEvent, useEffect, type ReactNode } from 'react';
 import { 
   LayoutDashboard, 
   ClipboardCheck, 
@@ -854,53 +854,78 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <aside className={`fixed md:static inset-y-0 left-0 z-50 bg-sidebar-bg transition-all duration-300 flex flex-col shrink-0 overflow-hidden ${sidebarOpen ? 'w-[220px] translate-x-0' : 'w-0 -translate-x-full md:w-20 md:translate-x-0'}`}>
-        <div className="p-6 flex items-center gap-3 border-b border-white/5">
-          <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 overflow-hidden bg-brand-orange text-white font-black text-xs">
-            Q
+      <aside className={`fixed md:static inset-y-0 left-0 z-50 bg-[#0b1324] transition-all duration-300 flex flex-col shrink-0 overflow-hidden border-r border-white/[0.06] shadow-[14px_0_40px_rgba(2,8,23,0.08)] ${sidebarOpen ? 'w-[252px] translate-x-0' : 'w-0 -translate-x-full md:w-[76px] md:translate-x-0'}`}>
+        {/* Brand */}
+        <div className={`${sidebarOpen ? 'px-5' : 'px-3'} py-5 border-b border-white/[0.06]`}>
+          <div className={`flex items-center ${sidebarOpen ? 'gap-3' : 'justify-center'}`}>
+            <div className="relative w-10 h-10 rounded-[13px] flex items-center justify-center shrink-0 overflow-hidden bg-brand-orange text-white font-black text-sm shadow-[0_8px_24px_rgba(241,93,34,0.28)]">
+              Q
+              <span className="absolute inset-x-2 bottom-1 h-px bg-white/30" />
+            </div>
+            {sidebarOpen && (
+              <div className="min-w-0">
+                <h1 className="text-sm font-black tracking-tight text-white uppercase whitespace-nowrap">IPQC Tracker</h1>
+                <p className="mt-0.5 text-[9px] font-bold tracking-[0.18em] text-slate-500 uppercase whitespace-nowrap">Quality Control Hub</p>
+              </div>
+            )}
           </div>
-          <h1 className="font-black text-xs tracking-widest text-white uppercase whitespace-nowrap">IPQC TRACKER</h1>
         </div>
 
-        <nav className="flex-1 space-y-1 mt-6 overflow-y-auto px-3">
-          <div className="px-3 mb-2">
-            <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] italic opacity-50">Insights</span>
-          </div>
-          <NavItem 
-            icon={<LayoutDashboard size={18} />} 
-            label="Analytics" 
-            active={view === 'dashboard'} 
-            collapsed={!sidebarOpen && window.innerWidth >= 768}
-            onClick={() => { setView('dashboard'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-          />
+        {/* Navigation */}
+        <nav className={`${sidebarOpen ? 'px-3' : 'px-2'} flex-1 overflow-y-auto py-5 custom-scrollbar`}>
+          <NavSection label="Insights" collapsed={!sidebarOpen}>
+            <NavItem
+              icon={<LayoutDashboard size={18} strokeWidth={1.9} />}
+              label="Analytics"
+              active={view === 'dashboard'}
+              collapsed={!sidebarOpen}
+              onClick={() => { setView('dashboard'); if (window.innerWidth < 768) setSidebarOpen(false); }}
+            />
+          </NavSection>
 
-          <div className="px-3 mt-6 mb-2">
-            <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] italic opacity-50">Operations</span>
-          </div>
-          <NavItem 
-            icon={<ClipboardCheck size={18} />} 
-            label="IPQC Records" 
-            active={view === 'ipqc'} 
-            collapsed={!sidebarOpen && window.innerWidth >= 768}
-            onClick={() => { setView('ipqc'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-          />
+          <NavSection label="Operations" collapsed={!sidebarOpen} className="mt-7">
+            <NavItem
+              icon={<ClipboardCheck size={18} strokeWidth={1.9} />}
+              label="IPQC Records"
+              badge={records.length > 0 ? records.length : undefined}
+              active={view === 'ipqc'}
+              collapsed={!sidebarOpen}
+              onClick={() => { setView('ipqc'); if (window.innerWidth < 768) setSidebarOpen(false); }}
+            />
+          </NavSection>
 
-          <div className="px-3 mt-6 mb-2">
-            <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] italic opacity-50">System</span>
-          </div>
-          <NavItem 
-            icon={isAdmin ? <Settings size={18} /> : <Lock size={18} />} 
-            label="Admin Panel" 
-            active={view === 'settings'} 
-            collapsed={!sidebarOpen && window.innerWidth >= 768}
-            disabled={!isAdmin}
-            onClick={() => {
-              setView('settings');
-              if (window.innerWidth < 768) setSidebarOpen(false);
-            }}
-          />
-
+          <NavSection label="System" collapsed={!sidebarOpen} className="mt-7">
+            <NavItem
+              icon={isAdmin ? <Settings size={18} strokeWidth={1.9} /> : <Lock size={17} strokeWidth={1.9} />}
+              label="Admin Panel"
+              active={view === 'settings'}
+              collapsed={!sidebarOpen}
+              disabled={!isAdmin}
+              onClick={() => {
+                setView('settings');
+                if (window.innerWidth < 768) setSidebarOpen(false);
+              }}
+            />
+          </NavSection>
         </nav>
+
+        {/* Sidebar footer */}
+        <div className={`${sidebarOpen ? 'px-3' : 'px-2'} pb-4`}>
+          <div className={`rounded-2xl border border-white/[0.06] bg-white/[0.035] ${sidebarOpen ? 'p-3' : 'p-2'} transition-colors`}>
+            <div className={`flex items-center ${sidebarOpen ? 'gap-3' : 'justify-center'}`}>
+              <div className={`relative ${sidebarOpen ? 'w-9 h-9' : 'w-10 h-10'} rounded-full flex items-center justify-center text-white font-black text-xs shrink-0 ${isAdmin ? 'bg-emerald-500' : 'bg-slate-600'} ring-4 ring-white/[0.03]`}>
+                {isAdmin ? (adminUsername ? adminUsername.charAt(0).toUpperCase() : 'A') : <User size={16} />}
+                <span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full ${isAdmin ? 'bg-emerald-300' : 'bg-slate-500'} border-2 border-[#101a2e]`} />
+              </div>
+              {sidebarOpen && (
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[11px] font-black text-slate-200">{isAdmin ? (adminUsername || 'Admin') : 'Guest User'}</p>
+                  <p className="mt-0.5 text-[9px] font-bold uppercase tracking-[0.14em] text-slate-500">{isAdmin ? 'Administrator' : 'View only'}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       </aside>
 
       <div className="flex-1 flex flex-col min-w-0">
@@ -2101,22 +2126,56 @@ export default function App() {
   );
 }
 
-function NavItem({ icon, label, active, collapsed, onClick, disabled }: { icon: any, label: string, active: boolean, collapsed: boolean, onClick: () => void, disabled?: boolean }) {
+function NavSection({ label, collapsed, className = '', children }: { label: string, collapsed: boolean, className?: string, children: ReactNode }) {
   return (
-    <button 
+    <section className={className}>
+      {!collapsed && (
+        <div className="px-3 mb-2 flex items-center gap-2">
+          <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em]">{label}</span>
+          <span className="h-px flex-1 bg-white/[0.05]" />
+        </div>
+      )}
+      {children}
+    </section>
+  );
+}
+
+function NavItem({ icon, label, active, collapsed, onClick, disabled, badge }: { icon: any, label: string, active: boolean, collapsed: boolean, onClick: () => void, disabled?: boolean, badge?: number }) {
+  return (
+    <button
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
-      title={disabled ? 'Requires admin login' : undefined}
-      className={`w-full flex items-center gap-3 px-5 py-3 transition-all duration-200 text-[11px] font-semibold border-l-2 ${
+      title={disabled ? 'Requires admin login' : label}
+      aria-current={active ? 'page' : undefined}
+      className={`group relative w-full min-h-[48px] flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3.5'} rounded-[14px] transition-all duration-200 text-[11px] font-semibold ${
         disabled
-          ? 'text-slate-600 opacity-40 cursor-not-allowed border-transparent'
-          : active 
-            ? 'bg-sidebar-active text-white border-brand-orange shadow-[inset_0_0_20px_rgba(241,93,34,0.1)]' 
-            : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border-transparent'
+          ? 'text-slate-600 opacity-45 cursor-not-allowed'
+          : active
+            ? 'bg-brand-orange/[0.12] text-white ring-1 ring-brand-orange/20 shadow-[0_8px_24px_rgba(241,93,34,0.08)]'
+            : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.045]'
       }`}
     >
-      <div className={`shrink-0 transition-colors ${active && !disabled ? 'text-brand-orange' : ''}`}>{icon}</div>
-      {!collapsed && <span className="tracking-wide uppercase whitespace-nowrap">{label}</span>}
+      {active && !disabled && <span className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-7 rounded-r-full bg-brand-orange" />}
+      <div className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-[11px] transition-all ${
+        disabled
+          ? 'text-slate-600 bg-white/[0.02]'
+          : active
+            ? 'bg-brand-orange/15 text-brand-orange shadow-[inset_0_0_0_1px_rgba(241,93,34,0.12)]'
+            : 'text-slate-500 bg-white/[0.025] group-hover:text-slate-200 group-hover:bg-white/[0.055]'
+      }`}>
+        {icon}
+      </div>
+      {!collapsed && (
+        <span className="min-w-0 flex-1 truncate text-left tracking-[0.04em]">{label}</span>
+      )}
+      {!collapsed && badge !== undefined && !disabled && (
+        <span className={`min-w-[22px] px-1.5 py-1 rounded-full text-center text-[9px] font-black leading-none ${active ? 'bg-brand-orange text-white' : 'bg-white/[0.06] text-slate-400'}`}>
+          {badge > 999 ? '999+' : badge}
+        </span>
+      )}
+      {collapsed && badge !== undefined && !disabled && badge > 0 && (
+        <span className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-brand-orange ring-2 ring-[#0b1324]" />
+      )}
     </button>
   );
 }
