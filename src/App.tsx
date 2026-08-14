@@ -26,7 +26,9 @@ import {
   ChevronsLeft,
   ChevronsRight,
   LogIn,
-  LogOut
+  LogOut,
+  User,
+  ChevronDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -207,6 +209,20 @@ export default function App() {
   // Distinguishes "your token expired mid-session" from a fresh login attempt,
   // so we can explain *why* the modal popped up instead of just showing it.
   const [sessionExpired, setSessionExpired] = useState(false);
+
+  // Profile menu (avatar dropdown in header) - closes on outside click
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(e.target as Node)) {
+        setProfileMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
   
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
@@ -810,6 +826,20 @@ export default function App() {
     }
   };
 
+  // Header title changes with the active tab, replacing the old static
+  // "IPQC TRACKER" label + the separate "IPQC Records Management" panel
+  // that used to repeat the same info and eat vertical space.
+  const viewTitles: Record<ViewState, string> = {
+    dashboard: 'Analytics Dashboard',
+    ipqc: 'IPQC Records',
+    import: 'Import Records',
+    checklist: 'Checklist',
+    'add-audit': editingId ? 'Edit Finding' : 'Add Finding',
+    history: 'History',
+    settings: 'Admin Panel',
+  };
+  const headerTitle = viewTitles[view] || 'IPQC Tracker';
+
   return (
     <div className="flex h-screen bg-bg-main font-sans text-text-main">
       <AnimatePresence>
@@ -882,49 +912,72 @@ export default function App() {
             >
               <Menu size={20} />
             </button>
-            <h2 className="text-sm md:text-lg font-black text-slate-800 uppercase tracking-tight truncate">IPQC TRACKER</h2>
+            <h2 className="text-sm md:text-lg font-black text-slate-800 uppercase tracking-tight truncate">{headerTitle}</h2>
+            {view === 'ipqc' && (
+              <span className="hidden md:inline text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap border-l border-slate-200 pl-3 ml-1">
+                {records.length} Total &middot; {records.filter(r => r.icarStatus === 'Locked').length} Locked &middot; {records.filter(r => r.icarStatus === 'Submitted').length} Submitted
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-4">
-            {isAdmin ? (
-              <div className="flex items-center gap-2">
-                {/* Identity chip - shows who's signed in. Not clickable, so
-                    hovering/tapping it can never trigger a sign-out by accident. */}
-                <div
-                  className="flex items-center gap-2 pl-2 pr-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-xl border border-emerald-100"
-                  title={adminUsername ? `Signed in as ${adminUsername}` : 'Signed in as admin'}
-                >
-                  <span className="relative flex h-2 w-2 shrink-0">
-                    <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping" />
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-                  </span>
-                  <span className="text-[10px] font-black uppercase tracking-widest hidden sm:inline max-w-[120px] truncate">
-                    {adminUsername || 'Admin'}
-                  </span>
-                </div>
-
-                {/* Explicit, separate sign-out action - deliberately its own
-                    target so it reads as a distinct destructive action, not
-                    part of the identity chip. */}
-                <button
-                  onClick={logout}
-                  className="flex items-center justify-center w-9 h-9 rounded-xl text-slate-400 bg-white border border-slate-200 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 transition-colors"
-                  title="Sign out"
-                  aria-label="Sign out"
-                >
-                  <LogOut size={15} />
-                </button>
-              </div>
-            ) : (
-              <button 
-                onClick={() => setShowLoginModal(true)}
-                className="flex items-center gap-2 pl-3 pr-4 py-1.5 bg-slate-800 text-white rounded-xl hover:bg-slate-900 transition-colors shadow-sm"
-                title="Admin Login"
+            <div className="relative" ref={profileMenuRef}>
+              <button
+                onClick={() => setProfileMenuOpen(o => !o)}
+                className="flex items-center gap-1.5 pl-1.5 pr-2 py-1.5 rounded-full border border-transparent hover:border-slate-200 hover:bg-slate-50 transition-colors"
+                aria-label="Account menu"
               >
-                <LogIn size={14} />
-                <span className="text-[10px] font-black uppercase tracking-widest">Log In</span>
+                <div className={`relative w-8 h-8 rounded-full flex items-center justify-center text-white font-black text-xs shrink-0 ${isAdmin ? 'bg-emerald-500' : 'bg-slate-400'}`}>
+                  {isAdmin ? (adminUsername ? adminUsername.charAt(0).toUpperCase() : 'A') : <User size={16} />}
+                  {isAdmin && (
+                    <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-400 border-2 border-white" />
+                  )}
+                </div>
+                <ChevronDown size={14} className={`hidden sm:block text-slate-400 transition-transform ${profileMenuOpen ? 'rotate-180' : ''}`} />
               </button>
-            )}
+
+              <AnimatePresence>
+                {profileMenuOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -8, scale: 0.97 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -8, scale: 0.97 }}
+                    transition={{ duration: 0.15 }}
+                    className="absolute right-0 top-full mt-2 w-64 bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden z-50"
+                  >
+                    <div className="p-4 flex items-center gap-3 border-b border-slate-100 bg-slate-50/60">
+                      <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-black text-sm shrink-0 ${isAdmin ? 'bg-emerald-500' : 'bg-slate-400'}`}>
+                        {isAdmin ? (adminUsername ? adminUsername.charAt(0).toUpperCase() : 'A') : <User size={18} />}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs font-black text-slate-800 truncate">{isAdmin ? (adminUsername || 'Admin') : 'Guest'}</p>
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                          {isAdmin ? 'Administrator' : 'Viewing as guest'}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="p-2">
+                      {isAdmin ? (
+                        <button
+                          onClick={() => { logout(); setProfileMenuOpen(false); }}
+                          className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-rose-600 hover:bg-rose-50 transition-colors text-[11px] font-black uppercase tracking-widest"
+                        >
+                          <LogOut size={15} /> Sign Out
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => { setShowLoginModal(true); setProfileMenuOpen(false); }}
+                          className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-slate-700 hover:bg-slate-50 transition-colors text-[11px] font-black uppercase tracking-widest"
+                        >
+                          <LogIn size={15} /> Log In as Admin
+                        </button>
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
           </div>
         </header>
 
@@ -1188,40 +1241,31 @@ export default function App() {
                 animate={{ opacity: 1 }}
                 className="flex-1 flex flex-col min-h-0 bg-transparent space-y-4"
               >
-                {/* Top Action Bar: Import Excel, Export All, and Add Finding on Top Right */}
-                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-                  <div>
-                    <h2 className="text-base font-black uppercase tracking-tight text-slate-800">IPQC Records Management</h2>
-                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-0.5">
-                      {records.length} Total &middot; {records.filter(r => r.icarStatus === 'Locked').length} Locked &middot; {records.filter(r => r.icarStatus === 'Submitted').length} Submitted
-                    </p>
-                  </div>
+                {/* Action Bar: Import Excel, Export Excel, and Add Finding */}
+                <div className="flex items-center gap-3 w-full justify-end flex-wrap bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+                  <button 
+                    onClick={() => setShowImportModal(true)}
+                    className="flex items-center justify-center gap-2 px-5 py-2.5 bg-white text-blue-600 border border-blue-200 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-50 transition-all whitespace-nowrap shadow-sm"
+                  >
+                    <Upload size={14} />
+                    Import Excel
+                  </button>
 
-                  <div className="flex items-center gap-3 w-full sm:w-auto justify-end flex-wrap">
-                    <button 
-                      onClick={() => setShowImportModal(true)}
-                      className="flex items-center justify-center gap-2 px-5 py-2.5 bg-white text-blue-600 border border-blue-200 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-50 transition-all whitespace-nowrap shadow-sm"
-                    >
-                      <Upload size={14} />
-                      Import Excel
-                    </button>
+                  <button 
+                    onClick={() => exportToExcel(records)}
+                    className="flex items-center justify-center gap-2 px-5 py-2.5 bg-white text-emerald-600 border border-emerald-200 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-50 transition-all whitespace-nowrap shadow-sm"
+                  >
+                    <Download size={14} />
+                    Export Excel
+                  </button>
 
-                    <button 
-                      onClick={() => exportToExcel(records)}
-                      className="flex items-center justify-center gap-2 px-5 py-2.5 bg-white text-emerald-600 border border-emerald-200 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-50 transition-all whitespace-nowrap shadow-sm"
-                    >
-                      <Download size={14} />
-                      Export All
-                    </button>
-
-                    <button 
-                      onClick={() => { setEditingId(null); setView('add-audit'); }}
-                      className="flex items-center justify-center gap-2 px-6 py-2.5 bg-brand-orange text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-brand-orange/20 hover:brightness-110 transition-all whitespace-nowrap"
-                    >
-                      <Plus size={16} />
-                      Add Finding
-                    </button>
-                  </div>
+                  <button 
+                    onClick={() => { setEditingId(null); setView('add-audit'); }}
+                    className="flex items-center justify-center gap-2 px-6 py-2.5 bg-brand-orange text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-brand-orange/20 hover:brightness-110 transition-all whitespace-nowrap"
+                  >
+                    <Plus size={16} />
+                    Add Finding
+                  </button>
                 </div>
 
                 {/* Filter & Search Bar Band */}
