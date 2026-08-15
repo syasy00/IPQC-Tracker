@@ -817,14 +817,16 @@ export default function App() {
     mqeEngineer: INITIAL_PLATFORM_MQE_MAPPING[PLATFORMS[0]] || ''
   });
 
-  useEffect(() => {
-    if (newAudit.auditDate) {
-      const calculatedWW = calculateWW(newAudit.auditDate);
-      if (calculatedWW !== newAudit.ww) {
-        setNewAudit(prev => ({ ...prev, ww: calculatedWW }));
-      }
-    }
-  }, [newAudit.auditDate]);
+  // Keep the stored WW when an existing record is opened. Recalculate WW only
+  // when the user deliberately changes the audit date, so View and Edit never
+  // show different work weeks for the same saved record.
+  const handleAuditDateChange = (auditDate: string) => {
+    setNewAudit(prev => ({
+      ...prev,
+      auditDate,
+      ww: auditDate ? calculateWW(auditDate) : '',
+    }));
+  };
 
   const handleCategoryChange = (cat: string) => {
     setNewAudit(prev => ({
@@ -1721,31 +1723,21 @@ export default function App() {
                 {selectedRecord ? (
                   <div className="flex-1 overflow-y-auto custom-scrollbar">
                     <div className="mx-auto w-full max-w-7xl pb-10">
-                      {/* Page toolbar */}
-                      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      {/* Quiet page navigation: actions live in the record snapshot to avoid duplication. */}
+                      <div className="mb-4">
                         <button
                           type="button"
                           onClick={() => setSelectedRecord(null)}
-                          className="inline-flex w-fit items-center gap-1.5 text-[11px] font-semibold text-slate-500 transition-colors hover:text-brand-orange"
+                          className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 transition-colors hover:text-brand-orange"
                         >
                           <ChevronLeft size={15} />
                           Back to IPQC records
                         </button>
-
-                        <button
-                          type="button"
-                          onClick={() => { handleEditClick(selectedRecord); setSelectedRecord(null); }}
-                          className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-brand-orange px-4 text-[11px] font-bold text-white shadow-[0_6px_16px_rgba(241,93,34,0.18)] transition-all hover:brightness-110 active:translate-y-px"
-                        >
-                          <Pencil size={14} />
-                          Edit finding
-                        </button>
                       </div>
 
-                      <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_310px]">
-                        {/* Main record */}
+                      <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
+                        {/* Main authoritative record content */}
                         <div className="min-w-0 space-y-4">
-                          {/* Record identity */}
                           <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
                             <div className="p-5 md:p-6">
                               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -1753,9 +1745,10 @@ export default function App() {
                                   <div className="mb-2 flex flex-wrap items-center gap-2">
                                     <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
                                       <ClipboardCheck size={12} />
-                                      Finding record {selectedRecord.no ? `No. ${selectedRecord.no}` : `#${selectedRecord.id}`}
+                                      Finding {selectedRecord.no ? `#${selectedRecord.no}` : `#${selectedRecord.id}`}
                                     </span>
-                                    <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.08em] ${
+
+                                    <span className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.08em] ${
                                       getFindingStatus(selectedRecord) === 'Closed'
                                         ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
                                         : getFindingStatus(selectedRecord) === 'Open'
@@ -1763,29 +1756,27 @@ export default function App() {
                                           : 'border-slate-200 bg-slate-50 text-slate-500'
                                     }`}>
                                       {getFindingStatus(selectedRecord) === 'Closed' ? <CheckCircle2 size={10} /> : <AlertCircle size={10} />}
-                                      Finding: {getFindingStatus(selectedRecord) || 'Not set'}
+                                      {getFindingStatus(selectedRecord) || 'Not set'}
                                     </span>
-                                    <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.08em] ${
+
+                                    <span className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.08em] ${
                                       selectedRecord.icarStatus === 'Submitted'
                                         ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
                                         : 'border-amber-200 bg-amber-50 text-amber-700'
                                     }`}>
                                       {selectedRecord.icarStatus === 'Submitted' ? <Unlock size={10} /> : <Lock size={10} />}
-                                      ICAR: {selectedRecord.icarStatus || 'Locked'}
+                                      ICAR {selectedRecord.icarStatus || 'Locked'}
                                     </span>
                                   </div>
 
-                                  <h2 className="text-xl font-bold leading-tight tracking-tight text-slate-900 md:text-2xl">
+                                  <h2 className="max-w-4xl text-xl font-bold leading-tight tracking-tight text-slate-900 md:text-2xl">
                                     {selectedRecord.detailsFindings || 'Finding details'}
                                   </h2>
-                                  <p className="mt-2 max-w-3xl text-xs leading-5 text-slate-500">
-                                    Complete IPQC finding record with audit context, production ownership, corrective-action reference and supporting evidence.
-                                  </p>
                                 </div>
 
-                                <div className="shrink-0 lg:text-right">
+                                <div className="shrink-0 rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2.5 lg:min-w-[130px] lg:text-right">
                                   <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-400">ICAR reference</p>
-                                  <p className="mt-1 font-mono text-sm font-bold text-slate-700">{selectedRecord.icarNum || 'N/A'}</p>
+                                  <p className="mt-1 font-mono text-sm font-bold text-slate-800">{selectedRecord.icarNum || 'N/A'}</p>
                                 </div>
                               </div>
 
@@ -1801,74 +1792,50 @@ export default function App() {
                             </div>
                           </section>
 
-                          {/* Structured record details */}
+                          {/* View follows the exact same 01–05 hierarchy as Add / Edit. */}
                           <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
                             <RecordDetailSection
                               number="01"
-                              icon={<MapPin size={15} />}
-                              title="Location & ownership"
-                              description="Where the finding occurred and the engineering owner responsible for the platform."
+                              icon={<CalendarDays size={15} />}
+                              title="Audit context"
+                              description="When the audit was conducted and which operation was reviewed."
                             >
-                              <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-3">
-                                <RecordDetailField label="Platform" value={selectedRecord.platform} />
-                                <RecordDetailField label="Station / area" value={selectedRecord.areaStation} />
-                                <RecordDetailField label="MQE engineer" value={selectedRecord.mqeEngineer} accent />
-                              </div>
-                            </RecordDetailSection>
-
-                            <RecordDetailSection
-                              number="02"
-                              icon={<AlertCircle size={15} />}
-                              title="Finding classification"
-                              description="Classification and description captured during the audit."
-                            >
-                              <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-3">
-                                <RecordDetailField label="Category" value={selectedRecord.category} />
-                                <RecordDetailField label="Group finding" value={selectedRecord.groupFinding} />
-                                <RecordDetailField label="Finding details" value={selectedRecord.detailsFindings} />
-                              </div>
-
-                              <div className="mt-5 border-t border-slate-100 pt-5">
-                                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">Remarks / containment notes</p>
-                                <p className={`mt-2 text-sm leading-6 ${selectedRecord.remark ? 'font-medium text-slate-700' : 'italic text-slate-400'}`}>
-                                  {selectedRecord.remark || 'No additional remarks were recorded for this finding.'}
-                                </p>
-                              </div>
-                            </RecordDetailSection>
-
-                            <RecordDetailSection
-                              number="03"
-                              icon={<Users size={15} />}
-                              title="People & accountability"
-                              description="Audit ownership and the person responsible at the point of finding."
-                            >
-                              <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-3">
-                                <RecordDetailField label="IPQC auditor" value={selectedRecord.auditors} />
-                                <RecordDetailField label="PIC (finding)" value={selectedRecord.personOnJob} />
+                              <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2 lg:grid-cols-4">
+                                <RecordDetailField label="Audit date" value={selectedRecord.auditDate} mono />
+                                <RecordDetailField label="Work week (WW)" value={selectedRecord.ww ? `WW${selectedRecord.ww}` : '—'} />
+                                <RecordDetailField label="Shift" value={selectedRecord.shift} />
                                 <RecordDetailField label="Department" value={selectedRecord.department} />
                               </div>
                             </RecordDetailSection>
 
                             <RecordDetailSection
-                              number="04"
-                              icon={<CalendarDays size={15} />}
-                              title="Audit context"
-                              description="Date and production timing associated with this audit record."
+                              number="02"
+                              icon={<MapPin size={15} />}
+                              title="Location & ownership"
+                              description="Identify the platform, exact station and responsible MQE."
                             >
                               <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-3">
-                                <RecordDetailField label="Audit date" value={selectedRecord.auditDate} mono />
-                                <RecordDetailField label="Work week (WW)" value={selectedRecord.ww} />
-                                <RecordDetailField label="Shift" value={selectedRecord.shift} />
+                                <RecordDetailField label="Platform" value={selectedRecord.platform} />
+                                <RecordDetailField label="Area / station" value={selectedRecord.areaStation} />
+                                <RecordDetailField label="MQE engineer" value={selectedRecord.mqeEngineer} accent />
                               </div>
                             </RecordDetailSection>
 
                             <RecordDetailSection
-                              number="05"
-                              icon={<ClipboardCheck size={15} />}
-                              title="Lifecycle & ICAR"
-                              description="Finding resolution state and the separate corrective-action reference lifecycle."
+                              number="03"
+                              icon={<AlertCircle size={15} />}
+                              title="Finding classification"
+                              description="Classify the issue consistently for reporting and follow-up."
                             >
-                              <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-3">
+                              <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2 lg:grid-cols-4">
+                                <RecordDetailField label="Category" value={selectedRecord.category} />
+                                <RecordDetailField label="Group finding" value={selectedRecord.groupFinding} />
+                                <div className="sm:col-span-2">
+                                  <RecordDetailField label="Finding details" value={selectedRecord.detailsFindings} />
+                                </div>
+                              </div>
+
+                              <div className="mt-5 grid grid-cols-1 gap-5 border-t border-slate-100 pt-5 md:grid-cols-[180px_minmax(0,1fr)]">
                                 <div className="min-w-0">
                                   <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">Finding status</p>
                                   <div className={`mt-1.5 inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[11px] font-bold ${
@@ -1882,122 +1849,146 @@ export default function App() {
                                     {getFindingStatus(selectedRecord) || 'Not set'}
                                   </div>
                                 </div>
+
                                 <div className="min-w-0">
-                                  <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">ICAR status</p>
-                                  <div className={`mt-1.5 inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[11px] font-bold ${
-                                    selectedRecord.icarStatus === 'Submitted'
-                                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                                      : 'border-amber-200 bg-amber-50 text-amber-700'
-                                  }`}>
-                                    {selectedRecord.icarStatus === 'Submitted' ? <Unlock size={12} /> : <Lock size={12} />}
-                                    {selectedRecord.icarStatus || 'Locked'}
-                                  </div>
+                                  <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">Remark / containment notes</p>
+                                  <p className={`mt-1.5 text-sm leading-6 ${selectedRecord.remark ? 'font-medium text-slate-700' : 'italic text-slate-400'}`}>
+                                    {selectedRecord.remark || 'No additional remarks were recorded.'}
+                                  </p>
                                 </div>
-                                <RecordDetailField label="ICAR number" value={selectedRecord.icarNum || 'N/A'} mono />
                               </div>
                             </RecordDetailSection>
 
                             <RecordDetailSection
-                              number="06"
-                              icon={<ImageIcon size={15} />}
-                              title="Evidence"
-                              description="Supporting image attached to the audit finding."
+                              number="04"
+                              icon={<Users size={15} />}
+                              title="People & accountability"
+                              description="Audit ownership and the person responsible at the point of finding."
                             >
-                              {selectedRecord.picture ? (
-                                <button
-                                  type="button"
-                                  onClick={() => setPreviewImage(getImageUrl(selectedRecord.picture!)!)}
-                                  className="group block w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-50 text-left"
-                                >
-                                  <div className="flex min-h-[260px] max-h-[520px] items-center justify-center bg-slate-50 p-3">
-                                    <img
-                                      src={getImageUrl(selectedRecord.picture)}
-                                      className="max-h-[490px] w-full object-contain"
-                                      referrerPolicy="no-referrer"
-                                      alt="Finding evidence"
-                                    />
-                                  </div>
-                                  <div className="flex items-center justify-between gap-3 border-t border-slate-200 bg-white px-4 py-3">
-                                    <div>
-                                      <p className="text-[11px] font-semibold text-slate-700">Audit evidence</p>
-                                      <p className="mt-0.5 text-[10px] text-slate-400">Click the image to enlarge</p>
+                              <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">
+                                <RecordDetailField label="IPQC auditor" value={selectedRecord.auditors} />
+                                <RecordDetailField label="PIC (finding)" value={selectedRecord.personOnJob} />
+                              </div>
+                            </RecordDetailSection>
+
+                            <RecordDetailSection
+                              number="05"
+                              icon={<ImageIcon size={15} />}
+                              title="ICAR & evidence"
+                              description="Corrective-action reference and supporting evidence for the finding."
+                            >
+                              <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,300px)_minmax(0,1fr)]">
+                                <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-4">
+                                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-1">
+                                    <RecordDetailField label="ICAR number" value={selectedRecord.icarNum || 'N/A'} mono />
+                                    <div className="min-w-0">
+                                      <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">ICAR status</p>
+                                      <div className={`mt-1.5 inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[11px] font-bold ${
+                                        selectedRecord.icarStatus === 'Submitted'
+                                          ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                          : 'border-amber-200 bg-amber-50 text-amber-700'
+                                      }`}>
+                                        {selectedRecord.icarStatus === 'Submitted' ? <Unlock size={12} /> : <Lock size={12} />}
+                                        {selectedRecord.icarStatus || 'Locked'}
+                                      </div>
                                     </div>
-                                    <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-brand-orange">View full size</span>
                                   </div>
-                                </button>
-                              ) : (
-                                <div className="flex min-h-[220px] flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 px-6 text-center">
-                                  <ImageIcon size={28} className="mb-3 text-slate-300" />
-                                  <p className="text-sm font-semibold text-slate-600">No evidence image attached</p>
-                                  <p className="mt-1 text-[11px] text-slate-400">This record was saved without a supporting photo.</p>
                                 </div>
-                              )}
+
+                                <div className="min-w-0">
+                                  <div className="mb-2 flex items-center justify-between gap-3">
+                                    <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">Evidence</p>
+                                    {selectedRecord.picture && (
+                                      <span className="text-[9px] font-bold uppercase tracking-[0.1em] text-brand-orange">Click to enlarge</span>
+                                    )}
+                                  </div>
+
+                                  {selectedRecord.picture ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => setPreviewImage(getImageUrl(selectedRecord.picture!)!)}
+                                      className="group block w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-50 text-left transition-colors hover:border-slate-300"
+                                    >
+                                      <div className="flex h-[220px] items-center justify-center bg-slate-50 p-3">
+                                        <img
+                                          src={getImageUrl(selectedRecord.picture)}
+                                          className="max-h-full w-full object-contain"
+                                          referrerPolicy="no-referrer"
+                                          alt="Finding evidence"
+                                        />
+                                      </div>
+                                      <div className="flex items-center justify-between border-t border-slate-200 bg-white px-4 py-2.5">
+                                        <span className="text-[11px] font-semibold text-slate-700">Supporting evidence</span>
+                                        <span className="text-[10px] font-bold text-brand-orange">View full size</span>
+                                      </div>
+                                    </button>
+                                  ) : (
+                                    <div className="flex min-h-[112px] items-center gap-3 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-4">
+                                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-400">
+                                        <ImageIcon size={17} />
+                                      </div>
+                                      <div>
+                                        <p className="text-[11px] font-semibold text-slate-700">No evidence attached</p>
+                                        <p className="mt-0.5 text-[10px] leading-4 text-slate-400">This finding was saved without a supporting image.</p>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
                             </RecordDetailSection>
                           </div>
                         </div>
 
-                        {/* Operational summary */}
+                        {/* Compact snapshot: traceability + actions only, no duplicate lifecycle card. */}
                         <aside className="space-y-4 xl:sticky xl:top-0">
-                          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
-                            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Finding lifecycle</p>
-                            <div className="mt-4 flex items-start gap-3">
-                              <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${
-                                getFindingStatus(selectedRecord) === 'Closed'
-                                  ? 'bg-emerald-50 text-emerald-600'
-                                  : getFindingStatus(selectedRecord) === 'Open'
-                                    ? 'bg-orange-50 text-orange-600'
-                                    : 'bg-slate-100 text-slate-500'
-                              }`}>
-                                {getFindingStatus(selectedRecord) === 'Closed' ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
-                              </div>
-                              <div className="min-w-0">
-                                <p className="text-sm font-bold text-slate-900">{getFindingStatus(selectedRecord) || 'Status not set'}</p>
-                                <p className="mt-1 text-[11px] leading-5 text-slate-500">
-                                  {getFindingStatus(selectedRecord) === 'Closed'
-                                    ? 'The finding has been resolved and marked closed.'
-                                    : getFindingStatus(selectedRecord) === 'Open'
-                                      ? 'The finding remains open and requires follow-up.'
-                                      : 'This historical record has not yet been classified as open or closed.'}
-                                </p>
-                              </div>
-                            </div>
-                            <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4">
-                              <span className="text-[10px] font-medium text-slate-500">ICAR status</span>
-                              <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-semibold ${
-                                selectedRecord.icarStatus === 'Submitted'
-                                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                                  : 'border-amber-200 bg-amber-50 text-amber-700'
-                              }`}>
-                                {selectedRecord.icarStatus === 'Submitted' ? <Unlock size={10} /> : <Lock size={10} />}
-                                {selectedRecord.icarStatus || 'Locked'}
-                              </span>
-                            </div>
-                          </section>
-
                           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
                             <div className="mb-4 flex items-center justify-between gap-3">
                               <div>
-                                <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Record summary</p>
-                                <p className="mt-1 text-[11px] text-slate-500">Key traceability information</p>
+                                <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Record snapshot</p>
+                                <p className="mt-1 text-[11px] text-slate-500">Traceability and current lifecycle state</p>
                               </div>
                               <Info size={15} className="text-slate-300" />
                             </div>
-                            <div className="divide-y divide-slate-100">
+
+                            <div className="divide-y divide-slate-100 border-y border-slate-100">
                               <DetailRow label="Record no." value={String(selectedRecord.no ?? selectedRecord.id ?? '—')} mono />
-                              <DetailRow label="Department" value={selectedRecord.department || '—'} />
-                              <DetailRow label="Auditor" value={selectedRecord.auditors || '—'} />
-                              <DetailRow label="MQE owner" value={selectedRecord.mqeEngineer || '—'} accent />
+
+                              <div className="flex items-center justify-between gap-4 py-3">
+                                <span className="text-[10px] font-medium text-slate-500">Finding status</span>
+                                <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-semibold ${
+                                  getFindingStatus(selectedRecord) === 'Closed'
+                                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                    : getFindingStatus(selectedRecord) === 'Open'
+                                      ? 'border-orange-200 bg-orange-50 text-orange-700'
+                                      : 'border-slate-200 bg-slate-50 text-slate-500'
+                                }`}>
+                                  {getFindingStatus(selectedRecord) === 'Closed' ? <CheckCircle2 size={10} /> : <AlertCircle size={10} />}
+                                  {getFindingStatus(selectedRecord) || 'Not set'}
+                                </span>
+                              </div>
+
+                              <div className="flex items-center justify-between gap-4 py-3">
+                                <span className="text-[10px] font-medium text-slate-500">ICAR status</span>
+                                <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-semibold ${
+                                  selectedRecord.icarStatus === 'Submitted'
+                                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                    : 'border-amber-200 bg-amber-50 text-amber-700'
+                                }`}>
+                                  {selectedRecord.icarStatus === 'Submitted' ? <Unlock size={10} /> : <Lock size={10} />}
+                                  {selectedRecord.icarStatus || 'Locked'}
+                                </span>
+                              </div>
+
+                              <DetailRow label="ICAR reference" value={selectedRecord.icarNum || 'N/A'} mono />
+                              <DetailRow label="MQE owner" value={selectedRecord.mqeEngineer || 'Unassigned'} accent />
                               <DetailRow label="Evidence" value={selectedRecord.picture ? 'Attached' : 'None'} />
                             </div>
-                          </section>
 
-                          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
-                            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Actions</p>
                             <div className="mt-4 space-y-2">
                               <button
                                 type="button"
                                 onClick={() => { handleEditClick(selectedRecord); setSelectedRecord(null); }}
-                                className="flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 text-[11px] font-bold text-white transition-colors hover:bg-slate-800"
+                                className="flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 text-[11px] font-bold text-white transition-all hover:bg-slate-800 active:translate-y-px"
                               >
                                 <Pencil size={13} />
                                 Edit finding
@@ -2565,15 +2556,11 @@ export default function App() {
                             type="date"
                             required
                             value={newAudit.auditDate}
-                            onChange={(v: string) => setNewAudit({ ...newAudit, auditDate: v })}
+                            onChange={handleAuditDateChange}
                           />
-                          <FormSelect
+                          <AutoField
                             label="Work week (WW)"
-                            required
-                            value={newAudit.ww}
-                            onChange={(v: string) => setNewAudit({ ...newAudit, ww: v })}
-                            options={WWS}
-                            helper="Auto-calculated from audit date"
+                            value={newAudit.ww ? `WW${newAudit.ww}` : '—'}
                           />
                           <FormSelect
                             label="Shift"
@@ -2692,9 +2679,9 @@ export default function App() {
                           <div className="min-w-0">
                             <div className="flex items-center gap-2">
                               <Users size={15} className="text-brand-orange" />
-                              <h3 className="text-sm font-bold text-slate-900">People</h3>
+                              <h3 className="text-sm font-bold text-slate-900">People & accountability</h3>
                             </div>
-                            <p className="mt-0.5 text-[11px] text-slate-500">Record the auditor and the person responsible for the finding.</p>
+                            <p className="mt-0.5 text-[11px] text-slate-500">Audit ownership and the person responsible at the point of finding.</p>
                           </div>
                         </div>
 
@@ -2855,7 +2842,7 @@ export default function App() {
                             <p className="mt-0.5 truncate text-[10px] text-slate-500">{newAudit.areaStation || 'Area / station pending'}</p>
                           </div>
                           <div className="py-3">
-                            <p className="text-[10px] font-medium text-slate-400">Responsible MQE</p>
+                            <p className="text-[10px] font-medium text-slate-400">MQE owner</p>
                             <p className="mt-1 text-xs font-semibold text-brand-orange">{newAudit.mqeEngineer || 'Unassigned'}</p>
                           </div>
                           <div className="py-3">
