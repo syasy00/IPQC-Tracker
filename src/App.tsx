@@ -1733,24 +1733,22 @@ export default function App() {
                 exit={{ opacity: 0, x: -20 }}
                 className="flex-1 overflow-y-auto pb-6 custom-scrollbar"
               >
-                <div className="bg-white rounded-2xl border border-border-subtle overflow-hidden max-w-4xl mx-auto shadow-sm flex flex-col">
-                  <div className="bg-slate-50 p-6 border-b border-border-subtle flex justify-between items-center shrink-0">
-                    <div>
-                      <h2 className="text-lg font-black uppercase tracking-tight text-slate-800">{editingId ? 'Edit Audit Entry' : 'New Audit Entry'}</h2>
-                      <p className="text-[10px] text-text-muted font-bold uppercase tracking-widest mt-1">IPQC Quality Management System</p>
-                    </div>
-                    <button 
-                      onClick={() => { setView('ipqc'); setEditingId(null); }} 
-                      className="w-9 h-9 flex items-center justify-center rounded-xl text-text-muted hover:text-text-main hover:bg-slate-100 transition-colors shrink-0"
-                      title="Exit without saving"
-                    >
-                      <X size={18} />
-                    </button>
-                  </div>
-                  
-                  <form onSubmit={handleAddAudit} className="flex flex-col">
-                    <div className="p-6 md:p-8 space-y-10">
+                <div className="max-w-4xl mx-auto">
+                  <button 
+                    onClick={() => { setView('ipqc'); setEditingId(null); }} 
+                    className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-brand-orange transition-colors mb-4"
+                  >
+                    <ChevronLeft size={14} /> Back to Records
+                  </button>
 
+                  <div className="mb-6">
+                    <h2 className="text-2xl font-black tracking-tight text-slate-800">{editingId ? 'Edit Audit Entry' : 'New Audit Entry'}</h2>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1.5">IPQC Quality Management System</p>
+                  </div>
+
+                  <form onSubmit={handleAddAudit} className="flex flex-col gap-5 pb-24">
+
+                    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 md:p-8">
                       <FormSection icon={<CalendarDays size={15} />} title="When" description="Date and shift this audit was conducted">
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
                           <FormInput label="Audit Date" type="date" required value={newAudit.auditDate} onChange={(v: string) => setNewAudit({...newAudit, auditDate: v})} />
@@ -1759,7 +1757,9 @@ export default function App() {
                           <FormSelect label="Department" required value={newAudit.department} onChange={(v: string) => setNewAudit({...newAudit, department: v})} options={DEPARTMENTS} />
                         </div>
                       </FormSection>
+                    </div>
 
+                    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 md:p-8">
                       <FormSection icon={<MapPin size={15} />} title="Where" description="Platform and exact location of the finding">
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
                           <FormSelect label="Platform" required value={newAudit.platform} onChange={handlePlatformChange} options={platformsList} />
@@ -1767,7 +1767,9 @@ export default function App() {
                           <AutoField label="MQE Engineer" value={newAudit.mqeEngineer} accent="orange" />
                         </div>
                       </FormSection>
+                    </div>
 
+                    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 md:p-8">
                       <FormSection icon={<AlertCircle size={15} />} title="What was found" description="Category and details of the audit finding">
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
                           <FormSelect label="Category" required value={newAudit.category} onChange={handleCategoryChange} options={CATEGORIES} />
@@ -1784,14 +1786,18 @@ export default function App() {
                           />
                         </div>
                       </FormSection>
+                    </div>
 
+                    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 md:p-8">
                       <FormSection icon={<Users size={15} />} title="Who" description="Auditor logging this entry and the person responsible on the floor">
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                           <FormSelect label="IPQC Auditor Name" required value={newAudit.auditors} onChange={(v: string) => setNewAudit({...newAudit, auditors: v})} options={auditorsList} />
                           <FormInput label="PIC Name (Finding)" required value={newAudit.personOnJob} onChange={(v: string) => setNewAudit({...newAudit, personOnJob: v})} placeholder="Person responsible on shift" />
                         </div>
                       </FormSection>
+                    </div>
 
+                    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 md:p-8">
                       <FormSection icon={<CheckCircle2 size={15} />} title="ICAR & Evidence" description="Corrective action reference and supporting photo">
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                           <div className="flex flex-col gap-2">
@@ -1872,10 +1878,9 @@ export default function App() {
                           </div>
                         </div>
                       </FormSection>
-
                     </div>
 
-                    <div className="flex justify-end gap-3 px-6 md:px-8 py-4 border-t border-border-subtle bg-slate-50/80 backdrop-blur sticky bottom-0 shrink-0">
+                    <div className="flex justify-end gap-3 px-6 py-4 bg-white/95 backdrop-blur rounded-xl border border-slate-200 shadow-sm sticky bottom-4">
                       <button 
                         type="button" 
                         onClick={() => { setView('ipqc'); setEditingId(null); }}
