@@ -1242,11 +1242,26 @@ export default function App() {
       </AnimatePresence>
 
       <aside className={`fixed md:static inset-y-0 left-0 z-50 bg-sidebar-bg transition-all duration-300 flex flex-col shrink-0 overflow-hidden ${sidebarOpen ? 'w-[220px] translate-x-0' : 'w-0 -translate-x-full md:w-20 md:translate-x-0'}`}>
-        <div className="p-6 flex items-center gap-3 border-b border-white/5">
-          <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 overflow-hidden bg-brand-orange text-white font-black text-xs">
-            Q
+        <div className={`h-[76px] border-b border-white/5 flex items-center gap-3 shrink-0 transition-all duration-300 ${sidebarOpen ? 'px-5' : 'px-0 md:justify-center'}`}>
+          <div className="w-10 h-10 rounded-xl overflow-hidden bg-white shrink-0 flex items-center justify-center shadow-sm ring-1 ring-white/10">
+            <img
+              src="/AE.png"
+              alt="IPQC Tracker logo"
+              className="w-full h-full object-contain"
+              draggable={false}
+            />
           </div>
-          <h1 className="font-black text-xs tracking-widest text-white uppercase whitespace-nowrap">IPQC TRACKER</h1>
+
+          {sidebarOpen && (
+            <div className="min-w-0">
+              <h1 className="font-black text-[13px] tracking-[0.14em] text-white uppercase whitespace-nowrap">
+                IPQC TRACKER
+              </h1>
+              <p className="mt-0.5 text-[8px] font-bold uppercase tracking-[0.18em] text-slate-500 whitespace-nowrap">
+                Quality Management
+              </p>
+            </div>
+          )}
         </div>
 
         <nav className="flex-1 space-y-1 mt-6 overflow-y-auto px-3">
