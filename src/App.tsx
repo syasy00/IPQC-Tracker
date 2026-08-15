@@ -651,6 +651,31 @@ export default function App() {
     return filteredRecords.slice(start, start + pageSize);
   }, [filteredRecords, currentPage, pageSize]);
 
+  // Briefly highlights + scrolls to a record right after it's created or
+  // edited, so the change is visibly confirmed instead of silently landing
+  // somewhere in a 500+ row table.
+  const [highlightedId, setHighlightedId] = useState<string | number | null>(null);
+  const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
+
+  useEffect(() => {
+    if (highlightedId === null) return;
+
+    const idx = filteredRecords.findIndex(r => String(r.id) === String(highlightedId));
+    if (idx === -1) return; // hidden by active filters - nothing to scroll to
+
+    setCurrentPage(Math.floor(idx / pageSize) + 1);
+
+    const scrollTimer = setTimeout(() => {
+      rowRefs.current[String(highlightedId)]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 150);
+    const clearTimer = setTimeout(() => setHighlightedId(null), 2600);
+
+    return () => {
+      clearTimeout(scrollTimer);
+      clearTimeout(clearTimer);
+    };
+  }, [highlightedId]);
+
 
   const [selectedRecord, setSelectedRecord] = useState<AuditRecord | null>(null);
   const [openRowAction, setOpenRowAction] = useState<string | number | null>(null);
@@ -687,6 +712,7 @@ export default function App() {
         if (response.ok) {
           const updated = await response.json();
           setRecords(records.map(r => String(r.id) === String(editingId) ? updated : r));
+          setHighlightedId(updated.id);
         } else {
           alert('Failed to update record.');
         }
@@ -700,6 +726,7 @@ export default function App() {
         if (response.ok) {
           const created = await response.json();
           setRecords([...records, created]);
+          setHighlightedId(created.id);
         } else {
           alert('Failed to save the audit record to database.');
         }
@@ -1466,9 +1493,12 @@ export default function App() {
                         {paginatedRecords.map((record, index) => (
                           <tr 
                             key={record.id} 
+                            ref={(el) => { rowRefs.current[String(record.id)] = el; }}
                             onClick={() => setSelectedRecord(record)}
-                            className={`transition-colors duration-150 text-[11px] text-slate-700 cursor-pointer group border-l-2 border-transparent hover:bg-orange-50/40 hover:border-l-brand-orange/60 ${
-                              index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'
+                            className={`transition-colors duration-700 text-[11px] text-slate-700 cursor-pointer group border-l-2 hover:bg-orange-50/40 hover:border-l-brand-orange/60 ${
+                              String(record.id) === String(highlightedId)
+                                ? 'bg-orange-50 border-l-brand-orange'
+                                : `border-l-transparent ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`
                             }`}
                           >
                             <td className="px-4 py-4 text-center font-bold text-slate-500 border-r border-slate-200 sticky left-0 bg-inherit z-10 shadow-[2px_0_5px_rgba(0,0,0,0.02)] group-hover:text-brand-orange">
