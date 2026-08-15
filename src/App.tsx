@@ -1708,87 +1708,93 @@ export default function App() {
                               <span>WW{selectedRecord.ww}</span>
                               <span className="text-slate-300">&bull;</span>
                               <span>Shift {selectedRecord.shift}</span>
+                              <span className="text-slate-300">&bull;</span>
+                              <span>{selectedRecord.department}</span>
                             </div>
                           </div>
-                          <div className="flex items-center gap-3 shrink-0">
-                            <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wide border whitespace-nowrap ${
-                              selectedRecord.icarStatus === 'Submitted' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'
-                            }`}>
-                              {selectedRecord.icarStatus || 'Locked'}
-                            </span>
-                            <button onClick={() => setSelectedRecord(null)} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-slate-100 transition-colors text-slate-400 shrink-0">
-                              <X size={18} />
-                            </button>
+                          <div className="flex flex-col items-end gap-1.5 shrink-0">
+                            <div className="flex items-center gap-3">
+                              <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wide border whitespace-nowrap ${
+                                selectedRecord.icarStatus === 'Submitted' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'
+                              }`}>
+                                {selectedRecord.icarStatus || 'Locked'}
+                              </span>
+                              <button onClick={() => setSelectedRecord(null)} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-slate-100 transition-colors text-slate-400 shrink-0">
+                                <X size={18} />
+                              </button>
+                            </div>
+                            <span className="text-[10px] font-mono font-bold text-slate-400">ICAR# {selectedRecord.icarNum || 'N/A'}</span>
                           </div>
                         </div>
                         
-                        <div className="flex-1 overflow-y-auto custom-scrollbar grid grid-cols-1 lg:grid-cols-12">
-                          <div className="lg:col-span-7 p-6 md:p-8 space-y-6 lg:border-r border-slate-100">
-                            <DetailSection icon={<Users size={13} />} title="Personnel">
-                              <DetailRow label="IPQC Auditor" value={selectedRecord.auditors} />
-                              <DetailRow label="PIC (Finding)" value={selectedRecord.personOnJob} />
+                        <div className="flex-1 overflow-y-auto custom-scrollbar grid grid-cols-1 lg:grid-cols-12 bg-slate-50/40">
+                          <div className="lg:col-span-7 p-6 md:p-8 space-y-5 lg:border-r border-slate-100">
+                            <DetailSection icon={<MapPin size={15} />} title="Where" description="Platform and exact location of the finding">
+                              <DetailRow label="Platform" value={selectedRecord.platform} />
+                              <DetailRow label="Station / Area" value={selectedRecord.areaStation} />
                               <DetailRow label="MQE Engineer" value={selectedRecord.mqeEngineer || '—'} accent />
                             </DetailSection>
 
-                            <DetailSection icon={<MapPin size={13} />} title="Location">
-                              <DetailRow label="Platform" value={selectedRecord.platform} />
-                              <DetailRow label="Station / Area" value={selectedRecord.areaStation} />
-                              <DetailRow label="Department" value={selectedRecord.department} />
-                            </DetailSection>
-
-                            <DetailSection icon={<Layers size={13} />} title="Classification">
+                            <DetailSection icon={<AlertCircle size={15} />} title="What was found" description="Category and details of the audit finding">
                               <DetailRow label="Category" value={selectedRecord.category} />
                               <DetailRow label="Group Finding" value={selectedRecord.groupFinding} />
-                              <DetailRow label="ICAR#" value={selectedRecord.icarNum || 'N/A'} mono />
-                            </DetailSection>
-
-                            <div className="space-y-3">
-                              <div className="flex items-start gap-2.5 p-4 rounded-lg border border-slate-200 bg-slate-50">
-                                <Info size={14} className="text-slate-400 mt-0.5 shrink-0" />
-                                <div className="min-w-0">
-                                  <h4 className="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1">Finding Details</h4>
-                                  <p className="text-xs text-slate-700 leading-relaxed">{selectedRecord.detailsFindings}</p>
-                                </div>
+                              <div className="py-3">
+                                <span className="text-[11px] font-medium text-slate-500 block mb-1.5">Finding Details</span>
+                                <p className="text-xs font-semibold text-slate-800 leading-relaxed">{selectedRecord.detailsFindings}</p>
                               </div>
                               {selectedRecord.remark && (
-                                <div className="flex items-start gap-2.5 p-4 rounded-lg border-y border-r border-slate-200 border-l-2 border-l-blue-400 bg-blue-50/40">
-                                  <AlertCircle size={14} className="text-blue-500 mt-0.5 shrink-0" />
-                                  <div className="min-w-0">
-                                    <h4 className="text-[10px] font-bold uppercase tracking-wide text-blue-600 mb-1">Remark</h4>
-                                    <p className="text-xs text-slate-700 leading-relaxed">{selectedRecord.remark}</p>
-                                  </div>
+                                <div className="py-3">
+                                  <span className="text-[11px] font-medium text-blue-600 flex items-center gap-1 mb-1.5">
+                                    <AlertCircle size={11} /> Remark
+                                  </span>
+                                  <p className="text-xs text-slate-700 leading-relaxed italic">{selectedRecord.remark}</p>
                                 </div>
                               )}
-                            </div>
+                            </DetailSection>
+
+                            <DetailSection icon={<Users size={15} />} title="Who" description="Auditor logging this entry and the person responsible on the floor">
+                              <DetailRow label="IPQC Auditor" value={selectedRecord.auditors} />
+                              <DetailRow label="PIC (Finding)" value={selectedRecord.personOnJob} />
+                            </DetailSection>
                           </div>
 
-                          <div className="lg:col-span-5 p-6 md:p-8 flex flex-col bg-slate-50/50">
-                            <h4 className="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-3">Visual Evidence</h4>
-                            {selectedRecord.picture ? (
-                              <div 
-                                onClick={() => setPreviewImage(getImageUrl(selectedRecord.picture!)!)}
-                                className="w-full aspect-[4/3] rounded-lg overflow-hidden border border-slate-200 bg-white relative group cursor-zoom-in"
-                              >
-                                <img src={getImageUrl(selectedRecord.picture)} className="w-full h-full object-cover" referrerPolicy="no-referrer" alt="" />
-                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center">
-                                  <span className="opacity-0 group-hover:opacity-100 transition-opacity text-white text-[10px] font-bold bg-black/60 px-3 py-1.5 rounded uppercase tracking-wider">Click to Enlarge</span>
+                          <div className="lg:col-span-5 p-6 md:p-8 flex flex-col">
+                            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 flex-1 flex flex-col">
+                              <div className="flex items-start gap-3 pb-3 border-b border-slate-100 mb-4">
+                                <div className="w-7 h-7 rounded-lg bg-brand-orange/10 text-brand-orange flex items-center justify-center shrink-0 mt-0.5">
+                                  <CheckCircle2 size={15} />
+                                </div>
+                                <div>
+                                  <h3 className="text-xs font-black uppercase tracking-widest text-slate-700">Evidence</h3>
+                                  <p className="text-[10px] text-slate-400 font-medium mt-0.5">Supporting photo for this finding</p>
                                 </div>
                               </div>
-                            ) : (
-                              <div className="w-full aspect-[4/3] rounded-lg border-2 border-dashed border-slate-200 flex flex-col items-center justify-center bg-white">
-                                <ImageIcon size={28} className="text-slate-300 mb-2" />
-                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">No Image Provided</span>
-                              </div>
-                            )}
 
-                            <div className="flex-1" />
+                              {selectedRecord.picture ? (
+                                <div 
+                                  onClick={() => setPreviewImage(getImageUrl(selectedRecord.picture!)!)}
+                                  className="w-full aspect-[4/3] rounded-lg overflow-hidden border border-slate-200 bg-white relative group cursor-zoom-in"
+                                >
+                                  <img src={getImageUrl(selectedRecord.picture)} className="w-full h-full object-cover" referrerPolicy="no-referrer" alt="" />
+                                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center">
+                                    <span className="opacity-0 group-hover:opacity-100 transition-opacity text-white text-[10px] font-bold bg-black/60 px-3 py-1.5 rounded uppercase tracking-wider">Click to Enlarge</span>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="w-full aspect-[4/3] rounded-lg border-2 border-dashed border-slate-200 flex flex-col items-center justify-center bg-slate-50">
+                                  <ImageIcon size={28} className="text-slate-300 mb-2" />
+                                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">No Image Provided</span>
+                                </div>
+                              )}
 
-                            <div className="flex justify-end items-center gap-2 mt-6 pt-4 border-t border-slate-200">
-                              <button 
-                                onClick={() => setSelectedRecord(null)}
-                                className="px-5 py-2.5 text-[11px] font-bold uppercase tracking-wide text-slate-400 hover:text-slate-700 transition-colors"
-                              >
-                                Close
+                              <div className="flex-1" />
+
+                              <div className="flex justify-end items-center gap-2 mt-6 pt-4 border-t border-slate-100">
+                                <button 
+                                  onClick={() => setSelectedRecord(null)}
+                                  className="px-5 py-2.5 text-[11px] font-bold uppercase tracking-wide text-slate-400 hover:text-slate-700 transition-colors"
+                                >
+                                  Close
                               </button>
                               <button 
                                 onClick={() => { handleEditClick(selectedRecord); setSelectedRecord(null); }}
@@ -1797,6 +1803,7 @@ export default function App() {
                                 <Pencil size={13} />
                                 Modify Record
                               </button>
+                            </div>
                             </div>
                           </div>
                         </div>
@@ -2472,12 +2479,17 @@ function AutoField({ label, value, accent = 'slate' }: { label: string, value?: 
   );
 }
 
-function DetailSection({ icon, title, children }: { icon: any, title: string, children: any }) {
+function DetailSection({ icon, title, description, children }: { icon: any, title: string, description?: string, children: any }) {
   return (
-    <div className="border border-slate-200 rounded-lg overflow-hidden">
-      <div className="flex items-center gap-2 px-4 py-2.5 bg-slate-50 border-b border-slate-200">
-        <span className="text-slate-400">{icon}</span>
-        <h4 className="text-[10px] font-bold uppercase tracking-wide text-slate-500">{title}</h4>
+    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+      <div className="flex items-start gap-3 pb-3 border-b border-slate-100 mb-2">
+        <div className="w-7 h-7 rounded-lg bg-brand-orange/10 text-brand-orange flex items-center justify-center shrink-0 mt-0.5">
+          {icon}
+        </div>
+        <div>
+          <h3 className="text-xs font-black uppercase tracking-widest text-slate-700">{title}</h3>
+          {description && <p className="text-[10px] text-slate-400 font-medium mt-0.5">{description}</p>}
+        </div>
       </div>
       <div className="divide-y divide-slate-100">
         {children}
@@ -2488,7 +2500,7 @@ function DetailSection({ icon, title, children }: { icon: any, title: string, ch
 
 function DetailRow({ label, value, accent, mono }: { label: string, value: string, accent?: boolean, mono?: boolean }) {
   return (
-    <div className={`flex items-center justify-between gap-4 px-4 py-2.5 ${accent ? 'bg-brand-orange/[0.03]' : ''}`}>
+    <div className={`flex items-center justify-between gap-4 py-2.5 ${accent ? 'bg-brand-orange/[0.04] -mx-2 px-2 rounded-lg' : ''}`}>
       <span className="text-[11px] font-medium text-slate-500 shrink-0">{label}</span>
       <span className={`text-xs font-semibold text-right truncate ${accent ? 'text-brand-orange' : 'text-slate-800'} ${mono ? 'font-mono' : ''}`}>
         {value || '—'}
