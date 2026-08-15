@@ -28,7 +28,12 @@ import {
   LogIn,
   LogOut,
   User,
-  ChevronDown
+  ChevronDown,
+  MapPin,
+  Sparkles,
+  CalendarDays,
+  Info,
+  AlertCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -1726,139 +1731,151 @@ export default function App() {
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -20 }}
-                className="flex-1 overflow-y-auto pb-20 custom-scrollbar"
+                className="flex-1 overflow-y-auto pb-6 custom-scrollbar"
               >
-                <div className="bg-white rounded-2xl border border-border-subtle overflow-hidden max-w-5xl mx-auto shadow-sm">
-                  <div className="bg-slate-50 p-6 border-b border-border-subtle flex justify-between items-center">
+                <div className="bg-white rounded-2xl border border-border-subtle overflow-hidden max-w-4xl mx-auto shadow-sm flex flex-col">
+                  <div className="bg-slate-50 p-6 border-b border-border-subtle flex justify-between items-center shrink-0">
                     <div>
                       <h2 className="text-lg font-black uppercase tracking-tight text-slate-800">{editingId ? 'Edit Audit Entry' : 'New Audit Entry'}</h2>
                       <p className="text-[10px] text-text-muted font-bold uppercase tracking-widest mt-1">IPQC Quality Management System</p>
                     </div>
                     <button 
                       onClick={() => { setView('ipqc'); setEditingId(null); }} 
-                      className="text-text-muted hover:text-text-main flex items-center gap-2 text-[10px] font-bold uppercase"
+                      className="w-9 h-9 flex items-center justify-center rounded-xl text-text-muted hover:text-text-main hover:bg-slate-100 transition-colors shrink-0"
+                      title="Exit without saving"
                     >
-                      <X size={16} /> Exit
+                      <X size={18} />
                     </button>
                   </div>
                   
-                  <form onSubmit={handleAddAudit} className="p-6 md:p-8 space-y-6">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                      <FormInput label="Audit Date" type="date" required value={newAudit.auditDate} onChange={(v: string) => setNewAudit({...newAudit, auditDate: v})} />
-                      <FormSelect label="Work Week (WW)" required value={newAudit.ww} onChange={(v: string) => setNewAudit({...newAudit, ww: v})} options={WWS} />
-                      <FormSelect label="Shift" value={newAudit.shift} onChange={(v: string) => setNewAudit({...newAudit, shift: v})} options={SHIFTS} />
-                      <FormSelect label="Department" required value={newAudit.department} onChange={(v: string) => setNewAudit({...newAudit, department: v})} options={DEPARTMENTS} />
-                    </div>
+                  <form onSubmit={handleAddAudit} className="flex flex-col">
+                    <div className="p-6 md:p-8 space-y-10">
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 font-semibold">
-                      <FormSelect label="Platform" required value={newAudit.platform} onChange={handlePlatformChange} options={platformsList} />
-                      <FormInput label="Area / Station" required value={newAudit.areaStation} onChange={(v: string) => setNewAudit({...newAudit, areaStation: v})} />
-                      <FormSelect label="Category" required value={newAudit.category} onChange={handleCategoryChange} options={CATEGORIES} />
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                      <div className="flex flex-col gap-2">
-                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em] px-1">Group Finding (Auto)</label>
-                        <input 
-                          type="text" 
-                          disabled 
-                          value={newAudit.groupFinding || ''} 
-                          className="w-full bg-slate-100 border border-slate-200 rounded-xl py-3 px-4 text-sm font-semibold text-slate-600 outline-none cursor-not-allowed" 
-                        />
-                      </div>
-                      <FormSelect label="Finding Details" required value={newAudit.detailsFindings} onChange={(v: string) => setNewAudit({...newAudit, detailsFindings: v})} options={FINDING_DETAILS} />
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                      <FormSelect label="IPQC Auditor Name" required value={newAudit.auditors} onChange={(v: string) => setNewAudit({...newAudit, auditors: v})} options={auditorsList} />
-                      
-                      <FormInput label="PIC Name (Finding)" required value={newAudit.personOnJob} onChange={(v: string) => setNewAudit({...newAudit, personOnJob: v})} />
-
-                      <div className="flex flex-col gap-2">
-                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em] px-1">MQE Engineer (Auto Assigned)</label>
-                        <input 
-                          type="text" 
-                          disabled 
-                          value={newAudit.mqeEngineer || ''} 
-                          className="w-full bg-slate-100 border border-slate-200 rounded-xl py-3 px-4 text-sm font-semibold text-brand-orange uppercase outline-none cursor-not-allowed" 
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                      <div className="flex flex-col gap-2">
-                        <div className="flex items-center justify-between px-1">
-                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em]">ICAR#</label>
-                          <span className="text-[9px] text-slate-400 italic">Leave as N/A if locked</span>
+                      <FormSection icon={<CalendarDays size={15} />} title="When" description="Date and shift this audit was conducted">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+                          <FormInput label="Audit Date" type="date" required value={newAudit.auditDate} onChange={(v: string) => setNewAudit({...newAudit, auditDate: v})} />
+                          <FormSelect label="Work Week (WW)" required value={newAudit.ww} onChange={(v: string) => setNewAudit({...newAudit, ww: v})} options={WWS} helper="Auto-calculated from date" />
+                          <FormSelect label="Shift" value={newAudit.shift} onChange={(v: string) => setNewAudit({...newAudit, shift: v})} options={SHIFTS} />
+                          <FormSelect label="Department" required value={newAudit.department} onChange={(v: string) => setNewAudit({...newAudit, department: v})} options={DEPARTMENTS} />
                         </div>
-                        <input 
-                          type="text" 
-                          value={newAudit.icarNum || 'N/A'} 
-                          onChange={(e) => handleIcarNumChange(e.target.value)} 
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 px-4 text-sm font-semibold text-slate-800 focus:bg-white focus:border-brand-orange outline-none" 
-                        />
-                      </div>
-                      <div className="flex flex-col gap-2">
-                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em] px-1">ICAR Status (Auto)</label>
-                        <input 
-                          type="text" 
-                          disabled 
-                          value={newAudit.icarStatus || 'Locked'} 
-                          className={`w-full border rounded-xl py-3 px-4 text-sm font-black uppercase outline-none cursor-not-allowed ${
-                            newAudit.icarStatus === 'Submitted' ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 'bg-amber-50 text-amber-600 border-amber-200'
-                          }`} 
-                        />
-                      </div>
-                    </div>
+                      </FormSection>
 
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                      <div>
-                        <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest mb-2 block italic">Remark</label>
-                        <textarea 
-                          className="w-full bg-slate-50 border border-border-subtle rounded-xl p-4 text-sm focus:border-brand-orange outline-none transition-all placeholder:text-text-muted/40 min-h-[120px]"
-                          placeholder="Additional remarks..."
-                          value={newAudit.remark || ''}
-                          onChange={(e) => setNewAudit({...newAudit, remark: e.target.value})}
-                        />
-                      </div>
+                      <FormSection icon={<MapPin size={15} />} title="Where" description="Platform and exact location of the finding">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                          <FormSelect label="Platform" required value={newAudit.platform} onChange={handlePlatformChange} options={platformsList} />
+                          <FormInput label="Area / Station" required value={newAudit.areaStation} onChange={(v: string) => setNewAudit({...newAudit, areaStation: v})} placeholder="e.g. Station 2, EM2..." />
+                          <AutoField label="MQE Engineer" value={newAudit.mqeEngineer} accent="orange" />
+                        </div>
+                      </FormSection>
 
-                      <div>
-                        <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest mb-2 block">Audit Evidence Picture</label>
-                        <div 
-                          onClick={() => fileInputRef.current?.click()}
-                          className="w-full bg-slate-50 border-2 border-dashed border-border-subtle rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer hover:bg-slate-100 transition-all h-[150px] overflow-hidden"
-                        >
-                          <input 
-                            type="file" 
-                            ref={fileInputRef} 
-                            className="hidden" 
-                            accept="image/*"
-                            onChange={handleImageChange}
+                      <FormSection icon={<AlertCircle size={15} />} title="What was found" description="Category and details of the audit finding">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                          <FormSelect label="Category" required value={newAudit.category} onChange={handleCategoryChange} options={CATEGORIES} />
+                          <AutoField label="Group Finding" value={newAudit.groupFinding} />
+                          <FormSelect label="Finding Details" required value={newAudit.detailsFindings} onChange={(v: string) => setNewAudit({...newAudit, detailsFindings: v})} options={FINDING_DETAILS} />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em] px-1 mb-2 block">Remark</label>
+                          <textarea 
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm font-medium focus:bg-white focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/5 outline-none transition-all placeholder:text-text-muted/40 min-h-[100px] resize-y"
+                            placeholder="Optional — additional context about this finding..."
+                            value={newAudit.remark || ''}
+                            onChange={(e) => setNewAudit({...newAudit, remark: e.target.value})}
                           />
-                          {newAudit.picture ? (
-                            <div className="relative w-full h-full">
-                              <img 
-                                src={getImageUrl(newAudit.picture)} 
-                                alt="Audit Evidence" 
-                                className="w-full h-full object-contain"
-                                referrerPolicy="no-referrer"
-                              />
-                              <div className="absolute inset-0 bg-black/10 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity rounded">
-                                <span className="text-white text-[10px] font-bold bg-black/50 px-3 py-1.5 rounded uppercase tracking-wider">Change Image</span>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="text-center text-text-muted">
-                              <ImageIcon size={28} className="mx-auto mb-2 opacity-30" />
-                              <p className="text-[10px] font-bold uppercase tracking-wider">Drag & drop or click to upload</p>
-                              <p className="text-[9px] opacity-60 mt-1 uppercase">Supports: JPG, PNG, WEBP</p>
-                            </div>
-                          )}
                         </div>
-                      </div>
+                      </FormSection>
+
+                      <FormSection icon={<Users size={15} />} title="Who" description="Auditor logging this entry and the person responsible on the floor">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                          <FormSelect label="IPQC Auditor Name" required value={newAudit.auditors} onChange={(v: string) => setNewAudit({...newAudit, auditors: v})} options={auditorsList} />
+                          <FormInput label="PIC Name (Finding)" required value={newAudit.personOnJob} onChange={(v: string) => setNewAudit({...newAudit, personOnJob: v})} placeholder="Person responsible on shift" />
+                        </div>
+                      </FormSection>
+
+                      <FormSection icon={<CheckCircle2 size={15} />} title="ICAR & Evidence" description="Corrective action reference and supporting photo">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                          <div className="flex flex-col gap-2">
+                            <div className="flex items-center justify-between px-1">
+                              <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em]">ICAR#</label>
+                              <span className="text-[9px] text-slate-400 italic flex items-center gap-1"><Info size={10} /> Leave as N/A if locked</span>
+                            </div>
+                            <input 
+                              type="text" 
+                              value={newAudit.icarNum || 'N/A'} 
+                              onChange={(e) => handleIcarNumChange(e.target.value)} 
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 px-4 text-sm font-semibold text-slate-800 focus:bg-white focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/5 outline-none transition-all" 
+                            />
+                          </div>
+                          <div className="flex flex-col gap-2">
+                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em] px-1">Status</label>
+                            <div className={`w-full border rounded-xl py-3 px-4 text-sm font-black uppercase flex items-center gap-2 ${
+                              newAudit.icarStatus === 'Submitted' ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 'bg-amber-50 text-amber-600 border-amber-200'
+                            }`}>
+                              {newAudit.icarStatus === 'Submitted' ? <Unlock size={14} /> : <Lock size={14} />}
+                              {newAudit.icarStatus || 'Locked'}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em] px-1 mb-2 block">Audit Evidence Picture</label>
+                          <div 
+                            onClick={() => !newAudit.picture && fileInputRef.current?.click()}
+                            className={`w-full bg-slate-50 border-2 border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center transition-all overflow-hidden relative group ${
+                              newAudit.picture ? 'h-[220px]' : 'h-[160px] cursor-pointer hover:bg-slate-100 hover:border-brand-orange/40'
+                            }`}
+                          >
+                            <input 
+                              type="file" 
+                              ref={fileInputRef} 
+                              className="hidden" 
+                              accept="image/*"
+                              onChange={handleImageChange}
+                            />
+                            {newAudit.picture ? (
+                              <>
+                                <img 
+                                  src={getImageUrl(newAudit.picture)} 
+                                  alt="Audit Evidence" 
+                                  className="w-full h-full object-contain"
+                                  referrerPolicy="no-referrer"
+                                />
+                                <div className="absolute top-2 right-2 flex gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
+                                    className="px-3 py-1.5 bg-white/95 text-slate-700 rounded-lg text-[10px] font-black uppercase tracking-wider shadow-sm border border-slate-200 hover:bg-white transition-colors"
+                                  >
+                                    Replace
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => { 
+                                      e.stopPropagation(); 
+                                      setNewAudit(prev => ({ ...prev, picture: '' })); 
+                                      if (fileInputRef.current) fileInputRef.current.value = ''; 
+                                    }}
+                                    className="w-8 h-8 flex items-center justify-center bg-white/95 text-rose-600 rounded-lg shadow-sm border border-slate-200 hover:bg-rose-50 transition-colors"
+                                    title="Remove image"
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
+                                </div>
+                              </>
+                            ) : (
+                              <div className="text-center text-text-muted">
+                                <ImageIcon size={26} className="mx-auto mb-2 opacity-30" />
+                                <p className="text-[10px] font-bold uppercase tracking-wider">Drag & drop or click to upload</p>
+                                <p className="text-[9px] opacity-60 mt-1 uppercase">Supports JPG, PNG, WEBP · Optional</p>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </FormSection>
+
                     </div>
 
-                    <div className="flex justify-end gap-3 pt-6 border-t border-border-subtle">
+                    <div className="flex justify-end gap-3 px-6 md:px-8 py-4 border-t border-border-subtle bg-slate-50/80 backdrop-blur sticky bottom-0 shrink-0">
                       <button 
                         type="button" 
                         onClick={() => { setView('ipqc'); setEditingId(null); }}
@@ -1868,7 +1885,7 @@ export default function App() {
                       </button>
                       <button 
                         type="submit" 
-                        className="bg-brand-orange text-white px-10 py-2.5 rounded text-xs font-bold uppercase shadow-lg shadow-brand-orange/20 hover:brightness-110 active:scale-95 transition-all"
+                        className="bg-brand-orange text-white px-10 py-2.5 rounded-xl text-xs font-bold uppercase shadow-lg shadow-brand-orange/20 hover:brightness-110 active:scale-95 transition-all"
                       >
                         {editingId ? 'Update Record' : 'Submit Audit'}
                       </button>
@@ -2312,20 +2329,58 @@ function FilterInput({ label, value, onChange, type = 'text', options = [], plac
   );
 }
 
-function FormInput({ label, required, value, onChange, type = 'text' }: any) {
+function FormInput({ label, required, value, onChange, type = 'text', placeholder, helper }: any) {
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between px-1">
-        <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em]">{label}</label>
-        {required && <span className="text-[9px] font-black text-rose-500 uppercase tracking-widest bg-rose-50 px-1.5 py-0.5 rounded">Required</span>}
-      </div>
+      <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em] px-1">
+        {label}{required && <span className="text-rose-500 ml-0.5">*</span>}
+      </label>
       <input 
         type={type} 
         value={value}
+        placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
         required={required}
-        className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 px-4 text-sm font-semibold text-slate-800 focus:bg-white focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/5 outline-none transition-all"
+        className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 px-4 text-sm font-semibold text-slate-800 focus:bg-white focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/5 outline-none transition-all placeholder:text-slate-300 placeholder:font-normal"
       />
+      {helper && <span className="text-[9px] text-slate-400 px-1">{helper}</span>}
+    </div>
+  );
+}
+
+function FormSection({ icon, title, description, children }: { icon: any, title: string, description?: string, children: any }) {
+  return (
+    <div className="space-y-5">
+      <div className="flex items-start gap-3 pb-3 border-b border-slate-100">
+        <div className="w-7 h-7 rounded-lg bg-brand-orange/10 text-brand-orange flex items-center justify-center shrink-0 mt-0.5">
+          {icon}
+        </div>
+        <div>
+          <h3 className="text-xs font-black uppercase tracking-widest text-slate-700">{title}</h3>
+          {description && <p className="text-[10px] text-slate-400 font-medium mt-0.5">{description}</p>}
+        </div>
+      </div>
+      <div className="space-y-5">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function AutoField({ label, value, accent = 'slate' }: { label: string, value?: string, accent?: 'slate' | 'orange' }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em] px-1 flex items-center gap-1.5">
+        {label}
+        <span className="inline-flex items-center gap-0.5 text-[8px] font-black text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded normal-case tracking-normal">
+          <Sparkles size={8} /> Auto
+        </span>
+      </label>
+      <div className={`w-full bg-slate-100 border border-slate-200 rounded-xl py-3 px-4 text-sm font-semibold truncate ${
+        accent === 'orange' ? 'text-brand-orange' : 'text-slate-600'
+      }`}>
+        {value || '—'}
+      </div>
     </div>
   );
 }
@@ -2357,14 +2412,17 @@ function DetailField({ label, value, highlight, status }: { label: string, value
   );
 }
 
-function FormSelect({ label, value, onChange, options }: any) {
+function FormSelect({ label, value, onChange, options, required, helper }: any) {
   return (
     <div className="flex flex-col gap-2">
-      <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em] px-1">{label}</label>
+      <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em] px-1">
+        {label}{required && <span className="text-rose-500 ml-0.5">*</span>}
+      </label>
       <div className="relative group">
         <select 
           value={value}
           onChange={(e) => onChange(e.target.value)}
+          required={required}
           className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 px-4 text-sm font-semibold text-slate-800 focus:bg-white focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/5 outline-none transition-all appearance-none cursor-pointer"
         >
           {options.map((opt: any) => <option key={opt} value={opt}>{opt}</option>)}
@@ -2373,6 +2431,7 @@ function FormSelect({ label, value, onChange, options }: any) {
           <MoreVertical size={16} />
         </div>
       </div>
+      {helper && <span className="text-[9px] text-slate-400 px-1">{helper}</span>}
     </div>
   );
 }
