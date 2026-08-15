@@ -22,13 +22,26 @@ app.use('/uploads', express.static('public/uploads')); // Serve images to fronte
 // Credentials never live in the frontend bundle. The username is plain env
 // config; the password is stored server-side as a bcrypt hash (see
 // scripts/generate-password-hash.js to create ADMIN_PASSWORD_HASH).
-const { JWT_SECRET, ADMIN_USERNAME, ADMIN_PASSWORD_HASH } = process.env;
+const {
+  JWT_SECRET,
+  ADMIN_USERNAME,
+  ADMIN_PASSWORD_HASH,
+  OPENAI_API_KEY,
+  OPENAI_MODEL = 'gpt-5.6'
+} = process.env;
 
 if (!JWT_SECRET || !ADMIN_USERNAME || !ADMIN_PASSWORD_HASH) {
   console.warn(
     'WARNING: JWT_SECRET, ADMIN_USERNAME, or ADMIN_PASSWORD_HASH is missing from .env. ' +
     'Admin login and all protected write routes will fail until these are set. ' +
     'Run `node scripts/generate-password-hash.js` to create a hash.'
+  );
+}
+
+if (!OPENAI_API_KEY) {
+  console.warn(
+    'INFO: OPENAI_API_KEY is not configured. The application will work normally, ' +
+    'but the admin-only AI Insights page will remain unavailable until a key is added.'
   );
 }
 
@@ -107,6 +120,85 @@ db.getConnection((err, connection) => {
     connection.release();
   }
 });
+
+
+// Small Promise wrapper used by read-only analytics endpoints.
+const queryDb = (sql, values = []) =>
+  new Promise((resolve, reject) => {
+    db.query(sql, values, (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows);
+    });
+  });
+
+const normalizeFindingStatus = (value) => {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'open') return 'Open';
+  if (normalized === 'closed' || normalized === 'close') return 'Closed';
+  return '';
+};
+
+const recordAgeDays = (auditDate) => {
+  if (!auditDate) return 0;
+  const date = new Date(`${auditDate}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return 0;
+  return Math.max(0, Math.floor((Date.now() - date.getTime()) / 86400000));
+};
+
+const topCounts = (rows, key, limit = 10) => {
+  const counts = {};
+  for (const row of rows) {
+    const value = String(row[key] ?? '').trim();
+    if (!value) continue;
+    counts[value] = (counts[value] || 0) + 1;
+  }
+
+  return Object.entries(counts)
+    .map(([name, value]) => ({ name, value }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, limit);
+};
+
+const getResponseText = (responseJson) => {
+  if (typeof responseJson?.output_text === 'string') {
+    return responseJson.output_text;
+  }
+
+  const parts = [];
+  for (const item of responseJson?.output || []) {
+    if (item?.type !== 'message') continue;
+    for (const content of item?.content || []) {
+      if (content?.type === 'output_text' && typeof content.text === 'string') {
+        parts.push(content.text);
+      }
+    }
+  }
+  return parts.join('\n').trim();
+};
+
+const parseAiJson = (text) => {
+  if (!text) return null;
+  const stripped = text
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+
+  try {
+    return JSON.parse(stripped);
+  } catch {
+    return null;
+  }
+};
+
+const sanitizeAiFilters = (filters = {}) => {
+  const allowed = ['status', 'icarStatus', 'platform', 'category', 'auditor', 'department', 'ww', 'mqe'];
+  return Object.fromEntries(
+    allowed
+      .filter((key) => filters[key] !== undefined && filters[key] !== null && String(filters[key]).trim() !== '')
+      .map((key) => [key, String(filters[key]).trim()])
+  );
+};
 
 // ==========================================
 // App Settings (auditor list & platform-MQE mapping)
@@ -227,6 +319,266 @@ app.get('/api/records', (req, res) => {
     if (err) return res.status(500).json(err);
     res.status(200).json(results);
   });
+});
+
+
+// ==========================================
+// Admin-only AI Insights (READ ONLY)
+// ==========================================
+// Important design boundary:
+// - The model never receives a database connection or SQL execution tool.
+// - The server first computes a compact, read-only operational snapshot.
+// - The route has no INSERT / UPDATE / DELETE capability.
+// - Evidence images and free-form remarks are not sent to the AI service.
+app.post('/api/ai-insights', authenticateAdmin, async (req, res) => {
+  const question = String(req.body?.question || '').trim();
+
+  if (!question) {
+    return res.status(400).json({ error: 'Please enter a question about the IPQC data.' });
+  }
+
+  if (question.length > 1200) {
+    return res.status(400).json({ error: 'Please keep the question under 1,200 characters.' });
+  }
+
+  if (!OPENAI_API_KEY) {
+    return res.status(503).json({
+      error: 'AI Insights is not configured on the server. Add OPENAI_API_KEY to the server .env file and restart the backend.'
+    });
+  }
+
+  try {
+    const rows = await queryDb(`
+      SELECT
+        id,
+        no,
+        DATE_FORMAT(audit_date, '%Y-%m-%d') AS auditDate,
+        ww,
+        shift,
+        auditor_name AS auditors,
+        department,
+        platform,
+        area_station AS areaStation,
+        group_finding AS groupFinding,
+        category,
+        finding_details AS detailsFindings,
+        status,
+        icar_status AS icarStatus,
+        icar_num AS icarNum,
+        mqe_engineer AS mqeEngineer
+      FROM audit_records
+      ORDER BY audit_date ASC, id ASC
+    `);
+
+    const normalized = rows.map((row) => ({
+      ...row,
+      status: normalizeFindingStatus(row.status) || 'Not Set',
+      icarStatus: String(row.icarStatus || 'Locked'),
+      ageDays: recordAgeDays(row.auditDate),
+    }));
+
+    const open = normalized.filter((row) => row.status === 'Open');
+    const closed = normalized.filter((row) => row.status === 'Closed');
+    const statusNotSet = normalized.filter((row) => row.status === 'Not Set');
+    const submitted = normalized.filter((row) => row.icarStatus === 'Submitted');
+    const locked = normalized.filter((row) => row.icarStatus !== 'Submitted');
+    const submittedButOpen = open.filter((row) => row.icarStatus === 'Submitted');
+    const openOver14 = open.filter((row) => row.ageDays > 14);
+    const openOver30 = open.filter((row) => row.ageDays > 30);
+    const unassignedMqe = normalized.filter((row) => {
+      const value = String(row.mqeEngineer || '').trim().toLowerCase();
+      return !value || value === 'unassigned' || value === 'not assigned';
+    });
+
+    const classified = open.length + closed.length;
+    const closureRate = classified ? Number(((closed.length / classified) * 100).toFixed(1)) : 0;
+
+    const weeklyMap = {};
+    for (const row of normalized) {
+      const ww = String(row.ww || '').trim();
+      if (!ww) continue;
+      if (!weeklyMap[ww]) {
+        weeklyMap[ww] = { ww, total: 0, open: 0, closed: 0, submittedIcar: 0 };
+      }
+      weeklyMap[ww].total++;
+      if (row.status === 'Open') weeklyMap[ww].open++;
+      if (row.status === 'Closed') weeklyMap[ww].closed++;
+      if (row.icarStatus === 'Submitted') weeklyMap[ww].submittedIcar++;
+    }
+
+    const snapshot = {
+      generatedAt: new Date().toISOString(),
+      summary: {
+        totalFindings: normalized.length,
+        openFindings: open.length,
+        closedFindings: closed.length,
+        findingStatusNotSet: statusNotSet.length,
+        closureRatePercent: closureRate,
+        lockedIcar: locked.length,
+        submittedIcar: submitted.length,
+        submittedIcarStillOpen: submittedButOpen.length,
+        openOver14Days: openOver14.length,
+        openOver30Days: openOver30.length,
+        recordsWithoutMqeOwner: unassignedMqe.length,
+      },
+      openWorkload: {
+        byPlatform: topCounts(open, 'platform', 12),
+        byCategory: topCounts(open, 'category', 12),
+        byMqe: topCounts(open, 'mqeEngineer', 12),
+        byDepartment: topCounts(open, 'department', 10),
+        byAuditor: topCounts(open, 'auditors', 10),
+        byFindingDetail: topCounts(open, 'detailsFindings', 12),
+      },
+      allFindings: {
+        byPlatform: topCounts(normalized, 'platform', 12),
+        byCategory: topCounts(normalized, 'category', 12),
+        byMqe: topCounts(normalized, 'mqeEngineer', 12),
+        byAuditor: topCounts(normalized, 'auditors', 10),
+      },
+      workWeeks: Object.values(weeklyMap)
+        .sort((a, b) => Number(a.ww) - Number(b.ww)),
+      oldestOpen: [...open]
+        .sort((a, b) => b.ageDays - a.ageDays)
+        .slice(0, 12)
+        .map((row) => ({
+          no: row.no ?? row.id,
+          auditDate: row.auditDate,
+          ageDays: row.ageDays,
+          platform: row.platform,
+          category: row.category,
+          detailsFindings: row.detailsFindings,
+          mqeEngineer: row.mqeEngineer || 'Unassigned',
+          icarStatus: row.icarStatus,
+        })),
+      submittedButOpen: submittedButOpen
+        .slice(0, 12)
+        .map((row) => ({
+          no: row.no ?? row.id,
+          auditDate: row.auditDate,
+          platform: row.platform,
+          category: row.category,
+          detailsFindings: row.detailsFindings,
+          icarNum: row.icarNum,
+          mqeEngineer: row.mqeEngineer || 'Unassigned',
+        })),
+      filterValues: {
+        platforms: [...new Set(normalized.map((r) => r.platform).filter(Boolean))].sort(),
+        categories: [...new Set(normalized.map((r) => r.category).filter(Boolean))].sort(),
+        auditors: [...new Set(normalized.map((r) => r.auditors).filter(Boolean))].sort(),
+        departments: [...new Set(normalized.map((r) => r.department).filter(Boolean))].sort(),
+        mqes: [...new Set(normalized.map((r) => r.mqeEngineer).filter(Boolean))].sort(),
+        workWeeks: [...new Set(normalized.map((r) => String(r.ww || '')).filter(Boolean))]
+          .sort((a, b) => Number(a) - Number(b)),
+      },
+    };
+
+    const systemInstruction = `
+You are the read-only IPQC Insights Assistant for an industrial quality-management system.
+
+Rules:
+1. Use ONLY the supplied database snapshot. Never invent counts, causes, dates, trends, people or records.
+2. Finding lifecycle and ICAR lifecycle are separate:
+   - finding status: Open / Closed
+   - ICAR status: Locked / Submitted
+   A Submitted ICAR does NOT mean the finding is Closed.
+3. You are analysis-only. If the admin asks you to edit, delete, close, submit, approve or otherwise change records, clearly state that you cannot perform database changes.
+4. Be concise, management-friendly and operational. Surface the most decision-relevant number first.
+5. When comparing work weeks, treat WW values numerically.
+6. A filter should only be returned when the answer clearly maps to matching records.
+7. Filter values must use exact database values from snapshot.filterValues. Leave unsupported filters blank.
+8. Do not output Markdown tables.
+
+Return ONLY valid JSON with this exact shape:
+{
+  "answer": "plain text answer, concise but useful; line breaks are allowed",
+  "highlights": [
+    {"label": "short label", "value": "display value", "detail": "optional short context"}
+  ],
+  "filters": {
+    "status": "",
+    "icarStatus": "",
+    "platform": "",
+    "category": "",
+    "auditor": "",
+    "department": "",
+    "ww": "",
+    "mqe": ""
+  },
+  "caveat": "short verification note when appropriate"
+}
+
+Use at most four highlights.
+`;
+
+    const openAiResponse = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        max_output_tokens: 900,
+        input: [
+          {
+            role: 'system',
+            content: [{ type: 'input_text', text: systemInstruction }],
+          },
+          {
+            role: 'user',
+            content: [{
+              type: 'input_text',
+              text: `Admin question:\n${question}\n\nCurrent IPQC snapshot:\n${JSON.stringify(snapshot)}`
+            }],
+          },
+        ],
+      }),
+    });
+
+    const openAiJson = await openAiResponse.json();
+
+    if (!openAiResponse.ok) {
+      console.error('OpenAI API error:', openAiJson);
+      return res.status(502).json({
+        error: openAiJson?.error?.message || 'The AI service could not process the request.'
+      });
+    }
+
+    const modelText = getResponseText(openAiJson);
+    const parsed = parseAiJson(modelText);
+
+    if (!parsed || typeof parsed.answer !== 'string') {
+      return res.status(200).json({
+        answer: modelText || 'The AI service returned an empty response.',
+        highlights: [],
+        filters: {},
+        caveat: 'Verify important decisions against the source IPQC records.',
+        generatedAt: snapshot.generatedAt,
+      });
+    }
+
+    const highlights = Array.isArray(parsed.highlights)
+      ? parsed.highlights
+          .filter((item) => item && item.label !== undefined && item.value !== undefined)
+          .slice(0, 4)
+          .map((item) => ({
+            label: String(item.label),
+            value: String(item.value),
+            detail: item.detail ? String(item.detail) : '',
+          }))
+      : [];
+
+    res.status(200).json({
+      answer: String(parsed.answer),
+      highlights,
+      filters: sanitizeAiFilters(parsed.filters),
+      caveat: parsed.caveat ? String(parsed.caveat) : '',
+      generatedAt: snapshot.generatedAt,
+    });
+  } catch (err) {
+    console.error('AI Insights error:', err);
+    res.status(500).json({ error: 'AI Insights failed while reading or analyzing the IPQC data.' });
+  }
 });
 
 // API: Add a New Record (CREATE)

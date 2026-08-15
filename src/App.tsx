@@ -59,6 +59,40 @@ type IPQCAuditRecord = Omit<AuditRecord, 'status'> & {
   status?: FindingStatus | string | null;
 };
 
+type AppView = ViewState | 'action-center' | 'ai-insights';
+
+type AIInsightFilters = {
+  status?: string;
+  icarStatus?: string;
+  platform?: string;
+  category?: string;
+  auditor?: string;
+  department?: string;
+  ww?: string;
+  mqe?: string;
+};
+
+type AIInsightResult = {
+  answer: string;
+  highlights?: Array<{
+    label: string;
+    value: string;
+    detail?: string;
+  }>;
+  filters?: AIInsightFilters;
+  caveat?: string;
+  generatedAt?: string;
+};
+
+const AI_SUGGESTED_QUESTIONS = [
+  'What requires the most attention right now?',
+  'Which platform has the most open findings?',
+  'Show me submitted ICARs that are still open.',
+  'Which categories are driving the most open findings?',
+  'Which MQE has the highest unresolved workload?',
+  'Summarize the latest work-week quality performance.',
+];
+
 const normalizeFindingStatus = (value: unknown): FindingStatus | '' => {
   const normalized = String(value ?? '').trim().toLowerCase();
   if (normalized === 'open') return 'Open';
@@ -74,6 +108,13 @@ const normalizeRecord = (raw: any): IPQCAuditRecord => ({
 
 const getFindingStatus = (record: Partial<IPQCAuditRecord>): FindingStatus | '' =>
   normalizeFindingStatus(record.status);
+
+const getRecordAgeDays = (auditDate?: string): number => {
+  if (!auditDate) return 0;
+  const date = new Date(`${auditDate}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return 0;
+  return Math.max(0, Math.floor((Date.now() - date.getTime()) / 86400000));
+};
 
 const API_BASE_URL = '';
 
@@ -217,7 +258,7 @@ const INITIAL_AUDITORS = [
 const WWS = Array.from({length: 52}, (_, i) => (i + 1).toString());
 
 export default function App() {
-  const [view, setView] = useState<ViewState>('ipqc');
+  const [view, setView] = useState<AppView>('ipqc');
   const [records, setRecords] = useState<IPQCAuditRecord[]>([]); 
   const [powerBiUrl, setPowerBiUrl] = useState<string>(''); 
   const [dashboardMode, setDashboardMode] = useState<'system' | 'powerbi'>('system');
@@ -258,6 +299,14 @@ export default function App() {
   const [importDragActive, setImportDragActive] = useState(false);
   const [importFileError, setImportFileError] = useState('');
   const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
+
+  // Admin-only AI Insights state. The assistant is deliberately read-only:
+  // it can analyze and recommend, but never writes to the audit database.
+  const [aiQuestion, setAiQuestion] = useState('');
+  const [aiLastQuestion, setAiLastQuestion] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState('');
+  const [aiResult, setAiResult] = useState<AIInsightResult | null>(null);
 
   // Settings State for CRUD Operations
   const [auditorsList, setAuditorsList] = useState(INITIAL_AUDITORS);
@@ -387,6 +436,50 @@ export default function App() {
     };
   }, [records]);
 
+  const actionCenterData = useMemo(() => {
+    const openRecords = records.filter(r => getFindingStatus(r) === 'Open');
+    const closedRecords = records.filter(r => getFindingStatus(r) === 'Closed');
+    const openOver14 = openRecords.filter(r => getRecordAgeDays(r.auditDate) > 14);
+    const openOver30 = openRecords.filter(r => getRecordAgeDays(r.auditDate) > 30);
+    const submittedButOpen = openRecords.filter(r => r.icarStatus === 'Submitted');
+    const unassignedMqe = records.filter(r => {
+      const value = String(r.mqeEngineer || '').trim().toLowerCase();
+      return !value || value === 'unassigned' || value === 'not assigned';
+    });
+
+    const countBy = (source: IPQCAuditRecord[], key: keyof IPQCAuditRecord) => {
+      const counts: Record<string, number> = {};
+      source.forEach(record => {
+        const value = String(record[key] ?? '').trim();
+        if (value) counts[value] = (counts[value] || 0) + 1;
+      });
+      return Object.entries(counts)
+        .map(([name, value]) => ({ name, value }))
+        .sort((a, b) => b.value - a.value);
+    };
+
+    const oldestOpen = [...openRecords]
+      .map(record => ({ record, ageDays: getRecordAgeDays(record.auditDate) }))
+      .sort((a, b) => b.ageDays - a.ageDays)
+      .slice(0, 8);
+
+    const classified = openRecords.length + closedRecords.length;
+    const closureRate = classified > 0 ? (closedRecords.length / classified) * 100 : 0;
+
+    return {
+      open: openRecords.length,
+      closed: closedRecords.length,
+      openOver14: openOver14.length,
+      openOver30: openOver30.length,
+      submittedButOpen: submittedButOpen.length,
+      unassignedMqe: unassignedMqe.length,
+      closureRate,
+      topOpenPlatforms: countBy(openRecords, 'platform').slice(0, 6),
+      topOpenCategories: countBy(openRecords, 'category').slice(0, 6),
+      oldestOpen,
+    };
+  }, [records]);
+
   const DIMENSION_LABELS: Record<'platform' | 'category' | 'mqe' | 'auditor', string> = {
     platform: 'Platform',
     category: 'Category',
@@ -440,7 +533,7 @@ export default function App() {
     setAuthToken(null);
     setAdminUsername(null);
     setSessionExpired(false);
-    if (view === 'settings') setView('ipqc');
+    if (view === 'settings' || view === 'action-center' || view === 'ai-insights') setView('ipqc');
   };
 
   // Attaches the admin token to write requests (POST/PUT/DELETE). If the
@@ -461,6 +554,43 @@ export default function App() {
       setShowLoginModal(true);
     }
     return response;
+  };
+
+  const handleAskAi = async (questionOverride?: string) => {
+    const question = (questionOverride ?? aiQuestion).trim();
+    if (!question || aiLoading) return;
+
+    setAiLoading(true);
+    setAiError('');
+    setAiLastQuestion(question);
+    setAiQuestion('');
+
+    try {
+      const response = await authFetch(`${API_BASE_URL}/api/ai-insights`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(data.error || 'AI Insights could not process this question.');
+      }
+
+      setAiResult({
+        answer: String(data.answer || 'No answer was returned.'),
+        highlights: Array.isArray(data.highlights) ? data.highlights : [],
+        filters: data.filters || {},
+        caveat: data.caveat || '',
+        generatedAt: data.generatedAt || new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error('AI Insights error:', err);
+      setAiError(err instanceof Error ? err.message : 'AI Insights is currently unavailable.');
+    } finally {
+      setAiLoading(false);
+    }
   };
 
   const getMqeForPlatform = (platform: string) => {
@@ -599,6 +729,43 @@ export default function App() {
   const [filterDate, setFilterDate] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
+
+  const clearRecordFilters = () => {
+    setFilterDate('');
+    setFilterAuditor('');
+    setFilterFindings('');
+    setFilterDept('');
+    setFilterCategory('');
+    setFilterStatus('');
+    setFilterIcarStatus('');
+    setFilterShift('');
+    setFilterPlatform('');
+    setSearchQuery('');
+    setFilterWW('');
+  };
+
+  const openRecordPreset = (preset: AIInsightFilters = {}) => {
+    clearRecordFilters();
+    setSelectedRecord(null);
+
+    if (preset.status) setFilterStatus(preset.status);
+    if (preset.icarStatus) setFilterIcarStatus(preset.icarStatus);
+    if (preset.platform) setFilterPlatform(preset.platform);
+    if (preset.category) setFilterCategory(preset.category);
+    if (preset.auditor) setFilterAuditor(preset.auditor);
+    if (preset.department) setFilterDept(preset.department);
+    if (preset.ww) setFilterWW(String(preset.ww));
+
+    // MQE is not a dedicated table filter in the current records view, so
+    // reuse global search for a model-suggested MQE drill-down.
+    if (preset.mqe) setSearchQuery(preset.mqe);
+
+    setFiltersOpen(Boolean(
+      preset.status || preset.icarStatus || preset.platform || preset.category ||
+      preset.auditor || preset.department || preset.ww || preset.mqe
+    ));
+    setView('ipqc');
+  };
 
   const [newAudit, setNewAudit] = useState<Partial<IPQCAuditRecord>>({
     no: undefined,
@@ -1014,13 +1181,15 @@ export default function App() {
   // Header title changes with the active tab, replacing the old static
   // "IPQC TRACKER" label + the separate "IPQC Records Management" panel
   // that used to repeat the same info and eat vertical space.
-  const viewTitles: Record<ViewState, string> = {
+  const viewTitles: Record<string, string> = {
     dashboard: 'Analytics Dashboard',
     ipqc: 'IPQC Records',
     import: 'Import Records',
     checklist: 'Checklist',
     'add-audit': editingId ? 'Edit Finding' : 'Add Finding',
     history: 'History',
+    'action-center': 'Admin Action Center',
+    'ai-insights': 'AI Insights',
     settings: 'Admin Panel',
   };
   const headerTitle = view === 'ipqc' && selectedRecord ? 'Finding Details' : (viewTitles[view] || 'IPQC Tracker');
@@ -1079,8 +1248,30 @@ export default function App() {
             <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] italic opacity-50">System</span>
           </div>
           <NavItem 
+            icon={isAdmin ? <AlertCircle size={18} /> : <Lock size={18} />} 
+            label="Action Center" 
+            active={view === 'action-center'} 
+            collapsed={!sidebarOpen && window.innerWidth >= 768}
+            disabled={!isAdmin}
+            onClick={() => {
+              setView('action-center');
+              if (window.innerWidth < 768) setSidebarOpen(false);
+            }}
+          />
+          <NavItem 
+            icon={isAdmin ? <Sparkles size={18} /> : <Lock size={18} />} 
+            label="AI Insights" 
+            active={view === 'ai-insights'} 
+            collapsed={!sidebarOpen && window.innerWidth >= 768}
+            disabled={!isAdmin}
+            onClick={() => {
+              setView('ai-insights');
+              if (window.innerWidth < 768) setSidebarOpen(false);
+            }}
+          />
+          <NavItem 
             icon={isAdmin ? <Settings size={18} /> : <Lock size={18} />} 
-            label="Admin Panel" 
+            label="Admin Settings" 
             active={view === 'settings'} 
             collapsed={!sidebarOpen && window.innerWidth >= 768}
             disabled={!isAdmin}
@@ -2617,6 +2808,515 @@ export default function App() {
                       </div>
                     </aside>
                   </form>
+                </div>
+              </motion.div>
+            )}
+
+
+            {view === 'action-center' && isAdmin && (
+              <motion.div
+                key="action-center"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.18 }}
+                className="w-full max-w-7xl mx-auto pb-20 space-y-5"
+              >
+                <section className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+                  <div className="min-w-0">
+                    <div className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-brand-orange">
+                      <AlertCircle size={13} />
+                      Admin operations
+                    </div>
+                    <h2 className="text-xl font-black tracking-tight text-slate-900 md:text-2xl">Action Center</h2>
+                    <p className="mt-1 max-w-2xl text-[11px] leading-5 text-slate-500">
+                      A read-only operational queue for unresolved findings, aging risk, ICAR follow-up and ownership gaps.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[10px] font-bold text-emerald-700">
+                      <Lock size={11} />
+                      Admin only
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setView('ai-insights')}
+                      className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-slate-900 px-3.5 text-[10px] font-black uppercase tracking-wider text-white transition-all hover:bg-slate-800"
+                    >
+                      <Sparkles size={13} />
+                      Ask AI Insights
+                    </button>
+                  </div>
+                </section>
+
+                <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <button
+                    type="button"
+                    onClick={() => openRecordPreset({ status: 'Open' })}
+                    className="group rounded-xl border border-slate-200 bg-white p-4 text-left shadow-[0_1px_3px_rgba(15,23,42,0.04)] transition-all hover:-translate-y-0.5 hover:border-orange-200 hover:shadow-md"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Open findings</p>
+                        <p className="mt-2 text-2xl font-black tracking-tight text-slate-900">{actionCenterData.open}</p>
+                      </div>
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-50 text-orange-600">
+                        <AlertCircle size={17} />
+                      </div>
+                    </div>
+                    <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
+                      <span className="text-[10px] font-medium text-slate-500">Requires follow-up</span>
+                      <ChevronRight size={13} className="text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-orange-500" />
+                    </div>
+                  </button>
+
+                  <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Open &gt; 14 days</p>
+                        <p className="mt-2 text-2xl font-black tracking-tight text-slate-900">{actionCenterData.openOver14}</p>
+                      </div>
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
+                        <Clock size={17} />
+                      </div>
+                    </div>
+                    <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
+                      <span className="text-[10px] font-medium text-slate-500">{actionCenterData.openOver30} older than 30 days</span>
+                      <span className="text-[9px] font-black uppercase tracking-wider text-amber-600">Aging risk</span>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => openRecordPreset({ status: 'Open', icarStatus: 'Submitted' })}
+                    className="group rounded-xl border border-slate-200 bg-white p-4 text-left shadow-[0_1px_3px_rgba(15,23,42,0.04)] transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Submitted ICAR + Open</p>
+                        <p className="mt-2 text-2xl font-black tracking-tight text-slate-900">{actionCenterData.submittedButOpen}</p>
+                      </div>
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+                        <Unlock size={17} />
+                      </div>
+                    </div>
+                    <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
+                      <span className="text-[10px] font-medium text-slate-500">Corrective action still unresolved</span>
+                      <ChevronRight size={13} className="text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-blue-500" />
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setView('settings')}
+                    className="group rounded-xl border border-slate-200 bg-white p-4 text-left shadow-[0_1px_3px_rgba(15,23,42,0.04)] transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Ownership gaps</p>
+                        <p className="mt-2 text-2xl font-black tracking-tight text-slate-900">{actionCenterData.unassignedMqe}</p>
+                      </div>
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
+                        <Users size={17} />
+                      </div>
+                    </div>
+                    <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
+                      <span className="text-[10px] font-medium text-slate-500">Records without MQE ownership</span>
+                      <ChevronRight size={13} className="text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-slate-600" />
+                    </div>
+                  </button>
+                </section>
+
+                <section className="grid grid-cols-1 gap-5 xl:grid-cols-12">
+                  <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)] xl:col-span-8">
+                    <div className="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <h3 className="text-sm font-black text-slate-900">Oldest unresolved findings</h3>
+                        <p className="mt-0.5 text-[10px] font-medium text-slate-400">Prioritized by elapsed days from the audit date.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => openRecordPreset({ status: 'Open' })}
+                        className="text-[10px] font-black uppercase tracking-wider text-brand-orange hover:underline"
+                      >
+                        View all open
+                      </button>
+                    </div>
+
+                    {actionCenterData.oldestOpen.length === 0 ? (
+                      <div className="px-5 py-14 text-center">
+                        <CheckCircle2 size={28} className="mx-auto text-emerald-400" />
+                        <p className="mt-3 text-xs font-bold text-slate-700">No open findings</p>
+                        <p className="mt-1 text-[10px] text-slate-400">There are currently no unresolved findings in the dataset.</p>
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full min-w-[760px] text-left">
+                          <thead className="bg-slate-50/80">
+                            <tr className="border-b border-slate-200">
+                              <th className="px-5 py-3 text-[9px] font-black uppercase tracking-wider text-slate-400">Record</th>
+                              <th className="px-5 py-3 text-[9px] font-black uppercase tracking-wider text-slate-400">Finding</th>
+                              <th className="px-5 py-3 text-[9px] font-black uppercase tracking-wider text-slate-400">Platform</th>
+                              <th className="px-5 py-3 text-[9px] font-black uppercase tracking-wider text-slate-400">MQE</th>
+                              <th className="px-5 py-3 text-right text-[9px] font-black uppercase tracking-wider text-slate-400">Age</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {actionCenterData.oldestOpen.map(({ record, ageDays }) => (
+                              <tr
+                                key={record.id}
+                                onClick={() => { setSelectedRecord(record); setView('ipqc'); }}
+                                className="cursor-pointer transition-colors hover:bg-orange-50/40"
+                              >
+                                <td className="px-5 py-3.5">
+                                  <p className="text-xs font-black text-slate-800">#{record.no ?? record.id}</p>
+                                  <p className="mt-0.5 text-[9px] font-medium text-slate-400">{record.auditDate || 'Date not set'}</p>
+                                </td>
+                                <td className="max-w-[300px] px-5 py-3.5">
+                                  <p className="truncate text-xs font-bold text-slate-800">{record.detailsFindings || 'Finding details not set'}</p>
+                                  <p className="mt-0.5 truncate text-[9px] text-slate-400">{String(record.category || '').replaceAll('_', ' ') || 'Category not set'}</p>
+                                </td>
+                                <td className="px-5 py-3.5 text-xs font-semibold text-slate-600">{record.platform || '—'}</td>
+                                <td className="px-5 py-3.5 text-xs font-semibold text-slate-600">{record.mqeEngineer || 'Unassigned'}</td>
+                                <td className="px-5 py-3.5 text-right">
+                                  <span className={`inline-flex rounded-md border px-2 py-1 text-[9px] font-black ${
+                                    ageDays > 30
+                                      ? 'border-rose-200 bg-rose-50 text-rose-700'
+                                      : ageDays > 14
+                                        ? 'border-amber-200 bg-amber-50 text-amber-700'
+                                        : 'border-slate-200 bg-slate-50 text-slate-600'
+                                  }`}>
+                                    {ageDays}d
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-5 xl:col-span-4">
+                    <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Lifecycle health</p>
+                          <p className="mt-1 text-sm font-black text-slate-900">Closure performance</p>
+                        </div>
+                        <CheckCircle2 size={18} className="text-emerald-500" />
+                      </div>
+                      <div className="mt-5 flex items-end justify-between gap-4">
+                        <div>
+                          <p className="text-3xl font-black tracking-tight text-slate-900">{actionCenterData.closureRate.toFixed(1)}%</p>
+                          <p className="mt-1 text-[10px] font-medium text-slate-400">Closed / classified findings</p>
+                        </div>
+                        <p className="text-right text-[10px] leading-5 text-slate-500">
+                          <span className="font-black text-emerald-600">{actionCenterData.closed}</span> closed<br />
+                          <span className="font-black text-orange-600">{actionCenterData.open}</span> open
+                        </p>
+                      </div>
+                      <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100">
+                        <div
+                          className="h-full rounded-full bg-emerald-500 transition-all"
+                          style={{ width: `${Math.min(100, actionCenterData.closureRate)}%` }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+                      <div className="mb-4 flex items-center justify-between">
+                        <div>
+                          <p className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Open workload</p>
+                          <p className="mt-1 text-sm font-black text-slate-900">Top platforms</p>
+                        </div>
+                        <Layers size={17} className="text-slate-300" />
+                      </div>
+                      <div className="space-y-3">
+                        {actionCenterData.topOpenPlatforms.length === 0 ? (
+                          <p className="py-5 text-center text-[10px] text-slate-400">No open workload to rank.</p>
+                        ) : actionCenterData.topOpenPlatforms.map((item) => {
+                          const maxValue = actionCenterData.topOpenPlatforms[0]?.value || 1;
+                          return (
+                            <button
+                              type="button"
+                              key={item.name}
+                              onClick={() => openRecordPreset({ status: 'Open', platform: item.name })}
+                              className="block w-full text-left"
+                            >
+                              <div className="mb-1.5 flex items-center justify-between gap-3">
+                                <span className="truncate text-[10px] font-bold text-slate-600">{item.name}</span>
+                                <span className="text-[10px] font-black text-slate-800">{item.value}</span>
+                              </div>
+                              <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
+                                <div
+                                  className="h-full rounded-full bg-brand-orange"
+                                  style={{ width: `${Math.max(8, (item.value / maxValue) * 100)}%` }}
+                                />
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+                  <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <p className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Issue concentration</p>
+                      <h3 className="mt-1 text-sm font-black text-slate-900">Top categories among open findings</h3>
+                    </div>
+                    <p className="text-[10px] text-slate-400">Click a category to drill into matching records.</p>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {actionCenterData.topOpenCategories.map(item => (
+                      <button
+                        type="button"
+                        key={item.name}
+                        onClick={() => openRecordPreset({ status: 'Open', category: item.name })}
+                        className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50/50 px-3.5 py-3 text-left transition-colors hover:border-orange-200 hover:bg-orange-50/40"
+                      >
+                        <span className="min-w-0 truncate text-[10px] font-bold text-slate-600">{item.name.replaceAll('_', ' ')}</span>
+                        <span className="shrink-0 rounded-md bg-white px-2 py-1 text-[10px] font-black text-slate-800 shadow-sm">{item.value}</span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              </motion.div>
+            )}
+
+            {view === 'ai-insights' && isAdmin && (
+              <motion.div
+                key="ai-insights"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.18 }}
+                className="w-full max-w-7xl mx-auto pb-20"
+              >
+                <section className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+                  <div className="min-w-0">
+                    <div className="mb-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-brand-orange">
+                      <Sparkles size={13} />
+                      Admin intelligence
+                    </div>
+                    <h2 className="text-xl font-black tracking-tight text-slate-900 md:text-2xl">AI Insights</h2>
+                    <p className="mt-1 max-w-2xl text-[11px] leading-5 text-slate-500">
+                      Ask operational questions in plain language. The assistant receives a read-only aggregated IPQC snapshot and cannot change audit records.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[10px] font-bold text-emerald-700">
+                      <Lock size={11} />
+                      Read only
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setView('action-center')}
+                      className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 text-[10px] font-black uppercase tracking-wider text-slate-600 transition-colors hover:bg-slate-50"
+                    >
+                      <AlertCircle size={13} />
+                      Action Center
+                    </button>
+                  </div>
+                </section>
+
+                <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
+                  <div className="space-y-5">
+                    <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
+                      <div className="border-b border-slate-100 px-5 py-4">
+                        <div className="flex items-start gap-3">
+                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-white">
+                            <Sparkles size={16} />
+                          </div>
+                          <div>
+                            <h3 className="text-sm font-black text-slate-900">Ask about IPQC performance</h3>
+                            <p className="mt-0.5 text-[10px] leading-4 text-slate-400">
+                              Findings, platforms, categories, work weeks, auditors, MQE ownership and ICAR lifecycle.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <form
+                        onSubmit={(e) => { e.preventDefault(); handleAskAi(); }}
+                        className="p-5"
+                      >
+                        <textarea
+                          value={aiQuestion}
+                          onChange={(e) => setAiQuestion(e.target.value)}
+                          disabled={aiLoading}
+                          rows={4}
+                          placeholder="Example: Which platform has the most open findings and what should management review first?"
+                          className="w-full resize-none rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-sm font-medium leading-6 text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-slate-400 focus:bg-white focus:ring-4 focus:ring-slate-900/5 disabled:cursor-wait disabled:opacity-70"
+                        />
+                        <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <p className="text-[9px] leading-4 text-slate-400">
+                            AI answers should support investigation, not replace record verification or quality approval.
+                          </p>
+                          <button
+                            type="submit"
+                            disabled={!aiQuestion.trim() || aiLoading}
+                            className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-brand-orange px-4 text-[10px] font-black uppercase tracking-wider text-white shadow-sm transition-all hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            {aiLoading ? (
+                              <>
+                                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                                Analyzing
+                              </>
+                            ) : (
+                              <>
+                                <Sparkles size={13} />
+                                Ask AI
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </form>
+
+                      <div className="border-t border-slate-100 bg-slate-50/50 px-5 py-4">
+                        <p className="mb-2 text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Suggested questions</p>
+                        <div className="flex flex-wrap gap-2">
+                          {AI_SUGGESTED_QUESTIONS.map(question => (
+                            <button
+                              key={question}
+                              type="button"
+                              disabled={aiLoading}
+                              onClick={() => handleAskAi(question)}
+                              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-[10px] font-semibold text-slate-600 transition-all hover:border-orange-200 hover:text-brand-orange disabled:opacity-40"
+                            >
+                              {question}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </section>
+
+                    {aiError && (
+                      <section className="rounded-xl border border-rose-200 bg-rose-50 p-4">
+                        <div className="flex items-start gap-3">
+                          <AlertCircle size={16} className="mt-0.5 shrink-0 text-rose-600" />
+                          <div>
+                            <p className="text-xs font-black text-rose-800">AI Insights unavailable</p>
+                            <p className="mt-1 text-[10px] leading-5 text-rose-700">{aiError}</p>
+                          </div>
+                        </div>
+                      </section>
+                    )}
+
+                    {aiResult ? (
+                      <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
+                        <div className="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <p className="text-[9px] font-black uppercase tracking-[0.14em] text-brand-orange">AI response</p>
+                            <h3 className="mt-1 text-sm font-black text-slate-900">{aiLastQuestion || 'IPQC insight'}</h3>
+                          </div>
+                          {aiResult.generatedAt && (
+                            <span className="shrink-0 text-[9px] font-medium text-slate-400">
+                              {new Date(aiResult.generatedAt).toLocaleString()}
+                            </span>
+                          )}
+                        </div>
+
+                        {aiResult.highlights && aiResult.highlights.length > 0 && (
+                          <div className="grid grid-cols-1 gap-2 border-b border-slate-100 bg-slate-50/50 p-4 sm:grid-cols-2 lg:grid-cols-4">
+                            {aiResult.highlights.slice(0, 4).map((highlight, index) => (
+                              <div key={`${highlight.label}-${index}`} className="rounded-lg border border-slate-200 bg-white px-3.5 py-3">
+                                <p className="text-[9px] font-black uppercase tracking-wider text-slate-400">{highlight.label}</p>
+                                <p className="mt-1 text-xl font-black tracking-tight text-slate-900">{highlight.value}</p>
+                                {highlight.detail && <p className="mt-1 text-[9px] leading-4 text-slate-400">{highlight.detail}</p>}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        <div className="p-5">
+                          <div className="flex items-start gap-3">
+                            <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-orange-50 text-brand-orange">
+                              <Sparkles size={13} />
+                            </div>
+                            <p className="whitespace-pre-wrap text-[12px] font-medium leading-6 text-slate-700">{aiResult.answer}</p>
+                          </div>
+
+                          <div className="mt-5 flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                              {aiResult.caveat ? (
+                                <p className="text-[9px] leading-4 text-slate-400">{aiResult.caveat}</p>
+                              ) : (
+                                <p className="text-[9px] leading-4 text-slate-400">Verify important decisions against the source records.</p>
+                              )}
+                            </div>
+                            {aiResult.filters && Object.values(aiResult.filters).some(Boolean) && (
+                              <button
+                                type="button"
+                                onClick={() => openRecordPreset(aiResult.filters)}
+                                className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-orange-200 bg-orange-50 px-3.5 text-[10px] font-black uppercase tracking-wider text-brand-orange transition-colors hover:bg-orange-100"
+                              >
+                                <Layers size={13} />
+                                View matching records
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </section>
+                    ) : !aiLoading && !aiError ? (
+                      <section className="rounded-xl border border-dashed border-slate-300 bg-white/60 px-5 py-10 text-center">
+                        <Sparkles size={24} className="mx-auto text-slate-300" />
+                        <p className="mt-3 text-xs font-black text-slate-700">Ready for an operational question</p>
+                        <p className="mx-auto mt-1 max-w-md text-[10px] leading-5 text-slate-400">
+                          Start with one of the suggested questions above. Results are based on the current database snapshot.
+                        </p>
+                      </section>
+                    ) : null}
+                  </div>
+
+                  <aside className="space-y-4 xl:sticky xl:top-0 xl:self-start">
+                    <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+                      <p className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Current data context</p>
+                      <div className="mt-4 divide-y divide-slate-100">
+                        <div className="flex items-center justify-between py-2.5">
+                          <span className="text-[10px] font-medium text-slate-500">Total findings</span>
+                          <span className="text-xs font-black text-slate-800">{records.length}</span>
+                        </div>
+                        <div className="flex items-center justify-between py-2.5">
+                          <span className="text-[10px] font-medium text-slate-500">Open</span>
+                          <span className="text-xs font-black text-orange-600">{actionCenterData.open}</span>
+                        </div>
+                        <div className="flex items-center justify-between py-2.5">
+                          <span className="text-[10px] font-medium text-slate-500">Closed</span>
+                          <span className="text-xs font-black text-emerald-600">{actionCenterData.closed}</span>
+                        </div>
+                        <div className="flex items-center justify-between py-2.5">
+                          <span className="text-[10px] font-medium text-slate-500">Submitted ICAR</span>
+                          <span className="text-xs font-black text-blue-600">{analyticsData.icarStatusCounts.Submitted}</span>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section className="rounded-xl border border-slate-200 bg-slate-900 p-4 text-white shadow-sm">
+                      <div className="flex items-center gap-2">
+                        <Lock size={13} className="text-emerald-400" />
+                        <p className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-300">Safety boundary</p>
+                      </div>
+                      <p className="mt-3 text-[11px] font-bold leading-5 text-white">Analysis only. No database writes.</p>
+                      <p className="mt-1 text-[9px] leading-4 text-slate-400">
+                        The AI route is authenticated and receives summarized operational data. It has no update, delete or close-finding tool.
+                      </p>
+                    </section>
+
+                    <section className="rounded-xl border border-slate-200 bg-white p-4">
+                      <p className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Useful prompts</p>
+                      <div className="mt-3 space-y-2 text-[10px] leading-5 text-slate-500">
+                        <p>• Compare platforms or work weeks.</p>
+                        <p>• Find unresolved ICAR follow-up.</p>
+                        <p>• Identify recurring categories.</p>
+                        <p>• Review MQE workload concentration.</p>
+                        <p>• Summarize management priorities.</p>
+                      </div>
+                    </section>
+                  </aside>
                 </div>
               </motion.div>
             )}
