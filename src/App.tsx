@@ -885,7 +885,7 @@ export default function App() {
     history: 'History',
     settings: 'Admin Panel',
   };
-  const headerTitle = viewTitles[view] || 'IPQC Tracker';
+  const headerTitle = view === 'ipqc' && selectedRecord ? 'Finding Details' : (viewTitles[view] || 'IPQC Tracker');
   const activeFilterCount = [
     filterAuditor, filterDept, filterFindings, filterCategory, filterStatus,
     filterShift, filterPlatform, filterWW, filterDate
@@ -934,7 +934,7 @@ export default function App() {
             label="IPQC Records" 
             active={view === 'ipqc'} 
             collapsed={!sidebarOpen && window.innerWidth >= 768}
-            onClick={() => { setView('ipqc'); if (window.innerWidth < 768) setSidebarOpen(false); }}
+            onClick={() => { setSelectedRecord(null); setView('ipqc'); if (window.innerWidth < 768) setSidebarOpen(false); }}
           />
 
           <div className="px-3 mt-6 mb-2">
@@ -1288,6 +1288,276 @@ export default function App() {
                 animate={{ opacity: 1 }}
                 className="flex-1 flex flex-col min-h-0 space-y-3"
               >
+                {selectedRecord ? (
+                  <div className="flex-1 overflow-y-auto custom-scrollbar">
+                    <div className="mx-auto w-full max-w-7xl pb-10">
+                      {/* Page toolbar */}
+                      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedRecord(null)}
+                          className="inline-flex w-fit items-center gap-1.5 text-[11px] font-semibold text-slate-500 transition-colors hover:text-brand-orange"
+                        >
+                          <ChevronLeft size={15} />
+                          Back to IPQC records
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => { handleEditClick(selectedRecord); setSelectedRecord(null); }}
+                          className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-brand-orange px-4 text-[11px] font-bold text-white shadow-[0_6px_16px_rgba(241,93,34,0.18)] transition-all hover:brightness-110 active:translate-y-px"
+                        >
+                          <Pencil size={14} />
+                          Edit finding
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_310px]">
+                        {/* Main record */}
+                        <div className="min-w-0 space-y-4">
+                          {/* Record identity */}
+                          <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+                            <div className="p-5 md:p-6">
+                              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                                <div className="min-w-0">
+                                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                                    <span className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+                                      <ClipboardCheck size={12} />
+                                      Finding record {selectedRecord.no ? `No. ${selectedRecord.no}` : `#${selectedRecord.id}`}
+                                    </span>
+                                    <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.08em] ${
+                                      selectedRecord.icarStatus === 'Submitted'
+                                        ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                        : selectedRecord.icarStatus === 'Closed'
+                                          ? 'border-slate-200 bg-slate-100 text-slate-700'
+                                          : 'border-amber-200 bg-amber-50 text-amber-700'
+                                    }`}>
+                                      {selectedRecord.icarStatus === 'Submitted' ? <Unlock size={10} /> : selectedRecord.icarStatus === 'Closed' ? <CheckCircle2 size={10} /> : <Lock size={10} />}
+                                      {selectedRecord.icarStatus || 'Locked'}
+                                    </span>
+                                  </div>
+
+                                  <h2 className="text-xl font-bold leading-tight tracking-tight text-slate-900 md:text-2xl">
+                                    {selectedRecord.detailsFindings || 'Finding details'}
+                                  </h2>
+                                  <p className="mt-2 max-w-3xl text-xs leading-5 text-slate-500">
+                                    Complete IPQC finding record with audit context, production ownership, corrective-action reference and supporting evidence.
+                                  </p>
+                                </div>
+
+                                <div className="shrink-0 lg:text-right">
+                                  <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-400">ICAR reference</p>
+                                  <p className="mt-1 font-mono text-sm font-bold text-slate-700">{selectedRecord.icarNum || 'N/A'}</p>
+                                </div>
+                              </div>
+
+                              <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-slate-100 pt-4 text-[11px] font-medium text-slate-500">
+                                <span className="inline-flex items-center gap-1.5"><CalendarDays size={13} className="text-slate-400" /> {selectedRecord.auditDate || '—'}</span>
+                                <span className="h-3 w-px bg-slate-200" aria-hidden="true" />
+                                <span>WW{selectedRecord.ww || '—'}</span>
+                                <span className="h-3 w-px bg-slate-200" aria-hidden="true" />
+                                <span>Shift {selectedRecord.shift || '—'}</span>
+                                <span className="h-3 w-px bg-slate-200" aria-hidden="true" />
+                                <span>{selectedRecord.department || '—'}</span>
+                              </div>
+                            </div>
+                          </section>
+
+                          {/* Structured record details */}
+                          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+                            <RecordDetailSection
+                              number="01"
+                              icon={<MapPin size={15} />}
+                              title="Location & ownership"
+                              description="Where the finding occurred and the engineering owner responsible for the platform."
+                            >
+                              <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-3">
+                                <RecordDetailField label="Platform" value={selectedRecord.platform} />
+                                <RecordDetailField label="Station / area" value={selectedRecord.areaStation} />
+                                <RecordDetailField label="MQE engineer" value={selectedRecord.mqeEngineer} accent />
+                              </div>
+                            </RecordDetailSection>
+
+                            <RecordDetailSection
+                              number="02"
+                              icon={<AlertCircle size={15} />}
+                              title="Finding classification"
+                              description="Classification and description captured during the audit."
+                            >
+                              <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-3">
+                                <RecordDetailField label="Category" value={selectedRecord.category} />
+                                <RecordDetailField label="Group finding" value={selectedRecord.groupFinding} />
+                                <RecordDetailField label="Finding details" value={selectedRecord.detailsFindings} />
+                              </div>
+
+                              <div className="mt-5 border-t border-slate-100 pt-5">
+                                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">Remarks / containment notes</p>
+                                <p className={`mt-2 text-sm leading-6 ${selectedRecord.remark ? 'font-medium text-slate-700' : 'italic text-slate-400'}`}>
+                                  {selectedRecord.remark || 'No additional remarks were recorded for this finding.'}
+                                </p>
+                              </div>
+                            </RecordDetailSection>
+
+                            <RecordDetailSection
+                              number="03"
+                              icon={<Users size={15} />}
+                              title="People & accountability"
+                              description="Audit ownership and the person responsible at the point of finding."
+                            >
+                              <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-3">
+                                <RecordDetailField label="IPQC auditor" value={selectedRecord.auditors} />
+                                <RecordDetailField label="PIC (finding)" value={selectedRecord.personOnJob} />
+                                <RecordDetailField label="Department" value={selectedRecord.department} />
+                              </div>
+                            </RecordDetailSection>
+
+                            <RecordDetailSection
+                              number="04"
+                              icon={<CalendarDays size={15} />}
+                              title="Audit context"
+                              description="Date and production timing associated with this audit record."
+                            >
+                              <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-3">
+                                <RecordDetailField label="Audit date" value={selectedRecord.auditDate} mono />
+                                <RecordDetailField label="Work week (WW)" value={selectedRecord.ww} />
+                                <RecordDetailField label="Shift" value={selectedRecord.shift} />
+                              </div>
+                            </RecordDetailSection>
+
+                            <RecordDetailSection
+                              number="05"
+                              icon={<ClipboardCheck size={15} />}
+                              title="ICAR information"
+                              description="Corrective-action reference and current record state."
+                            >
+                              <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">
+                                <RecordDetailField label="ICAR number" value={selectedRecord.icarNum || 'N/A'} mono />
+                                <div className="min-w-0">
+                                  <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">ICAR status</p>
+                                  <div className={`mt-1.5 inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[11px] font-bold ${
+                                    selectedRecord.icarStatus === 'Submitted'
+                                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                      : selectedRecord.icarStatus === 'Closed'
+                                        ? 'border-slate-200 bg-slate-100 text-slate-700'
+                                        : 'border-amber-200 bg-amber-50 text-amber-700'
+                                  }`}>
+                                    {selectedRecord.icarStatus === 'Submitted' ? <Unlock size={12} /> : selectedRecord.icarStatus === 'Closed' ? <CheckCircle2 size={12} /> : <Lock size={12} />}
+                                    {selectedRecord.icarStatus || 'Locked'}
+                                  </div>
+                                </div>
+                              </div>
+                            </RecordDetailSection>
+
+                            <RecordDetailSection
+                              number="06"
+                              icon={<ImageIcon size={15} />}
+                              title="Evidence"
+                              description="Supporting image attached to the audit finding."
+                            >
+                              {selectedRecord.picture ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setPreviewImage(getImageUrl(selectedRecord.picture!)!)}
+                                  className="group block w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-50 text-left"
+                                >
+                                  <div className="flex min-h-[260px] max-h-[520px] items-center justify-center bg-slate-50 p-3">
+                                    <img
+                                      src={getImageUrl(selectedRecord.picture)}
+                                      className="max-h-[490px] w-full object-contain"
+                                      referrerPolicy="no-referrer"
+                                      alt="Finding evidence"
+                                    />
+                                  </div>
+                                  <div className="flex items-center justify-between gap-3 border-t border-slate-200 bg-white px-4 py-3">
+                                    <div>
+                                      <p className="text-[11px] font-semibold text-slate-700">Audit evidence</p>
+                                      <p className="mt-0.5 text-[10px] text-slate-400">Click the image to enlarge</p>
+                                    </div>
+                                    <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-brand-orange">View full size</span>
+                                  </div>
+                                </button>
+                              ) : (
+                                <div className="flex min-h-[220px] flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 px-6 text-center">
+                                  <ImageIcon size={28} className="mb-3 text-slate-300" />
+                                  <p className="text-sm font-semibold text-slate-600">No evidence image attached</p>
+                                  <p className="mt-1 text-[11px] text-slate-400">This record was saved without a supporting photo.</p>
+                                </div>
+                              )}
+                            </RecordDetailSection>
+                          </div>
+                        </div>
+
+                        {/* Operational summary */}
+                        <aside className="space-y-4 xl:sticky xl:top-0">
+                          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Current status</p>
+                            <div className="mt-4 flex items-start gap-3">
+                              <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${
+                                selectedRecord.icarStatus === 'Submitted'
+                                  ? 'bg-emerald-50 text-emerald-600'
+                                  : selectedRecord.icarStatus === 'Closed'
+                                    ? 'bg-slate-100 text-slate-600'
+                                    : 'bg-amber-50 text-amber-600'
+                              }`}>
+                                {selectedRecord.icarStatus === 'Submitted' ? <Unlock size={18} /> : selectedRecord.icarStatus === 'Closed' ? <CheckCircle2 size={18} /> : <Lock size={18} />}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-sm font-bold text-slate-900">{selectedRecord.icarStatus || 'Locked'}</p>
+                                <p className="mt-1 text-[11px] leading-5 text-slate-500">
+                                  {selectedRecord.icarStatus === 'Submitted'
+                                    ? 'An ICAR reference has been submitted for this finding.'
+                                    : selectedRecord.icarStatus === 'Closed'
+                                      ? 'This finding is recorded as closed.'
+                                      : 'This finding is awaiting an ICAR reference.'}
+                                </p>
+                              </div>
+                            </div>
+                          </section>
+
+                          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+                            <div className="mb-4 flex items-center justify-between gap-3">
+                              <div>
+                                <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Record summary</p>
+                                <p className="mt-1 text-[11px] text-slate-500">Key traceability information</p>
+                              </div>
+                              <Info size={15} className="text-slate-300" />
+                            </div>
+                            <div className="divide-y divide-slate-100">
+                              <DetailRow label="Record no." value={String(selectedRecord.no ?? selectedRecord.id ?? '—')} mono />
+                              <DetailRow label="Department" value={selectedRecord.department || '—'} />
+                              <DetailRow label="Auditor" value={selectedRecord.auditors || '—'} />
+                              <DetailRow label="MQE owner" value={selectedRecord.mqeEngineer || '—'} accent />
+                              <DetailRow label="Evidence" value={selectedRecord.picture ? 'Attached' : 'None'} />
+                            </div>
+                          </section>
+
+                          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Actions</p>
+                            <div className="mt-4 space-y-2">
+                              <button
+                                type="button"
+                                onClick={() => { handleEditClick(selectedRecord); setSelectedRecord(null); }}
+                                className="flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 text-[11px] font-bold text-white transition-colors hover:bg-slate-800"
+                              >
+                                <Pencil size={13} />
+                                Edit finding
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedRecord(null)}
+                                className="flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-[11px] font-bold text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-800"
+                              >
+                                <ChevronLeft size={13} />
+                                Back to records
+                              </button>
+                            </div>
+                          </section>
+                        </aside>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <>
                 {/* Compact command area: search, filter and actions share one horizontal workflow. */}
                 <section className="shrink-0">
                   <div className="flex flex-col xl:flex-row xl:items-center gap-2.5">
@@ -1683,140 +1953,8 @@ export default function App() {
                     </div>
                   )}
                 </div>
-
-                {/* Details Modal */}
-                <AnimatePresence>
-                  {selectedRecord && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
-                      <motion.div 
-                        initial={{ opacity: 0, scale: 0.97, y: 8 }}
-                        animate={{ opacity: 1, scale: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.97, y: 8 }}
-                        transition={{ duration: 0.15 }}
-                        className="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] overflow-hidden shadow-2xl border border-slate-200 flex flex-col"
-                      >
-                        <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-start gap-4 bg-white shrink-0">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-                              <ClipboardCheck size={12} />
-                              Finding Record{selectedRecord.no ? ` No. ${selectedRecord.no}` : ''}
-                            </div>
-                            <h3 className="text-base font-bold text-slate-900 leading-snug truncate">{selectedRecord.detailsFindings}</h3>
-                            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 mt-1.5 text-[11px] font-medium text-slate-500">
-                              <span className="flex items-center gap-1"><CalendarDays size={12} /> {selectedRecord.auditDate}</span>
-                              <span className="text-slate-300">&bull;</span>
-                              <span>WW{selectedRecord.ww}</span>
-                              <span className="text-slate-300">&bull;</span>
-                              <span>Shift {selectedRecord.shift}</span>
-                              <span className="text-slate-300">&bull;</span>
-                              <span>{selectedRecord.department}</span>
-                            </div>
-                          </div>
-                          <div className="flex flex-col items-end gap-1.5 shrink-0">
-                            <div className="flex items-center gap-3">
-                              <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wide border whitespace-nowrap ${
-                                selectedRecord.icarStatus === 'Submitted' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'
-                              }`}>
-                                {selectedRecord.icarStatus || 'Locked'}
-                              </span>
-                              <button onClick={() => setSelectedRecord(null)} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-slate-100 transition-colors text-slate-400 shrink-0">
-                                <X size={18} />
-                              </button>
-                            </div>
-                            <span className="text-[10px] font-mono font-bold text-slate-400">ICAR# {selectedRecord.icarNum || 'N/A'}</span>
-                          </div>
-                        </div>
-                        
-                        <div className="flex-1 overflow-y-auto custom-scrollbar grid grid-cols-1 lg:grid-cols-12 bg-slate-50/40">
-                          <div className="lg:col-span-7 p-6 md:p-8 space-y-5 lg:border-r border-slate-100">
-                            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 md:p-8">
-                              <FormSection icon={<MapPin size={15} />} title="Where" description="Platform and exact location of the finding">
-                                <div className="divide-y divide-slate-100">
-                                  <DetailRow label="Platform" value={selectedRecord.platform} />
-                                  <DetailRow label="Station / Area" value={selectedRecord.areaStation} />
-                                  <DetailRow label="MQE Engineer" value={selectedRecord.mqeEngineer || '—'} accent />
-                                </div>
-                              </FormSection>
-                            </div>
-
-                            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 md:p-8">
-                              <FormSection icon={<AlertCircle size={15} />} title="What was found" description="Category and details of the audit finding">
-                                <div className="divide-y divide-slate-100">
-                                  <DetailRow label="Category" value={selectedRecord.category} />
-                                  <DetailRow label="Group Finding" value={selectedRecord.groupFinding} />
-                                  <div className="py-3">
-                                    <span className="text-[11px] font-medium text-slate-500 block mb-1.5">Finding Details</span>
-                                    <p className="text-sm font-medium text-slate-800 leading-relaxed">{selectedRecord.detailsFindings}</p>
-                                  </div>
-                                  {selectedRecord.remark && (
-                                    <div className="py-3">
-                                      <span className="text-[11px] font-medium text-blue-600 flex items-center gap-1 mb-1.5">
-                                        <AlertCircle size={11} /> Remark
-                                      </span>
-                                      <p className="text-sm text-slate-700 leading-relaxed italic">{selectedRecord.remark}</p>
-                                    </div>
-                                  )}
-                                </div>
-                              </FormSection>
-                            </div>
-
-                            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 md:p-8">
-                              <FormSection icon={<Users size={15} />} title="Who" description="Auditor logging this entry and the person responsible on the floor">
-                                <div className="divide-y divide-slate-100">
-                                  <DetailRow label="IPQC Auditor" value={selectedRecord.auditors} />
-                                  <DetailRow label="PIC (Finding)" value={selectedRecord.personOnJob} />
-                                </div>
-                              </FormSection>
-                            </div>
-                          </div>
-
-                          <div className="lg:col-span-5 p-6 md:p-8 flex flex-col">
-                            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 md:p-8 flex-1 flex flex-col">
-                              <FormSection icon={<CheckCircle2 size={15} />} title="Evidence" description="Supporting photo for this finding">
-                                <>
-                                  {selectedRecord.picture ? (
-                                    <div 
-                                      onClick={() => setPreviewImage(getImageUrl(selectedRecord.picture!)!)}
-                                      className="w-full aspect-[4/3] rounded-lg overflow-hidden border border-slate-200 bg-white relative group cursor-zoom-in"
-                                    >
-                                      <img src={getImageUrl(selectedRecord.picture)} className="w-full h-full object-cover" referrerPolicy="no-referrer" alt="" />
-                                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center">
-                                        <span className="opacity-0 group-hover:opacity-100 transition-opacity text-white text-[10px] font-bold bg-black/60 px-3 py-1.5 rounded uppercase tracking-wider">Click to Enlarge</span>
-                                      </div>
-                                    </div>
-                                  ) : (
-                                    <div className="w-full aspect-[4/3] rounded-lg border-2 border-dashed border-slate-200 flex flex-col items-center justify-center bg-slate-50">
-                                      <ImageIcon size={28} className="text-slate-300 mb-2" />
-                                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">No Image Provided</span>
-                                    </div>
-                                  )}
-                                </>
-                              </FormSection>
-
-                              <div className="flex-1" />
-
-                              <div className="flex justify-end items-center gap-2 mt-6 pt-4 border-t border-slate-100">
-                                <button 
-                                  onClick={() => setSelectedRecord(null)}
-                                  className="px-5 py-2.5 text-[11px] font-bold uppercase tracking-wide text-slate-400 hover:text-slate-700 transition-colors"
-                                >
-                                  Close
-                                </button>
-                                <button 
-                                  onClick={() => { handleEditClick(selectedRecord); setSelectedRecord(null); }}
-                                  className="bg-brand-orange text-white px-6 py-2.5 rounded-lg text-[11px] font-bold uppercase tracking-wide shadow-sm hover:brightness-110 transition-all flex items-center gap-2"
-                                >
-                                  <Pencil size={13} />
-                                  Modify Record
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </motion.div>
-                    </div>
-                  )}
-                </AnimatePresence>
+                  </>
+                )}
               </motion.div>
             )}
 
@@ -2921,6 +3059,39 @@ function DetailRow({ label, value, accent, mono }: { label: string, value: strin
       <span className={`text-sm text-right truncate ${accent ? 'font-semibold text-brand-orange' : 'font-medium text-slate-800'} ${mono ? 'font-mono' : ''}`}>
         {value || '—'}
       </span>
+    </div>
+  );
+}
+
+
+function RecordDetailSection({ number, icon, title, description, children }: { number: string, icon: any, title: string, description?: string, children: any }) {
+  return (
+    <section className="border-b border-slate-200 p-5 last:border-b-0 md:p-6">
+      <div className="mb-5 flex items-start gap-3">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-[10px] font-bold text-white">
+          {number}
+        </div>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-slate-900">
+            <span className="text-brand-orange">{icon}</span>
+            <h3 className="text-sm font-bold">{title}</h3>
+          </div>
+          {description && <p className="mt-0.5 text-[11px] leading-5 text-slate-500">{description}</p>}
+        </div>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function RecordDetailField({ label, value, accent, mono }: { label: string, value: any, accent?: boolean, mono?: boolean }) {
+  const renderedValue = value === null || value === undefined || value === '' ? '—' : String(value);
+  return (
+    <div className="min-w-0">
+      <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">{label}</p>
+      <p className={`mt-1.5 break-words text-sm ${accent ? 'font-bold text-brand-orange' : 'font-semibold text-slate-800'} ${mono ? 'font-mono text-[13px]' : ''}`}>
+        {renderedValue}
+      </p>
     </div>
   );
 }
