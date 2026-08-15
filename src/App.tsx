@@ -1821,179 +1821,407 @@ export default function App() {
             )}
 
             {view === 'add-audit' && (
-              <motion.div 
+              <motion.div
                 key="add-audit"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                className="flex-1 overflow-y-auto pb-6 custom-scrollbar"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.18 }}
+                className="flex-1 overflow-y-auto pb-8 custom-scrollbar"
               >
-                <div className="max-w-4xl mx-auto">
-                  <button 
-                    onClick={() => { setView('ipqc'); setEditingId(null); }} 
-                    className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-brand-orange transition-colors mb-4"
-                  >
-                    <ChevronLeft size={14} /> Back to Records
-                  </button>
+                <div className="w-full max-w-7xl mx-auto">
+                  {/* Page heading */}
+                  <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                    <div className="min-w-0">
+                      <button
+                        type="button"
+                        onClick={() => { setView('ipqc'); setEditingId(null); }}
+                        className="mb-3 inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 transition-colors hover:text-brand-orange"
+                      >
+                        <ChevronLeft size={15} />
+                        Back to IPQC records
+                      </button>
+                      <div className="flex items-center gap-2.5">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-orange-100 bg-orange-50 text-brand-orange">
+                          <ClipboardCheck size={19} />
+                        </div>
+                        <div>
+                          <h2 className="text-xl md:text-2xl font-bold tracking-tight text-slate-900">
+                            {editingId ? 'Edit Finding' : 'Add Finding'}
+                          </h2>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Record the audit context, finding details, ownership and supporting evidence.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
 
-                  <div className="mb-6">
-                    <h2 className="text-2xl font-black tracking-tight text-slate-800">{editingId ? 'Edit Audit Entry' : 'New Audit Entry'}</h2>
-                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1.5">IPQC Quality Management System</p>
+                    <div className="flex items-center gap-2 text-[10px] font-medium text-slate-500">
+                      <span className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5">
+                        <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
+                        Required fields marked *
+                      </span>
+                      <span className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 ${
+                        newAudit.icarStatus === 'Submitted'
+                          ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                          : 'border-amber-200 bg-amber-50 text-amber-700'
+                      }`}>
+                        {newAudit.icarStatus === 'Submitted' ? <Unlock size={11} /> : <Lock size={11} />}
+                        ICAR {newAudit.icarStatus || 'Locked'}
+                      </span>
+                    </div>
                   </div>
 
-                  <form onSubmit={handleAddAudit} className="flex flex-col gap-5 pb-24">
-
-                    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 md:p-8">
-                      <FormSection icon={<CalendarDays size={15} />} title="When" description="Date and shift this audit was conducted">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-                          <FormInput label="Audit Date" type="date" required value={newAudit.auditDate} onChange={(v: string) => setNewAudit({...newAudit, auditDate: v})} />
-                          <FormSelect label="Work Week (WW)" required value={newAudit.ww} onChange={(v: string) => setNewAudit({...newAudit, ww: v})} options={WWS} helper="Auto-calculated from date" />
-                          <FormSelect label="Shift" value={newAudit.shift} onChange={(v: string) => setNewAudit({...newAudit, shift: v})} options={SHIFTS} />
-                          <FormSelect label="Department" required value={newAudit.department} onChange={(v: string) => setNewAudit({...newAudit, department: v})} options={DEPARTMENTS} />
+                  <form
+                    onSubmit={handleAddAudit}
+                    className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_320px]"
+                  >
+                    {/* Main form */}
+                    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
+                      {/* 01 Audit context */}
+                      <section className="border-b border-slate-200 p-5 md:p-6">
+                        <div className="mb-5 flex items-start gap-3">
+                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-[10px] font-bold text-white">01</div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <CalendarDays size={15} className="text-brand-orange" />
+                              <h3 className="text-sm font-bold text-slate-900">Audit context</h3>
+                            </div>
+                            <p className="mt-0.5 text-[11px] text-slate-500">When the audit was conducted and which operation was reviewed.</p>
+                          </div>
                         </div>
-                      </FormSection>
-                    </div>
 
-                    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 md:p-8">
-                      <FormSection icon={<MapPin size={15} />} title="Where" description="Platform and exact location of the finding">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-                          <FormSelect label="Platform" required value={newAudit.platform} onChange={handlePlatformChange} options={platformsList} />
-                          <FormInput label="Area / Station" required value={newAudit.areaStation} onChange={(v: string) => setNewAudit({...newAudit, areaStation: v})} placeholder="e.g. Station 2, EM2..." />
-                          <AutoField label="MQE Engineer" value={newAudit.mqeEngineer} accent="orange" />
-                        </div>
-                      </FormSection>
-                    </div>
-
-                    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 md:p-8">
-                      <FormSection icon={<AlertCircle size={15} />} title="What was found" description="Category and details of the audit finding">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-                          <FormSelect label="Category" required value={newAudit.category} onChange={handleCategoryChange} options={CATEGORIES} />
-                          <AutoField label="Group Finding" value={newAudit.groupFinding} />
-                          <FormSelect label="Finding Details" required value={newAudit.detailsFindings} onChange={(v: string) => setNewAudit({...newAudit, detailsFindings: v})} options={FINDING_DETAILS} />
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em] px-1 mb-2 block">Remark</label>
-                          <textarea 
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm font-medium focus:bg-white focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/5 outline-none transition-all placeholder:text-text-muted/40 min-h-[100px] resize-y"
-                            placeholder="Optional — additional context about this finding..."
-                            value={newAudit.remark || ''}
-                            onChange={(e) => setNewAudit({...newAudit, remark: e.target.value})}
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                          <FormInput
+                            label="Audit date"
+                            type="date"
+                            required
+                            value={newAudit.auditDate}
+                            onChange={(v: string) => setNewAudit({ ...newAudit, auditDate: v })}
+                          />
+                          <FormSelect
+                            label="Work week (WW)"
+                            required
+                            value={newAudit.ww}
+                            onChange={(v: string) => setNewAudit({ ...newAudit, ww: v })}
+                            options={WWS}
+                            helper="Auto-calculated from audit date"
+                          />
+                          <FormSelect
+                            label="Shift"
+                            value={newAudit.shift}
+                            onChange={(v: string) => setNewAudit({ ...newAudit, shift: v })}
+                            options={SHIFTS}
+                          />
+                          <FormSelect
+                            label="Department"
+                            required
+                            value={newAudit.department}
+                            onChange={(v: string) => setNewAudit({ ...newAudit, department: v })}
+                            options={DEPARTMENTS}
                           />
                         </div>
-                      </FormSection>
-                    </div>
+                      </section>
 
-                    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 md:p-8">
-                      <FormSection icon={<Users size={15} />} title="Who" description="Auditor logging this entry and the person responsible on the floor">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                          <FormSelect label="IPQC Auditor Name" required value={newAudit.auditors} onChange={(v: string) => setNewAudit({...newAudit, auditors: v})} options={auditorsList} />
-                          <FormInput label="PIC Name (Finding)" required value={newAudit.personOnJob} onChange={(v: string) => setNewAudit({...newAudit, personOnJob: v})} placeholder="Person responsible on shift" />
-                        </div>
-                      </FormSection>
-                    </div>
-
-                    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 md:p-8">
-                      <FormSection icon={<CheckCircle2 size={15} />} title="ICAR & Evidence" description="Corrective action reference and supporting photo">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                          <div className="flex flex-col gap-2">
-                            <div className="flex items-center justify-between px-1">
-                              <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em]">ICAR#</label>
-                              <span className="text-[9px] text-slate-400 italic flex items-center gap-1"><Info size={10} /> Leave as N/A if locked</span>
+                      {/* 02 Location */}
+                      <section className="border-b border-slate-200 p-5 md:p-6">
+                        <div className="mb-5 flex items-start gap-3">
+                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-[10px] font-bold text-white">02</div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <MapPin size={15} className="text-brand-orange" />
+                              <h3 className="text-sm font-bold text-slate-900">Location & ownership</h3>
                             </div>
-                            <input 
-                              type="text" 
-                              value={newAudit.icarNum || 'N/A'} 
-                              onChange={(e) => handleIcarNumChange(e.target.value)} 
-                              className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 px-4 text-sm font-semibold text-slate-800 focus:bg-white focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/5 outline-none transition-all" 
-                            />
-                          </div>
-                          <div className="flex flex-col gap-2">
-                            <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em] px-1">Status</label>
-                            <div className={`w-full border rounded-xl py-3 px-4 text-sm font-black uppercase flex items-center gap-2 ${
-                              newAudit.icarStatus === 'Submitted' ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 'bg-amber-50 text-amber-600 border-amber-200'
-                            }`}>
-                              {newAudit.icarStatus === 'Submitted' ? <Unlock size={14} /> : <Lock size={14} />}
-                              {newAudit.icarStatus || 'Locked'}
-                            </div>
+                            <p className="mt-0.5 text-[11px] text-slate-500">Identify the platform, exact station and responsible MQE.</p>
                           </div>
                         </div>
 
-                        <div>
-                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em] px-1 mb-2 block">Audit Evidence Picture</label>
-                          <div 
-                            onClick={() => !newAudit.picture && fileInputRef.current?.click()}
-                            className={`w-full bg-slate-50 border-2 border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center transition-all overflow-hidden relative group ${
-                              newAudit.picture ? 'h-[220px]' : 'h-[160px] cursor-pointer hover:bg-slate-100 hover:border-brand-orange/40'
-                            }`}
-                          >
-                            <input 
-                              type="file" 
-                              ref={fileInputRef} 
-                              className="hidden" 
-                              accept="image/*"
-                              onChange={handleImageChange}
-                            />
-                            {newAudit.picture ? (
-                              <>
-                                <img 
-                                  src={getImageUrl(newAudit.picture)} 
-                                  alt="Audit Evidence" 
-                                  className="w-full h-full object-contain"
-                                  referrerPolicy="no-referrer"
-                                />
-                                <div className="absolute top-2 right-2 flex gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
-                                    className="px-3 py-1.5 bg-white/95 text-slate-700 rounded-lg text-[10px] font-black uppercase tracking-wider shadow-sm border border-slate-200 hover:bg-white transition-colors"
-                                  >
-                                    Replace
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={(e) => { 
-                                      e.stopPropagation(); 
-                                      setNewAudit(prev => ({ ...prev, picture: '' })); 
-                                      if (fileInputRef.current) fileInputRef.current.value = ''; 
-                                    }}
-                                    className="w-8 h-8 flex items-center justify-center bg-white/95 text-rose-600 rounded-lg shadow-sm border border-slate-200 hover:bg-rose-50 transition-colors"
-                                    title="Remove image"
-                                  >
-                                    <Trash2 size={13} />
-                                  </button>
-                                </div>
-                              </>
-                            ) : (
-                              <div className="text-center text-text-muted">
-                                <ImageIcon size={26} className="mx-auto mb-2 opacity-30" />
-                                <p className="text-[10px] font-bold uppercase tracking-wider">Drag & drop or click to upload</p>
-                                <p className="text-[9px] opacity-60 mt-1 uppercase">Supports JPG, PNG, WEBP · Optional</p>
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                          <FormSelect
+                            label="Platform"
+                            required
+                            value={newAudit.platform}
+                            onChange={handlePlatformChange}
+                            options={platformsList}
+                          />
+                          <FormInput
+                            label="Area / station"
+                            required
+                            value={newAudit.areaStation}
+                            onChange={(v: string) => setNewAudit({ ...newAudit, areaStation: v })}
+                            placeholder="e.g. Station 2, EM2"
+                          />
+                          <AutoField label="MQE engineer" value={newAudit.mqeEngineer} accent="orange" />
+                        </div>
+                      </section>
+
+                      {/* 03 Finding */}
+                      <section className="border-b border-slate-200 p-5 md:p-6">
+                        <div className="mb-5 flex items-start gap-3">
+                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-[10px] font-bold text-white">03</div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <AlertCircle size={15} className="text-brand-orange" />
+                              <h3 className="text-sm font-bold text-slate-900">Finding classification</h3>
+                            </div>
+                            <p className="mt-0.5 text-[11px] text-slate-500">Classify the issue consistently for reporting and follow-up.</p>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                          <FormSelect
+                            label="Category"
+                            required
+                            value={newAudit.category}
+                            onChange={handleCategoryChange}
+                            options={CATEGORIES}
+                          />
+                          <AutoField label="Group finding" value={newAudit.groupFinding} />
+                          <FormSelect
+                            label="Finding details"
+                            required
+                            value={newAudit.detailsFindings}
+                            onChange={(v: string) => setNewAudit({ ...newAudit, detailsFindings: v })}
+                            options={FINDING_DETAILS}
+                          />
+                        </div>
+
+                        <div className="mt-4">
+                          <label className="mb-1.5 block text-[11px] font-semibold text-slate-700">
+                            Remark <span className="font-normal text-slate-400">(optional)</span>
+                          </label>
+                          <textarea
+                            className="min-h-[92px] w-full resize-y rounded-lg border border-slate-300 bg-white px-3.5 py-3 text-sm font-medium text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/10"
+                            placeholder="Add concise context, observation details or immediate containment information..."
+                            value={newAudit.remark || ''}
+                            onChange={(e) => setNewAudit({ ...newAudit, remark: e.target.value })}
+                          />
+                        </div>
+                      </section>
+
+                      {/* 04 People */}
+                      <section className="border-b border-slate-200 p-5 md:p-6">
+                        <div className="mb-5 flex items-start gap-3">
+                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-[10px] font-bold text-white">04</div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <Users size={15} className="text-brand-orange" />
+                              <h3 className="text-sm font-bold text-slate-900">People</h3>
+                            </div>
+                            <p className="mt-0.5 text-[11px] text-slate-500">Record the auditor and the person responsible for the finding.</p>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <FormSelect
+                            label="IPQC auditor"
+                            required
+                            value={newAudit.auditors}
+                            onChange={(v: string) => setNewAudit({ ...newAudit, auditors: v })}
+                            options={auditorsList}
+                          />
+                          <FormInput
+                            label="PIC name (finding)"
+                            required
+                            value={newAudit.personOnJob}
+                            onChange={(v: string) => setNewAudit({ ...newAudit, personOnJob: v })}
+                            placeholder="Person responsible on shift"
+                          />
+                        </div>
+                      </section>
+
+                      {/* 05 ICAR & evidence */}
+                      <section className="p-5 md:p-6">
+                        <div className="mb-5 flex items-start gap-3">
+                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-[10px] font-bold text-white">05</div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <CheckCircle2 size={15} className="text-brand-orange" />
+                              <h3 className="text-sm font-bold text-slate-900">ICAR & evidence</h3>
+                            </div>
+                            <p className="mt-0.5 text-[11px] text-slate-500">Attach the corrective-action reference and supporting evidence.</p>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
+                          <div className="space-y-4 lg:col-span-5">
+                            <div>
+                              <div className="mb-1.5 flex items-center justify-between gap-3">
+                                <label className="text-[11px] font-semibold text-slate-700">ICAR number</label>
+                                <span className="inline-flex items-center gap-1 text-[10px] text-slate-400">
+                                  <Info size={10} /> Keep N/A if not submitted
+                                </span>
                               </div>
-                            )}
+                              <input
+                                type="text"
+                                value={newAudit.icarNum || 'N/A'}
+                                onChange={(e) => handleIcarNumChange(e.target.value)}
+                                className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3.5 text-sm font-semibold text-slate-800 outline-none transition-all focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/10"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="mb-1.5 block text-[11px] font-semibold text-slate-700">ICAR status</label>
+                              <div className={`flex h-11 w-full items-center justify-between rounded-lg border px-3.5 text-sm font-semibold ${
+                                newAudit.icarStatus === 'Submitted'
+                                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                  : 'border-amber-200 bg-amber-50 text-amber-700'
+                              }`}>
+                                <span className="flex items-center gap-2">
+                                  {newAudit.icarStatus === 'Submitted' ? <Unlock size={14} /> : <Lock size={14} />}
+                                  {newAudit.icarStatus || 'Locked'}
+                                </span>
+                                <span className="text-[9px] font-bold uppercase tracking-wide opacity-60">Auto</span>
+                              </div>
+                            </div>
+
+                            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-[10px] leading-5 text-slate-500">
+                              Entering a valid ICAR number automatically changes the record status to <span className="font-semibold text-slate-700">Submitted</span>.
+                            </div>
+                          </div>
+
+                          <div className="lg:col-span-7">
+                            <div className="mb-1.5 flex items-center justify-between gap-3">
+                              <label className="text-[11px] font-semibold text-slate-700">Audit evidence</label>
+                              <span className="text-[10px] text-slate-400">JPG, PNG or WEBP · optional</span>
+                            </div>
+                            <div
+                              onClick={() => !newAudit.picture && fileInputRef.current?.click()}
+                              className={`relative flex w-full flex-col items-center justify-center overflow-hidden rounded-lg border border-dashed transition-all ${
+                                newAudit.picture
+                                  ? 'h-[190px] border-slate-300 bg-slate-50'
+                                  : 'h-[190px] cursor-pointer border-slate-300 bg-slate-50/70 hover:border-brand-orange/60 hover:bg-orange-50/30'
+                              }`}
+                            >
+                              <input
+                                type="file"
+                                ref={fileInputRef}
+                                className="hidden"
+                                accept="image/*"
+                                onChange={handleImageChange}
+                              />
+                              {newAudit.picture ? (
+                                <>
+                                  <img
+                                    src={getImageUrl(newAudit.picture)}
+                                    alt="Audit Evidence"
+                                    className="h-full w-full object-contain p-2"
+                                    referrerPolicy="no-referrer"
+                                  />
+                                  <div className="absolute right-2 top-2 flex gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
+                                      className="rounded-md border border-slate-200 bg-white/95 px-2.5 py-1.5 text-[10px] font-semibold text-slate-700 shadow-sm transition-colors hover:bg-white"
+                                    >
+                                      Replace
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setNewAudit(prev => ({ ...prev, picture: '' }));
+                                        if (fileInputRef.current) fileInputRef.current.value = '';
+                                      }}
+                                      className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-white/95 text-rose-600 shadow-sm transition-colors hover:bg-rose-50"
+                                      title="Remove image"
+                                    >
+                                      <Trash2 size={12} />
+                                    </button>
+                                  </div>
+                                </>
+                              ) : (
+                                <div className="px-6 text-center">
+                                  <div className="mx-auto mb-2 flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-400">
+                                    <ImageIcon size={17} />
+                                  </div>
+                                  <p className="text-xs font-semibold text-slate-700">Upload evidence photo</p>
+                                  <p className="mt-1 text-[10px] text-slate-400">Click to choose a file from this device</p>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </FormSection>
+                      </section>
                     </div>
 
-                    <div className="flex justify-end gap-3 px-6 py-4 bg-white/95 backdrop-blur rounded-xl border border-slate-200 shadow-sm sticky bottom-4">
-                      <button 
-                        type="button" 
-                        onClick={() => { setView('ipqc'); setEditingId(null); }}
-                        className="px-6 py-2.5 text-xs font-bold uppercase text-text-muted hover:text-text-main transition-colors"
-                      >
-                        Cancel
-                      </button>
-                      <button 
-                        type="submit" 
-                        className="bg-brand-orange text-white px-10 py-2.5 rounded-xl text-xs font-bold uppercase shadow-lg shadow-brand-orange/20 hover:brightness-110 active:scale-95 transition-all"
-                      >
-                        {editingId ? 'Update Record' : 'Submit Audit'}
-                      </button>
-                    </div>
+                    {/* Right-side review / actions */}
+                    <aside className="space-y-4 xl:sticky xl:top-4">
+                      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
+                        <div className="mb-4 flex items-center justify-between gap-3">
+                          <div>
+                            <h3 className="text-sm font-bold text-slate-900">Entry summary</h3>
+                            <p className="mt-0.5 text-[10px] text-slate-400">Quick review before saving</p>
+                          </div>
+                          <ClipboardCheck size={17} className="text-slate-400" />
+                        </div>
+
+                        <div className="divide-y divide-slate-100 border-y border-slate-100">
+                          <div className="py-3">
+                            <p className="text-[10px] font-medium text-slate-400">Audit</p>
+                            <p className="mt-1 text-xs font-semibold text-slate-800">
+                              {newAudit.auditDate || 'Date not set'} · WW{newAudit.ww || '—'} · Shift {newAudit.shift || '—'}
+                            </p>
+                          </div>
+                          <div className="py-3">
+                            <p className="text-[10px] font-medium text-slate-400">Location</p>
+                            <p className="mt-1 text-xs font-semibold text-slate-800">{newAudit.platform || 'Platform not selected'}</p>
+                            <p className="mt-0.5 truncate text-[10px] text-slate-500">{newAudit.areaStation || 'Area / station pending'}</p>
+                          </div>
+                          <div className="py-3">
+                            <p className="text-[10px] font-medium text-slate-400">Responsible MQE</p>
+                            <p className="mt-1 text-xs font-semibold text-brand-orange">{newAudit.mqeEngineer || 'Unassigned'}</p>
+                          </div>
+                          <div className="py-3">
+                            <p className="text-[10px] font-medium text-slate-400">Finding</p>
+                            <p className="mt-1 truncate text-xs font-semibold text-slate-800" title={newAudit.detailsFindings || ''}>{newAudit.detailsFindings || 'Finding details pending'}</p>
+                            <p className="mt-0.5 truncate text-[10px] text-slate-500" title={newAudit.category || ''}>{newAudit.category || 'Category pending'}</p>
+                          </div>
+                          <div className="py-3">
+                            <p className="text-[10px] font-medium text-slate-400">Ownership</p>
+                            <p className="mt-1 text-xs font-semibold text-slate-800">{newAudit.auditors || 'Auditor pending'}</p>
+                            <p className="mt-0.5 truncate text-[10px] text-slate-500">PIC: {newAudit.personOnJob || 'Not entered'}</p>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2.5">
+                          <span className="text-[10px] font-medium text-slate-500">ICAR status</span>
+                          <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-semibold ${
+                            newAudit.icarStatus === 'Submitted'
+                              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                              : 'border-amber-200 bg-amber-50 text-amber-700'
+                          }`}>
+                            {newAudit.icarStatus === 'Submitted' ? <Unlock size={10} /> : <Lock size={10} />}
+                            {newAudit.icarStatus || 'Locked'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
+                        <button
+                          type="submit"
+                          className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-brand-orange px-4 text-xs font-bold text-white shadow-sm transition-all hover:brightness-105 active:scale-[0.99]"
+                        >
+                          <CheckCircle2 size={15} />
+                          {editingId ? 'Update Finding' : 'Submit Finding'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setView('ipqc'); setEditingId(null); }}
+                          className="mt-2 inline-flex h-10 w-full items-center justify-center rounded-lg text-xs font-semibold text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-800"
+                        >
+                          Cancel
+                        </button>
+                        <p className="mt-3 border-t border-slate-100 pt-3 text-center text-[10px] leading-4 text-slate-400">
+                          {editingId ? 'Changes will update the existing IPQC record.' : 'The finding will be added to the IPQC records table.'}
+                        </p>
+                      </div>
+                    </aside>
                   </form>
                 </div>
               </motion.div>
             )}
+
 
             {view === 'settings' && isAdmin && (
               <motion.div
@@ -2632,19 +2860,19 @@ function FilterInput({ label, value, onChange, type = 'text', options = [], plac
 
 function FormInput({ label, required, value, onChange, type = 'text', placeholder, helper }: any) {
   return (
-    <div className="flex flex-col gap-2">
-      <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em] px-1">
-        {label}{required && <span className="text-rose-500 ml-0.5">*</span>}
+    <div className="flex flex-col gap-1.5">
+      <label className="text-[11px] font-semibold text-slate-700">
+        {label}{required && <span className="ml-0.5 text-rose-500">*</span>}
       </label>
-      <input 
-        type={type} 
+      <input
+        type={type}
         value={value}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
         required={required}
-        className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 px-4 text-sm font-semibold text-slate-800 focus:bg-white focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/5 outline-none transition-all placeholder:text-slate-300 placeholder:font-normal"
+        className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3.5 text-sm font-medium text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/10"
       />
-      {helper && <span className="text-[9px] text-slate-400 px-1">{helper}</span>}
+      {helper && <span className="px-0.5 text-[10px] leading-4 text-slate-400">{helper}</span>}
     </div>
   );
 }
@@ -2670,14 +2898,14 @@ function FormSection({ icon, title, description, children }: { icon: any, title:
 
 function AutoField({ label, value, accent = 'slate' }: { label: string, value?: string, accent?: 'slate' | 'orange' }) {
   return (
-    <div className="flex flex-col gap-2">
-      <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em] px-1 flex items-center gap-1.5">
-        {label}
-        <span className="inline-flex items-center gap-0.5 text-[8px] font-black text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded normal-case tracking-normal">
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-2">
+        <label className="text-[11px] font-semibold text-slate-700">{label}</label>
+        <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold text-slate-500">
           <Sparkles size={8} /> Auto
         </span>
-      </label>
-      <div className={`w-full bg-slate-100 border border-slate-200 rounded-xl py-3 px-4 text-sm font-semibold truncate ${
+      </div>
+      <div className={`flex h-11 w-full items-center truncate rounded-lg border border-slate-200 bg-slate-50 px-3.5 text-sm font-semibold ${
         accent === 'orange' ? 'text-brand-orange' : 'text-slate-600'
       }`}>
         {value || '—'}
@@ -2699,24 +2927,22 @@ function DetailRow({ label, value, accent, mono }: { label: string, value: strin
 
 function FormSelect({ label, value, onChange, options, required, helper }: any) {
   return (
-    <div className="flex flex-col gap-2">
-      <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em] px-1">
-        {label}{required && <span className="text-rose-500 ml-0.5">*</span>}
+    <div className="flex flex-col gap-1.5">
+      <label className="text-[11px] font-semibold text-slate-700">
+        {label}{required && <span className="ml-0.5 text-rose-500">*</span>}
       </label>
-      <div className="relative group">
-        <select 
+      <div className="group relative">
+        <select
           value={value}
           onChange={(e) => onChange(e.target.value)}
           required={required}
-          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 px-4 text-sm font-semibold text-slate-800 focus:bg-white focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/5 outline-none transition-all appearance-none cursor-pointer"
+          className="h-11 w-full appearance-none rounded-lg border border-slate-300 bg-white px-3.5 pr-9 text-sm font-medium text-slate-800 outline-none transition-all focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/10"
         >
           {options.map((opt: any) => <option key={opt} value={opt}>{opt}</option>)}
         </select>
-        <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-300 group-hover:text-brand-orange transition-colors">
-          <MoreVertical size={16} />
-        </div>
+        <ChevronDown size={15} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 transition-colors group-focus-within:text-brand-orange" />
       </div>
-      {helper && <span className="text-[9px] text-slate-400 px-1">{helper}</span>}
+      {helper && <span className="px-0.5 text-[10px] leading-4 text-slate-400">{helper}</span>}
     </div>
   );
 }
