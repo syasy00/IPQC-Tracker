@@ -170,17 +170,94 @@ const getGeminiResponseText = (responseJson) => {
 
 const parseAiJson = (text) => {
   if (!text) return null;
-  const stripped = text
+
+  const stripped = String(text)
     .replace(/^```json\s*/i, '')
     .replace(/^```\s*/i, '')
     .replace(/\s*```$/i, '')
     .trim();
 
+  // Normal structured-output path.
   try {
     return JSON.parse(stripped);
   } catch {
+    // Defensive recovery if the model ever adds text around the JSON object.
+    const firstBrace = stripped.indexOf('{');
+    const lastBrace = stripped.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      try {
+        return JSON.parse(stripped.slice(firstBrace, lastBrace + 1));
+      } catch {
+        return null;
+      }
+    }
     return null;
   }
+};
+
+const buildDeterministicAiFallback = (snapshot, question = '') => {
+  const summary = snapshot?.summary || {};
+  const topPlatform = snapshot?.openWorkload?.byPlatform?.[0];
+  const topCategory = snapshot?.openWorkload?.byCategory?.[0];
+  const topMqe = snapshot?.openWorkload?.byMqe?.[0];
+
+  const priorities = [];
+
+  if (Number(summary.openOver30Days || 0) > 0) {
+    priorities.push(
+      `${summary.openOver30Days} open finding${summary.openOver30Days === 1 ? '' : 's'} are older than 30 days. Review these first for closure blockers and overdue ownership.`
+    );
+  }
+
+  if (Number(summary.submittedIcarStillOpen || 0) > 0) {
+    priorities.push(
+      `${summary.submittedIcarStillOpen} finding${summary.submittedIcarStillOpen === 1 ? '' : 's'} already have Submitted ICARs but remain Open. Prioritize verification and closure follow-up.`
+    );
+  }
+
+  if (topPlatform?.name) {
+    priorities.push(
+      `${topPlatform.name} has the highest open workload with ${topPlatform.value} open finding${topPlatform.value === 1 ? '' : 's'}. Focus containment and recurring-issue review there.`
+    );
+  }
+
+  if (topCategory?.name && priorities.length < 4) {
+    priorities.push(
+      `${topCategory.name} is the leading open category with ${topCategory.value} finding${topCategory.value === 1 ? '' : 's'}. Check for a common systemic cause before treating cases individually.`
+    );
+  }
+
+  if (Number(summary.recordsWithoutMqeOwner || 0) > 0 && priorities.length < 4) {
+    priorities.push(
+      `${summary.recordsWithoutMqeOwner} record${summary.recordsWithoutMqeOwner === 1 ? '' : 's'} have no MQE owner. Assign ownership so unresolved findings do not stall.`
+    );
+  }
+
+  if (priorities.length === 0) {
+    priorities.push('No major backlog signal was available in the current snapshot. Review the latest work-week trend and the newest open findings for emerging issues.');
+  }
+
+  const answer = `Priority now:
+${priorities.slice(0, 4).map((item, i) => `${i + 1}. ${item}`).join('\n')}
+
+Recommended action: start with the oldest open items, then Submitted-ICAR findings that are still Open, and finally the highest-volume platform/category.`;
+
+  const highlights = [
+    { label: 'Open Findings', value: String(summary.openFindings ?? 0), detail: 'Current unresolved workload' },
+    { label: 'Open >30 Days', value: String(summary.openOver30Days ?? 0), detail: 'Overdue attention' },
+    { label: 'Submitted ICAR + Open', value: String(summary.submittedIcarStillOpen ?? 0), detail: 'Needs verification / closure' },
+  ];
+
+  if (topPlatform?.name) {
+    highlights.push({ label: 'Top Open Platform', value: String(topPlatform.name), detail: `${topPlatform.value} open findings` });
+  }
+
+  return {
+    answer,
+    highlights: highlights.slice(0, 4),
+    filters: { status: 'Open' },
+    caveat: 'Fallback analysis generated directly from the current IPQC snapshot because the AI response could not be parsed safely.',
+  };
 };
 
 const sanitizeAiFilters = (filters = {}) => {
@@ -475,10 +552,13 @@ Rules:
    A Submitted ICAR does NOT mean the finding is Closed.
 3. You are analysis-only. If the admin asks you to edit, delete, close, submit, approve or otherwise change records, clearly state that you cannot perform database changes.
 4. Be concise, management-friendly and operational. Surface the most decision-relevant number first.
-5. When comparing work weeks, treat WW values numerically.
-6. A filter should only be returned when the answer clearly maps to matching records.
-7. Filter values must use exact database values from snapshot.filterValues. Leave unsupported filters blank.
-8. Do not output Markdown tables.
+5. Every answer must include concrete numbers from the snapshot. Avoid vague phrases such as "requires attention" unless you immediately quantify why.
+6. For broad questions such as "what requires the most attention right now?", rank the top 3-4 priorities using this order where relevant: overdue Open findings, Submitted ICARs that are still Open, high-volume Open platform/category, missing MQE ownership, latest WW deterioration.
+7. End the answer with one practical recommended action. Do not write long essays.
+8. When comparing work weeks, treat WW values numerically.
+9. A filter should only be returned when the answer clearly maps to matching records.
+10. Filter values must use exact database values from snapshot.filterValues. Leave unsupported filters blank.
+11. Do not output Markdown tables.
 
 Return ONLY valid JSON with this exact shape:
 {
@@ -523,9 +603,51 @@ Use at most four highlights.
             },
           ],
           generationConfig: {
-            temperature: 0.2,
-            maxOutputTokens: 900,
+            // Gemini 3.x: keep reasoning light for a dashboard query so more of
+            // the token budget is available for the actual structured answer.
+            thinkingConfig: {
+              thinkingLevel: 'low',
+            },
+            maxOutputTokens: 1800,
             responseMimeType: 'application/json',
+            responseJsonSchema: {
+              type: 'object',
+              properties: {
+                answer: {
+                  type: 'string',
+                  description: 'A concise operational answer with concrete IPQC numbers, ranked priorities when relevant, and one recommended action.'
+                },
+                highlights: {
+                  type: 'array',
+                  maxItems: 4,
+                  items: {
+                    type: 'object',
+                    properties: {
+                      label: { type: 'string' },
+                      value: { type: 'string' },
+                      detail: { type: 'string' }
+                    },
+                    required: ['label', 'value', 'detail']
+                  }
+                },
+                filters: {
+                  type: 'object',
+                  properties: {
+                    status: { type: 'string' },
+                    icarStatus: { type: 'string' },
+                    platform: { type: 'string' },
+                    category: { type: 'string' },
+                    auditor: { type: 'string' },
+                    department: { type: 'string' },
+                    ww: { type: 'string' },
+                    mqe: { type: 'string' }
+                  },
+                  required: ['status', 'icarStatus', 'platform', 'category', 'auditor', 'department', 'ww', 'mqe']
+                },
+                caveat: { type: 'string' }
+              },
+              required: ['answer', 'highlights', 'filters', 'caveat']
+            }
           },
         }),
       }
@@ -542,13 +664,19 @@ Use at most four highlights.
 
     const modelText = getGeminiResponseText(geminiJson);
     const parsed = parseAiJson(modelText);
+    const finishReason = geminiJson?.candidates?.[0]?.finishReason || '';
 
     if (!parsed || typeof parsed.answer !== 'string') {
+      console.warn('Gemini structured response could not be parsed.', {
+        finishReason,
+        responseLength: modelText.length,
+      });
+
+      // Never send raw / truncated JSON to the UI. Give the admin a useful,
+      // deterministic answer directly from the same database snapshot instead.
+      const fallback = buildDeterministicAiFallback(snapshot, question);
       return res.status(200).json({
-        answer: modelText || 'The AI service returned an empty response.',
-        highlights: [],
-        filters: {},
-        caveat: 'Verify important decisions against the source IPQC records.',
+        ...fallback,
         generatedAt: snapshot.generatedAt,
       });
     }
