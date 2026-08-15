@@ -54,6 +54,27 @@ import {
 import { AuditRecord, ViewState } from './types';
 import { exportToExcel, importFromExcel } from './utils/excel';
 
+type FindingStatus = 'Open' | 'Closed';
+type IPQCAuditRecord = Omit<AuditRecord, 'status'> & {
+  status?: FindingStatus | string | null;
+};
+
+const normalizeFindingStatus = (value: unknown): FindingStatus | '' => {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'open') return 'Open';
+  if (normalized === 'closed' || normalized === 'close') return 'Closed';
+  return '';
+};
+
+const normalizeRecord = (raw: any): IPQCAuditRecord => ({
+  ...raw,
+  status: normalizeFindingStatus(raw?.status ?? raw?.findingStatus ?? raw?.finding_status) || null,
+  icarStatus: raw?.icarStatus ?? raw?.icar_status ?? 'Locked',
+});
+
+const getFindingStatus = (record: Partial<IPQCAuditRecord>): FindingStatus | '' =>
+  normalizeFindingStatus(record.status);
+
 const API_BASE_URL = '';
 
 const getImageUrl = (path?: string) => {
@@ -197,7 +218,7 @@ const WWS = Array.from({length: 52}, (_, i) => (i + 1).toString());
 
 export default function App() {
   const [view, setView] = useState<ViewState>('ipqc');
-  const [records, setRecords] = useState<AuditRecord[]>([]); 
+  const [records, setRecords] = useState<IPQCAuditRecord[]>([]); 
   const [powerBiUrl, setPowerBiUrl] = useState<string>(''); 
   const [dashboardMode, setDashboardMode] = useState<'system' | 'powerbi'>('system');
   // Auth: a signed token from the server is the source of truth for admin
@@ -252,7 +273,7 @@ export default function App() {
         const response = await fetch(`${API_BASE_URL}/api/records`);
         if (response.ok) {
           const data = await response.json();
-          setRecords(data);
+          setRecords(Array.isArray(data) ? data.map(normalizeRecord) : []);
         }
       } catch (error) {
         console.error('Error fetching data from database:', error);
@@ -309,16 +330,27 @@ export default function App() {
   }, []);
 
   const analyticsData = useMemo(() => {
+    // IMPORTANT: finding status and ICAR status are two different lifecycles.
+    // status      -> Open / Closed
+    // icarStatus  -> Locked / Submitted
     const submittedRecords = records.filter(r => r.icarStatus === 'Submitted');
     const categories: Record<string, number> = {};
     const platforms: Record<string, number> = {};
-    const statuses: Record<string, number> = { 'Locked': 0, 'Submitted': 0 };
     const mqes: Record<string, number> = {};
     const auditors: Record<string, number> = {};
     const weeklyTrends: Record<string, number> = {};
 
+    const findingStatusCounts = { Open: 0, Closed: 0, 'Not Set': 0 };
+    const icarStatusCounts = { Locked: 0, Submitted: 0 };
+
     records.forEach(record => {
-      if (record.icarStatus && statuses.hasOwnProperty(record.icarStatus)) statuses[record.icarStatus]++;
+      const findingStatus = getFindingStatus(record);
+      if (findingStatus === 'Open') findingStatusCounts.Open++;
+      else if (findingStatus === 'Closed') findingStatusCounts.Closed++;
+      else findingStatusCounts['Not Set']++;
+
+      if (record.icarStatus === 'Submitted') icarStatusCounts.Submitted++;
+      else icarStatusCounts.Locked++;
     });
 
     submittedRecords.forEach(record => {
@@ -333,7 +365,10 @@ export default function App() {
     return {
       categories: Object.entries(categories).map(([name, value]) => ({ name, value })),
       platforms: Object.entries(platforms).map(([name, value]) => ({ name, value })),
-      statuses: Object.entries(statuses).map(([name, value]) => ({ name, value })),
+      findingStatuses: Object.entries(findingStatusCounts).map(([name, value]) => ({ name, value })),
+      icarStatuses: Object.entries(icarStatusCounts).map(([name, value]) => ({ name, value })),
+      findingStatusCounts,
+      icarStatusCounts,
       mqes: Object.entries(mqes).map(([name, value]) => ({ name, value })),
       auditors: Object.entries(auditors).map(([name, value]) => ({ name, value })),
       weeklyTrends: Object.entries(weeklyTrends)
@@ -526,7 +561,7 @@ export default function App() {
 
       const refreshResponse = await fetch(`${API_BASE_URL}/api/records`);
       if (refreshResponse.ok) {
-        setRecords(await refreshResponse.json());
+        setRecords((await refreshResponse.json()).map(normalizeRecord));
       }
 
       alert(`Updated ${successCount} out of ${toFix.length} record(s).`);
@@ -546,7 +581,8 @@ export default function App() {
   const [filterDept, setFilterDept] = useState('');
   const [filterFindings, setFilterFindings] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
-  const [filterStatus, setFilterStatus] = useState('');
+  const [filterStatus, setFilterStatus] = useState(''); // Finding status: Open / Closed
+  const [filterIcarStatus, setFilterIcarStatus] = useState(''); // ICAR status: Locked / Submitted
   const [filterShift, setFilterShift] = useState('');
   const [filterPlatform, setFilterPlatform] = useState('');
   const [filterWW, setFilterWW] = useState('');
@@ -554,7 +590,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  const [newAudit, setNewAudit] = useState<Partial<AuditRecord>>({
+  const [newAudit, setNewAudit] = useState<Partial<IPQCAuditRecord>>({
     no: undefined,
     auditDate: new Date().toISOString().split('T')[0],
     ww: calculateWW(new Date().toISOString().split('T')[0]),
@@ -568,6 +604,7 @@ export default function App() {
     category: CATEGORIES[0],
     detailsFindings: FINDING_DETAILS[0],
     remark: '',
+    status: 'Open',
     icarNum: 'N/A',
     icarStatus: 'Locked',
     mqeEngineer: INITIAL_PLATFORM_MQE_MAPPING[PLATFORMS[0]] || ''
@@ -620,15 +657,16 @@ export default function App() {
       const matchesDate = !filterDate || String(r.auditDate) === String(filterDate);
       const matchesWW = !filterWW || String(r.ww) === String(filterWW);
       const matchesCategory = !filterCategory || String(r.category) === String(filterCategory);
-      const matchesStatus = !filterStatus || (filterStatus === 'Open' ? (!r.icarStatus || r.icarStatus === 'Locked' || r.icarStatus === 'Open') : String(r.icarStatus) === String(filterStatus));
+      const matchesStatus = !filterStatus || getFindingStatus(r) === filterStatus;
+      const matchesIcarStatus = !filterIcarStatus || String(r.icarStatus || 'Locked') === String(filterIcarStatus);
       const matchesShift = !filterShift || String(r.shift) === String(filterShift);
       const matchesPlatform = !filterPlatform || String(r.platform) === String(filterPlatform);
 
       return matchesSearch && matchesAuditor && matchesDept && matchesFindings && 
-             matchesDate && matchesWW && matchesCategory && matchesStatus && 
+             matchesDate && matchesWW && matchesCategory && matchesStatus && matchesIcarStatus && 
              matchesShift && matchesPlatform;
     });
-  }, [records, searchQuery, filterAuditor, filterDept, filterFindings, filterDate, filterWW, filterCategory, filterStatus, filterShift, filterPlatform]);
+  }, [records, searchQuery, filterAuditor, filterDept, filterFindings, filterDate, filterWW, filterCategory, filterStatus, filterIcarStatus, filterShift, filterPlatform]);
 
   // Pagination - client-side slice of the already-filtered records. Resets
   // to page 1 whenever the filtered set changes (new search/filter), so
@@ -640,7 +678,7 @@ export default function App() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, filterAuditor, filterDept, filterFindings, filterDate, filterWW, filterCategory, filterStatus, filterShift, filterPlatform, pageSize]);
+  }, [searchQuery, filterAuditor, filterDept, filterFindings, filterDate, filterWW, filterCategory, filterStatus, filterIcarStatus, filterShift, filterPlatform, pageSize]);
 
   useEffect(() => {
     if (currentPage > totalPages) setCurrentPage(totalPages);
@@ -691,7 +729,7 @@ export default function App() {
   }, [highlightedId, view]);
 
 
-  const [selectedRecord, setSelectedRecord] = useState<AuditRecord | null>(null);
+  const [selectedRecord, setSelectedRecord] = useState<IPQCAuditRecord | null>(null);
   const [openRowAction, setOpenRowAction] = useState<string | number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -713,6 +751,7 @@ export default function App() {
       ...newAudit,
       groupFinding: CATEGORY_GROUP_MAPPING[newAudit.category || ''] || '',
       ww: calculateWW(newAudit.auditDate || new Date().toISOString().split('T')[0]),
+      status: normalizeFindingStatus(newAudit.status) || 'Open',
       icarStatus: (newAudit.icarNum && newAudit.icarNum !== 'N/A') ? 'Submitted' : 'Locked'
     };
 
@@ -724,7 +763,7 @@ export default function App() {
           body: JSON.stringify(payload)
         });
         if (response.ok) {
-          const updated = await response.json();
+          const updated = normalizeRecord(await response.json());
           setRecords(records.map(r => String(r.id) === String(editingId) ? updated : r));
           setHighlightedId(updated.id);
         } else {
@@ -738,7 +777,7 @@ export default function App() {
         });
 
         if (response.ok) {
-          const created = await response.json();
+          const created = normalizeRecord(await response.json());
           setRecords([...records, created]);
           setHighlightedId(created.id);
         } else {
@@ -760,6 +799,7 @@ export default function App() {
         category: CATEGORIES[0],
         detailsFindings: FINDING_DETAILS[0],
         remark: '',
+        status: 'Open',
         icarNum: 'N/A',
         icarStatus: 'Locked',
         mqeEngineer: getMqeForPlatform(PLATFORMS[0]),
@@ -777,7 +817,7 @@ export default function App() {
     }
   };
 
-  const handleEditClick = (record: AuditRecord) => {
+  const handleEditClick = (record: IPQCAuditRecord) => {
     setNewAudit({
       no: record.no,
       auditDate: record.auditDate || '',
@@ -792,6 +832,7 @@ export default function App() {
       category: record.category || CATEGORIES[0],
       detailsFindings: record.detailsFindings || FINDING_DETAILS[0],
       remark: record.remark || '',
+      status: getFindingStatus(record) || '',
       icarNum: record.icarNum || 'N/A',
       icarStatus: record.icarStatus || 'Locked',
       mqeEngineer: record.mqeEngineer || '',
@@ -826,6 +867,9 @@ export default function App() {
       let successCount = 0;
 
       for (const row of importedRows) {
+        const importedStatus = normalizeFindingStatus(
+          (row as any).status ?? (row as any).Status ?? (row as any).findingStatus ?? (row as any).finding_status
+        );
         const payload = {
           no: row.no,
           auditDate: row.auditDate || new Date().toISOString().split('T')[0],
@@ -840,6 +884,7 @@ export default function App() {
           category: row.category || CATEGORIES[0],
           detailsFindings: row.detailsFindings || FINDING_DETAILS[0],
           remark: row.remark || '',
+          status: importedStatus || null,
           icarNum: row.icarNum || 'N/A',
           icarStatus: row.icarStatus || 'Locked',
           mqeEngineer: row.mqeEngineer || getMqeForPlatform(row.platform || PLATFORMS[0]),
@@ -860,7 +905,7 @@ export default function App() {
       const refreshResponse = await fetch(`${API_BASE_URL}/api/records`);
       if (refreshResponse.ok) {
         const latestData = await refreshResponse.json();
-        setRecords(latestData);
+        setRecords(Array.isArray(latestData) ? latestData.map(normalizeRecord) : []);
       }
 
       alert(`Successfully imported and saved ${successCount} out of ${importedRows.length} records to the database!`);
@@ -887,7 +932,7 @@ export default function App() {
   };
   const headerTitle = view === 'ipqc' && selectedRecord ? 'Finding Details' : (viewTitles[view] || 'IPQC Tracker');
   const activeFilterCount = [
-    filterAuditor, filterDept, filterFindings, filterCategory, filterStatus,
+    filterAuditor, filterDept, filterFindings, filterCategory, filterStatus, filterIcarStatus,
     filterShift, filterPlatform, filterWW, filterDate
   ].filter(Boolean).length;
   const hasActiveQuery = searchQuery.trim().length > 0 || activeFilterCount > 0;
@@ -1041,7 +1086,7 @@ export default function App() {
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-4 rounded-lg border border-border-subtle">
                   <div>
                     <h3 className="text-sm font-bold uppercase tracking-widest text-text-muted">Analytics Dashboard</h3>
-                    <p className="text-[10px] text-text-muted/60 font-bold uppercase mt-0.5">Real-time Production Insights (Calculated from Submitted ICARs)</p>
+                    <p className="text-[10px] text-text-muted/60 font-bold uppercase mt-0.5">Real-time lifecycle, ICAR and submitted-finding insights</p>
                   </div>
                   <div className="flex bg-bg-main p-1 rounded-md border border-border-subtle w-full sm:w-auto">
                     <button 
@@ -1068,27 +1113,34 @@ export default function App() {
                       exit={{ opacity: 0, y: -10 }}
                       className="space-y-6"
                     >
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-                        <KPICard 
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                        <KPICard
                           icon={<ClipboardCheck size={16} className="text-blue-500" />}
-                          label="Total Records"
+                          label="Total Findings"
                           value={records.length}
-                          trend="Lifetime"
+                          trend="All Records"
                           color="blue"
                         />
-                        <KPICard 
-                          icon={<Clock size={16} className="text-amber-500" />}
-                          label="Locked ICARs"
-                          value={records.filter(r => r.icarStatus === 'Locked').length}
-                          trend="Pending Serial"
+                        <KPICard
+                          icon={<AlertCircle size={16} className="text-orange-500" />}
+                          label="Open Findings"
+                          value={analyticsData.findingStatusCounts.Open}
+                          trend="Requires Action"
                           color="orange"
                         />
-                        <KPICard 
+                        <KPICard
                           icon={<CheckCircle2 size={16} className="text-emerald-500" />}
-                          label="Submitted ICARs"
-                          value={records.filter(r => r.icarStatus === 'Submitted').length}
-                          trend="Active Analytics"
+                          label="Closed Findings"
+                          value={analyticsData.findingStatusCounts.Closed}
+                          trend="Resolved"
                           color="emerald"
+                        />
+                        <KPICard
+                          icon={<Unlock size={16} className="text-slate-600" />}
+                          label="Submitted ICARs"
+                          value={analyticsData.icarStatusCounts.Submitted}
+                          trend="ICAR Issued"
+                          color="slate"
                         />
                       </div>
 
@@ -1137,37 +1189,65 @@ export default function App() {
                           </div>
                         </div>
 
-                        <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm h-[500px] flex flex-col items-center">
-                          <h3 className="font-black text-xs text-slate-400 uppercase tracking-[0.2em] mb-4 w-full text-left">ICAR Status Breakdown</h3>
-                          <div className="flex-1 w-full">
+                        <div className="flex h-[500px] flex-col rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+                          <div className="flex items-start justify-between gap-4">
+                            <div>
+                              <h3 className="font-black text-xs text-slate-400 uppercase tracking-[0.2em]">Finding Status Breakdown</h3>
+                              <p className="mt-1.5 text-[10px] font-medium text-slate-400">Open and closed reflect the finding lifecycle, not ICAR status.</p>
+                            </div>
+                            {analyticsData.findingStatusCounts['Not Set'] > 0 && (
+                              <span className="shrink-0 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-slate-500">
+                                {analyticsData.findingStatusCounts['Not Set']} not set
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="h-[285px] w-full">
                             <ResponsiveContainer width="100%" height="100%">
                               <PieChart>
                                 <Pie
-                                  data={analyticsData.statuses}
-                                  innerRadius={70}
-                                  outerRadius={100}
-                                  paddingAngle={8}
+                                  data={analyticsData.findingStatuses}
+                                  innerRadius={72}
+                                  outerRadius={104}
+                                  paddingAngle={5}
                                   dataKey="value"
                                   stroke="none"
                                 >
-                                  {analyticsData.statuses.map((entry, index) => (
-                                    <Cell 
-                                      key={`cell-${index}`} 
-                                      fill={entry.name === 'Submitted' ? '#10b981' : '#f59e0b'} 
+                                  {analyticsData.findingStatuses.map((entry) => (
+                                    <Cell
+                                      key={entry.name}
+                                      fill={entry.name === 'Open' ? '#f59e0b' : entry.name === 'Closed' ? '#10b981' : '#cbd5e1'}
                                     />
                                   ))}
                                 </Pie>
-                                <RechartsTooltip 
-                                  contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                                <RechartsTooltip
+                                  contentStyle={{ borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 8px 20px rgb(15 23 42 / 0.08)', fontSize: '11px', fontWeight: 700 }}
                                 />
-                                <Legend 
-                                  verticalAlign="bottom" 
-                                  height={36} 
+                                <Legend
+                                  verticalAlign="bottom"
+                                  height={30}
                                   iconType="circle"
                                   formatter={(value) => <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">{value}</span>}
                                 />
                               </PieChart>
                             </ResponsiveContainer>
+                          </div>
+
+                          <div className="mt-auto border-t border-slate-100 pt-4">
+                            <div className="mb-2 flex items-center justify-between">
+                              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">ICAR progress</p>
+                              <p className="text-[9px] font-medium text-slate-400">Separate corrective-action lifecycle</p>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div className="rounded-lg border border-amber-100 bg-amber-50/70 px-3 py-2.5">
+                                <p className="text-[9px] font-bold uppercase tracking-wider text-amber-700">Locked</p>
+                                <p className="mt-1 text-lg font-black text-slate-800">{analyticsData.icarStatusCounts.Locked}</p>
+                              </div>
+                              <div className="rounded-lg border border-emerald-100 bg-emerald-50/70 px-3 py-2.5">
+                                <p className="text-[9px] font-bold uppercase tracking-wider text-emerald-700">Submitted</p>
+                                <p className="mt-1 text-lg font-black text-slate-800">{analyticsData.icarStatusCounts.Submitted}</p>
+                              </div>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -1326,14 +1406,22 @@ export default function App() {
                                       Finding record {selectedRecord.no ? `No. ${selectedRecord.no}` : `#${selectedRecord.id}`}
                                     </span>
                                     <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.08em] ${
+                                      getFindingStatus(selectedRecord) === 'Closed'
+                                        ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                        : getFindingStatus(selectedRecord) === 'Open'
+                                          ? 'border-orange-200 bg-orange-50 text-orange-700'
+                                          : 'border-slate-200 bg-slate-50 text-slate-500'
+                                    }`}>
+                                      {getFindingStatus(selectedRecord) === 'Closed' ? <CheckCircle2 size={10} /> : <AlertCircle size={10} />}
+                                      Finding: {getFindingStatus(selectedRecord) || 'Not set'}
+                                    </span>
+                                    <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.08em] ${
                                       selectedRecord.icarStatus === 'Submitted'
                                         ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                                        : selectedRecord.icarStatus === 'Closed'
-                                          ? 'border-slate-200 bg-slate-100 text-slate-700'
-                                          : 'border-amber-200 bg-amber-50 text-amber-700'
+                                        : 'border-amber-200 bg-amber-50 text-amber-700'
                                     }`}>
-                                      {selectedRecord.icarStatus === 'Submitted' ? <Unlock size={10} /> : selectedRecord.icarStatus === 'Closed' ? <CheckCircle2 size={10} /> : <Lock size={10} />}
-                                      {selectedRecord.icarStatus || 'Locked'}
+                                      {selectedRecord.icarStatus === 'Submitted' ? <Unlock size={10} /> : <Lock size={10} />}
+                                      ICAR: {selectedRecord.icarStatus || 'Locked'}
                                     </span>
                                   </div>
 
@@ -1427,24 +1515,35 @@ export default function App() {
                             <RecordDetailSection
                               number="05"
                               icon={<ClipboardCheck size={15} />}
-                              title="ICAR information"
-                              description="Corrective-action reference and current record state."
+                              title="Lifecycle & ICAR"
+                              description="Finding resolution state and the separate corrective-action reference lifecycle."
                             >
-                              <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">
-                                <RecordDetailField label="ICAR number" value={selectedRecord.icarNum || 'N/A'} mono />
+                              <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-3">
+                                <div className="min-w-0">
+                                  <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">Finding status</p>
+                                  <div className={`mt-1.5 inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[11px] font-bold ${
+                                    getFindingStatus(selectedRecord) === 'Closed'
+                                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                      : getFindingStatus(selectedRecord) === 'Open'
+                                        ? 'border-orange-200 bg-orange-50 text-orange-700'
+                                        : 'border-slate-200 bg-slate-50 text-slate-500'
+                                  }`}>
+                                    {getFindingStatus(selectedRecord) === 'Closed' ? <CheckCircle2 size={12} /> : <AlertCircle size={12} />}
+                                    {getFindingStatus(selectedRecord) || 'Not set'}
+                                  </div>
+                                </div>
                                 <div className="min-w-0">
                                   <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">ICAR status</p>
                                   <div className={`mt-1.5 inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[11px] font-bold ${
                                     selectedRecord.icarStatus === 'Submitted'
                                       ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                                      : selectedRecord.icarStatus === 'Closed'
-                                        ? 'border-slate-200 bg-slate-100 text-slate-700'
-                                        : 'border-amber-200 bg-amber-50 text-amber-700'
+                                      : 'border-amber-200 bg-amber-50 text-amber-700'
                                   }`}>
-                                    {selectedRecord.icarStatus === 'Submitted' ? <Unlock size={12} /> : selectedRecord.icarStatus === 'Closed' ? <CheckCircle2 size={12} /> : <Lock size={12} />}
+                                    {selectedRecord.icarStatus === 'Submitted' ? <Unlock size={12} /> : <Lock size={12} />}
                                     {selectedRecord.icarStatus || 'Locked'}
                                   </div>
                                 </div>
+                                <RecordDetailField label="ICAR number" value={selectedRecord.icarNum || 'N/A'} mono />
                               </div>
                             </RecordDetailSection>
 
@@ -1490,27 +1589,38 @@ export default function App() {
                         {/* Operational summary */}
                         <aside className="space-y-4 xl:sticky xl:top-0">
                           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
-                            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Current status</p>
+                            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Finding lifecycle</p>
                             <div className="mt-4 flex items-start gap-3">
                               <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${
-                                selectedRecord.icarStatus === 'Submitted'
+                                getFindingStatus(selectedRecord) === 'Closed'
                                   ? 'bg-emerald-50 text-emerald-600'
-                                  : selectedRecord.icarStatus === 'Closed'
-                                    ? 'bg-slate-100 text-slate-600'
-                                    : 'bg-amber-50 text-amber-600'
+                                  : getFindingStatus(selectedRecord) === 'Open'
+                                    ? 'bg-orange-50 text-orange-600'
+                                    : 'bg-slate-100 text-slate-500'
                               }`}>
-                                {selectedRecord.icarStatus === 'Submitted' ? <Unlock size={18} /> : selectedRecord.icarStatus === 'Closed' ? <CheckCircle2 size={18} /> : <Lock size={18} />}
+                                {getFindingStatus(selectedRecord) === 'Closed' ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
                               </div>
                               <div className="min-w-0">
-                                <p className="text-sm font-bold text-slate-900">{selectedRecord.icarStatus || 'Locked'}</p>
+                                <p className="text-sm font-bold text-slate-900">{getFindingStatus(selectedRecord) || 'Status not set'}</p>
                                 <p className="mt-1 text-[11px] leading-5 text-slate-500">
-                                  {selectedRecord.icarStatus === 'Submitted'
-                                    ? 'An ICAR reference has been submitted for this finding.'
-                                    : selectedRecord.icarStatus === 'Closed'
-                                      ? 'This finding is recorded as closed.'
-                                      : 'This finding is awaiting an ICAR reference.'}
+                                  {getFindingStatus(selectedRecord) === 'Closed'
+                                    ? 'The finding has been resolved and marked closed.'
+                                    : getFindingStatus(selectedRecord) === 'Open'
+                                      ? 'The finding remains open and requires follow-up.'
+                                      : 'This historical record has not yet been classified as open or closed.'}
                                 </p>
                               </div>
+                            </div>
+                            <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4">
+                              <span className="text-[10px] font-medium text-slate-500">ICAR status</span>
+                              <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-semibold ${
+                                selectedRecord.icarStatus === 'Submitted'
+                                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                  : 'border-amber-200 bg-amber-50 text-amber-700'
+                              }`}>
+                                {selectedRecord.icarStatus === 'Submitted' ? <Unlock size={10} /> : <Lock size={10} />}
+                                {selectedRecord.icarStatus || 'Locked'}
+                              </span>
                             </div>
                           </section>
 
@@ -1642,20 +1752,27 @@ export default function App() {
                   <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 px-0.5">
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-semibold text-slate-400">
                       {(() => {
-                        const openCount = records.filter(r => !r.icarStatus || r.icarStatus === 'Locked' || r.icarStatus === 'Open').length;
-                        const closedCount = records.filter(r => r.icarStatus === 'Closed').length;
+                        const openCount = records.filter(r => getFindingStatus(r) === 'Open').length;
+                        const closedCount = records.filter(r => getFindingStatus(r) === 'Closed').length;
+                        const unclassifiedCount = records.filter(r => !getFindingStatus(r)).length;
                         const submittedCount = records.filter(r => r.icarStatus === 'Submitted').length;
                         return (
                           <>
-                            <button type="button" onClick={() => setFilterStatus(filterStatus === 'Locked' ? '' : 'Locked')} className="hover:text-slate-700 transition-colors">
+                            <button type="button" onClick={() => setFilterStatus(filterStatus === 'Open' ? '' : 'Open')} className="hover:text-slate-700 transition-colors">
                               <span className="font-black text-slate-700">{openCount.toLocaleString()}</span> open
                             </button>
                             <span className="text-slate-300">·</span>
                             <button type="button" onClick={() => setFilterStatus(filterStatus === 'Closed' ? '' : 'Closed')} className="hover:text-slate-700 transition-colors">
                               <span className="font-black text-slate-700">{closedCount.toLocaleString()}</span> closed
                             </button>
+                            {unclassifiedCount > 0 && (
+                              <>
+                                <span className="text-slate-300">·</span>
+                                <span><span className="font-black text-slate-600">{unclassifiedCount.toLocaleString()}</span> status not set</span>
+                              </>
+                            )}
                             <span className="text-slate-300">·</span>
-                            <button type="button" onClick={() => setFilterStatus(filterStatus === 'Submitted' ? '' : 'Submitted')} className="hover:text-slate-700 transition-colors">
+                            <button type="button" onClick={() => setFilterIcarStatus(filterIcarStatus === 'Submitted' ? '' : 'Submitted')} className="hover:text-slate-700 transition-colors">
                               <span className="font-black text-slate-700">{submittedCount.toLocaleString()}</span> submitted ICAR
                             </button>
                             <span className="text-slate-300">·</span>
@@ -1681,6 +1798,7 @@ export default function App() {
                               setFilterDept('');
                               setFilterCategory('');
                               setFilterStatus('');
+                              setFilterIcarStatus('');
                               setFilterShift('');
                               setFilterPlatform('');
                               setSearchQuery('');
@@ -1722,7 +1840,8 @@ export default function App() {
                         <FilterInput label="Department" type="select" options={DEPARTMENTS} value={filterDept} onChange={setFilterDept} />
                         <FilterInput label="Platform" type="select" options={platformsList} value={filterPlatform} onChange={setFilterPlatform} />
                         <FilterInput label="Category" type="select" options={CATEGORIES} value={filterCategory} onChange={setFilterCategory} />
-                        <FilterInput label="ICAR Status" type="select" options={['Open', 'Closed', 'Submitted']} value={filterStatus} onChange={setFilterStatus} />
+                        <FilterInput label="Finding Status" type="select" options={['Open', 'Closed']} value={filterStatus} onChange={setFilterStatus} />
+                        <FilterInput label="ICAR Status" type="select" options={['Locked', 'Submitted']} value={filterIcarStatus} onChange={setFilterIcarStatus} />
                         <div className="flex items-end lg:col-span-2">
                           <button 
                             onClick={() => {
@@ -1732,6 +1851,7 @@ export default function App() {
                               setFilterDept('');
                               setFilterCategory('');
                               setFilterStatus('');
+                              setFilterIcarStatus('');
                               setFilterShift('');
                               setFilterPlatform('');
                               setSearchQuery('');
@@ -1750,7 +1870,7 @@ export default function App() {
 
                 <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden flex flex-col flex-1 shadow-[0_8px_30px_rgba(15,23,42,0.05)] min-h-0">
                   <div className="overflow-auto flex-1 custom-scrollbar">
-                    <table className="w-full text-left border-collapse min-w-[1650px]">
+                    <table className="w-full text-left border-collapse min-w-[1760px]">
                       <thead className="bg-slate-50/95 backdrop-blur sticky top-0 z-20 shadow-[0_1px_0_rgba(15,23,42,0.08)]">
                         <tr>
                           <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200 text-center sticky left-0 bg-slate-100 z-30 shadow-[2px_0_5px_rgba(0,0,0,0.03)] w-16">No</th>
@@ -1768,6 +1888,7 @@ export default function App() {
                           <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200">Finding Details</th>
                           <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200 text-center">Image</th>
                           <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200">Remark</th>
+                          <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200 text-center">Finding Status</th>
                           <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200 text-center">ICAR Status</th>
                           <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-r border-slate-200">ICAR#</th>
                           <th className="px-4 py-3.5 text-[9px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200 text-right">Actions</th>
@@ -1817,6 +1938,20 @@ export default function App() {
                               ) : <ImageIcon size={20} className="mx-auto opacity-30" />}
                             </td>
                             <td className="px-4 py-4 max-w-[150px] truncate italic text-slate-500 border-r border-slate-100">{record.remark || '-'}</td>
+                            <td className="px-4 py-4 text-center border-r border-slate-100">
+                              {getFindingStatus(record) ? (
+                                <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-wider ${
+                                  getFindingStatus(record) === 'Closed'
+                                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                    : 'border-orange-200 bg-orange-50 text-orange-700'
+                                }`}>
+                                  <span className={`h-1.5 w-1.5 rounded-full ${getFindingStatus(record) === 'Closed' ? 'bg-emerald-500' : 'bg-orange-500'}`} />
+                                  {getFindingStatus(record)}
+                                </span>
+                              ) : (
+                                <span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">Not set</span>
+                              )}
+                            </td>
                             <td className="px-4 py-4 text-center border-r border-slate-100">
                               <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest shadow-sm ${
                                 record.icarStatus === 'Submitted' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold' : 'bg-amber-100 text-amber-800 border border-amber-300 font-bold'
@@ -2124,6 +2259,24 @@ export default function App() {
                           />
                         </div>
 
+                        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <FormSelect
+                            label="Finding status"
+                            required
+                            value={newAudit.status || ''}
+                            onChange={(v: string) => setNewAudit({ ...newAudit, status: v })}
+                            options={['Open', 'Closed']}
+                            placeholder="Select finding status"
+                            helper={editingId ? 'Set Closed only when the finding has been resolved.' : 'New findings default to Open.'}
+                          />
+                          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-3">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">Lifecycle rule</p>
+                            <p className="mt-1 text-[11px] leading-5 text-slate-500">
+                              Finding status tracks resolution (<span className="font-semibold text-slate-700">Open / Closed</span>). ICAR status is managed separately from the ICAR number.
+                            </p>
+                          </div>
+                        </div>
+
                         <div className="mt-4">
                           <label className="mb-1.5 block text-[11px] font-semibold text-slate-700">
                             Remark <span className="font-normal text-slate-400">(optional)</span>
@@ -2214,7 +2367,7 @@ export default function App() {
                             </div>
 
                             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-[10px] leading-5 text-slate-500">
-                              Entering a valid ICAR number automatically changes the record status to <span className="font-semibold text-slate-700">Submitted</span>.
+                              Entering a valid ICAR number automatically changes the ICAR status to <span className="font-semibold text-slate-700">Submitted</span>.
                             </div>
                           </div>
 
@@ -2322,16 +2475,31 @@ export default function App() {
                           </div>
                         </div>
 
-                        <div className="mt-4 flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2.5">
-                          <span className="text-[10px] font-medium text-slate-500">ICAR status</span>
-                          <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-semibold ${
-                            newAudit.icarStatus === 'Submitted'
-                              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                              : 'border-amber-200 bg-amber-50 text-amber-700'
-                          }`}>
-                            {newAudit.icarStatus === 'Submitted' ? <Unlock size={10} /> : <Lock size={10} />}
-                            {newAudit.icarStatus || 'Locked'}
-                          </span>
+                        <div className="mt-4 space-y-2 rounded-lg bg-slate-50 px-3 py-2.5">
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-[10px] font-medium text-slate-500">Finding status</span>
+                            <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-semibold ${
+                              normalizeFindingStatus(newAudit.status) === 'Closed'
+                                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                : normalizeFindingStatus(newAudit.status) === 'Open'
+                                  ? 'border-orange-200 bg-orange-50 text-orange-700'
+                                  : 'border-slate-200 bg-white text-slate-400'
+                            }`}>
+                              {normalizeFindingStatus(newAudit.status) === 'Closed' ? <CheckCircle2 size={10} /> : <AlertCircle size={10} />}
+                              {normalizeFindingStatus(newAudit.status) || 'Not set'}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-3 border-t border-slate-200 pt-2">
+                            <span className="text-[10px] font-medium text-slate-500">ICAR status</span>
+                            <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-semibold ${
+                              newAudit.icarStatus === 'Submitted'
+                                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                : 'border-amber-200 bg-amber-50 text-amber-700'
+                            }`}>
+                              {newAudit.icarStatus === 'Submitted' ? <Unlock size={10} /> : <Lock size={10} />}
+                              {newAudit.icarStatus || 'Locked'}
+                            </span>
+                          </div>
                         </div>
                       </div>
 
@@ -3096,7 +3264,7 @@ function RecordDetailField({ label, value, accent, mono }: { label: string, valu
   );
 }
 
-function FormSelect({ label, value, onChange, options, required, helper }: any) {
+function FormSelect({ label, value, onChange, options, required, helper, placeholder }: any) {
   return (
     <div className="flex flex-col gap-1.5">
       <label className="text-[11px] font-semibold text-slate-700">
@@ -3109,6 +3277,7 @@ function FormSelect({ label, value, onChange, options, required, helper }: any) 
           required={required}
           className="h-11 w-full appearance-none rounded-lg border border-slate-300 bg-white px-3.5 pr-9 text-sm font-medium text-slate-800 outline-none transition-all focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/10"
         >
+          {placeholder && <option value="" disabled={required}>{placeholder}</option>}
           {options.map((opt: any) => <option key={opt} value={opt}>{opt}</option>)}
         </select>
         <ChevronDown size={15} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 transition-colors group-focus-within:text-brand-orange" />
