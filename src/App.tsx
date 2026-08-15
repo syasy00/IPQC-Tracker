@@ -33,7 +33,11 @@ import {
   Sparkles,
   CalendarDays,
   Info,
-  AlertCircle
+  AlertCircle,
+  Eye,
+  EyeOff,
+  ShieldCheck,
+  ArrowRight
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -273,6 +277,7 @@ export default function App() {
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [loggingIn, setLoggingIn] = useState(false);
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
   // Distinguishes "your token expired mid-session" from a fresh login attempt,
   // so we can explain *why* the modal popped up instead of just showing it.
   const [sessionExpired, setSessionExpired] = useState(false);
@@ -499,32 +504,55 @@ export default function App() {
 
   const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
+
+    const username = loginUsername.trim();
+    if (!username || !loginPassword) {
+      setLoginError('Enter your Admin ID and password to continue.');
+      return;
+    }
+
     setLoginError('');
     setLoggingIn(true);
+
     try {
       const response = await fetch(`${API_BASE_URL}/api/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: loginUsername, password: loginPassword }),
+        body: JSON.stringify({ username, password: loginPassword }),
       });
-      const data = await response.json();
+
+      const data = await response.json().catch(() => ({}));
+
       if (response.ok && data.token) {
         localStorage.setItem('ipqc_admin_token', data.token);
-        localStorage.setItem('ipqc_admin_username', loginUsername);
+        localStorage.setItem('ipqc_admin_username', username);
         setAuthToken(data.token);
-        setAdminUsername(loginUsername);
+        setAdminUsername(username);
         setShowLoginModal(false);
         setSessionExpired(false);
+        setLoginError('');
         setLoginPassword('');
         setLoginUsername('');
+        setShowLoginPassword(false);
+      } else if (response.status === 401) {
+        setLoginError('Invalid Admin ID or password. Please try again.');
       } else {
-        setLoginError(data.error || 'Invalid username or password');
+        setLoginError(data.error || 'Sign in could not be completed. Please try again.');
       }
     } catch (err) {
-      setLoginError('Could not reach the server. Please try again.');
+      setLoginError('Could not reach the server. Check your connection and try again.');
     } finally {
       setLoggingIn(false);
     }
+  };
+
+  const closeLoginModal = () => {
+    if (loggingIn) return;
+    setShowLoginModal(false);
+    setLoginError('');
+    setSessionExpired(false);
+    setLoginPassword('');
+    setShowLoginPassword(false);
   };
 
   const logout = () => {
@@ -3949,73 +3977,157 @@ export default function App() {
 
       <AnimatePresence>
         {showLoginModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-md">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/30 p-4 backdrop-blur-[2px]"
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget) closeLoginModal();
+            }}
+          >
+            <motion.div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="admin-login-title"
+              initial={{ opacity: 0, scale: 0.98, y: 12 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl border border-white/20 p-8"
+              exit={{ opacity: 0, scale: 0.98, y: 12 }}
+              transition={{ duration: 0.18, ease: 'easeOut' }}
+              className="w-full max-w-[440px] overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.22)]"
             >
-              <div className="text-center mb-8">
-                <div className="w-16 h-16 bg-brand-orange/10 text-brand-orange rounded-2xl flex items-center justify-center mx-auto mb-4">
-                  <Lock size={32} />
+              <div className="border-b border-slate-100 px-7 py-6 sm:px-8">
+                <div className="flex items-start gap-3.5">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-orange-100 bg-orange-50 text-brand-orange">
+                    <Lock size={20} strokeWidth={2.2} />
+                  </div>
+                  <div className="min-w-0 pt-0.5">
+                    <h3 id="admin-login-title" className="text-[21px] font-black tracking-[-0.02em] text-slate-900">
+                      Administrator Sign In
+                    </h3>
+                    <p className="mt-1 text-[12px] font-medium leading-5 text-slate-500">
+                      Restricted access to IPQC administration tools.
+                    </p>
+                  </div>
                 </div>
-                <h3 className="text-2xl font-black tracking-tight text-slate-800">Admin Authentication</h3>
-                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mt-2">Quality Management System</p>
               </div>
 
-              {sessionExpired && (
-                <p className="text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 text-center mb-4">
-                  Your session expired. Please sign in again.
-                </p>
-              )}
-
-              <form onSubmit={handleLogin} className="space-y-4">
-                <div>
-                  <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2 block ml-1">Username / Admin ID</label>
-                  <input 
-                    type="text" 
-                    value={loginUsername}
-                    onChange={(e) => setLoginUsername(e.target.value)}
-                    placeholder="e.g. admin"
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/5 outline-none transition-all placeholder:text-slate-300 font-bold"
-                  />
-                </div>
-                <div>
-                  <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2 block ml-1">Password</label>
-                  <input 
-                    type="password" 
-                    value={loginPassword}
-                    onChange={(e) => setLoginPassword(e.target.value)}
-                    placeholder="Enter password..."
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/5 outline-none transition-all placeholder:text-slate-300 font-bold"
-                  />
-                </div>
-                {loginError && (
-                  <p className="text-[11px] font-bold text-rose-600 bg-rose-50 border border-rose-100 rounded-lg px-3 py-2 text-center">
-                    {loginError}
-                  </p>
+              <div className="px-7 py-6 sm:px-8">
+                {sessionExpired && (
+                  <div className="mb-5 flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-amber-800">
+                    <Clock size={16} className="mt-0.5 shrink-0" />
+                    <div>
+                      <p className="text-[12px] font-bold">Session expired</p>
+                      <p className="mt-0.5 text-[11px] font-medium leading-4 text-amber-700">
+                        Sign in again to continue using administrator tools.
+                      </p>
+                    </div>
+                  </div>
                 )}
 
-                <div className="flex gap-3 pt-2">
-                  <button 
-                    type="button"
-                    onClick={() => { setShowLoginModal(false); setLoginError(''); setSessionExpired(false); }}
-                    className="flex-1 py-3 text-xs font-black uppercase tracking-widest text-slate-400 hover:text-slate-600 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button 
-                    type="submit"
-                    disabled={loggingIn}
-                    className="flex-1 bg-brand-orange text-white py-3 rounded-xl text-xs font-black uppercase tracking-widest shadow-lg shadow-brand-orange/20 hover:brightness-110 active:scale-95 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
-                  >
-                    {loggingIn ? 'Signing In...' : 'Sign In'}
-                  </button>
-                </div>
-              </form>
+                <form onSubmit={handleLogin} className="space-y-5">
+                  <div>
+                    <label htmlFor="admin-login-username" className="mb-2 block text-[12px] font-bold text-slate-700">
+                      Admin ID
+                    </label>
+                    <input
+                      id="admin-login-username"
+                      type="text"
+                      value={loginUsername}
+                      onChange={(e) => {
+                        setLoginUsername(e.target.value);
+                        if (loginError) setLoginError('');
+                      }}
+                      placeholder="Enter Admin ID"
+                      autoComplete="username"
+                      autoFocus
+                      disabled={loggingIn}
+                      className="h-12 w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 text-[13px] font-semibold text-slate-900 outline-none transition-all placeholder:font-medium placeholder:text-slate-400 hover:border-slate-300 focus:border-brand-orange focus:bg-white focus:ring-4 focus:ring-orange-100/70 disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="admin-login-password" className="mb-2 block text-[12px] font-bold text-slate-700">
+                      Password
+                    </label>
+                    <div className="relative">
+                      <input
+                        id="admin-login-password"
+                        type={showLoginPassword ? 'text' : 'password'}
+                        value={loginPassword}
+                        onChange={(e) => {
+                          setLoginPassword(e.target.value);
+                          if (loginError) setLoginError('');
+                        }}
+                        placeholder="Enter password"
+                        autoComplete="current-password"
+                        disabled={loggingIn}
+                        className="h-12 w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 pr-12 text-[13px] font-semibold text-slate-900 outline-none transition-all placeholder:font-medium placeholder:text-slate-400 hover:border-slate-300 focus:border-brand-orange focus:bg-white focus:ring-4 focus:ring-orange-100/70 disabled:cursor-not-allowed disabled:opacity-60"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowLoginPassword((value) => !value)}
+                        disabled={loggingIn}
+                        aria-label={showLoginPassword ? 'Hide password' : 'Show password'}
+                        title={showLoginPassword ? 'Hide password' : 'Show password'}
+                        className="absolute inset-y-0 right-0 flex w-12 items-center justify-center text-slate-400 transition-colors hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-orange disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {showLoginPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {loginError && (
+                    <div
+                      role="alert"
+                      className="flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-3 text-rose-700"
+                    >
+                      <AlertCircle size={16} className="mt-0.5 shrink-0" />
+                      <p className="text-[11px] font-semibold leading-5">{loginError}</p>
+                    </div>
+                  )}
+
+                  <div className="flex items-start gap-2.5 rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-3">
+                    <ShieldCheck size={16} className="mt-0.5 shrink-0 text-slate-500" />
+                    <div>
+                      <p className="text-[11px] font-bold text-slate-600">Authorized administrators only</p>
+                      <p className="mt-0.5 text-[10.5px] font-medium leading-4 text-slate-400">
+                        Administrator privileges provide access to protected system controls and quality-management tools.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col-reverse gap-2.5 pt-1 sm:flex-row sm:justify-end">
+                    <button
+                      type="button"
+                      onClick={closeLoginModal}
+                      disabled={loggingIn}
+                      className="h-11 rounded-xl border border-slate-200 bg-white px-5 text-[12px] font-bold text-slate-600 transition-all hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 focus:outline-none focus-visible:ring-4 focus-visible:ring-slate-100 disabled:cursor-not-allowed disabled:opacity-50 sm:min-w-[110px]"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={loggingIn || !loginUsername.trim() || !loginPassword}
+                      className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-brand-orange px-5 text-[12px] font-black text-white shadow-[0_8px_20px_rgba(241,93,34,0.22)] transition-all hover:brightness-105 focus:outline-none focus-visible:ring-4 focus-visible:ring-orange-100 active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none sm:min-w-[132px]"
+                    >
+                      {loggingIn ? (
+                        <>
+                          <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/35 border-t-white" />
+                          Signing in
+                        </>
+                      ) : (
+                        <>
+                          Sign In
+                          <ArrowRight size={15} />
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              </div>
             </motion.div>
-          </div>
+          </motion.div>
         )}
       </AnimatePresence>
 
