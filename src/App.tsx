@@ -1,4 +1,4 @@
-import { useState, useMemo, FormEvent, useRef, ChangeEvent, useEffect } from 'react';
+import { useState, useMemo, FormEvent, useRef, ChangeEvent, useEffect, DragEvent } from 'react';
 import { 
   LayoutDashboard, 
   ClipboardCheck, 
@@ -253,6 +253,11 @@ export default function App() {
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
   const [importing, setImporting] = useState(false);
+  const importFileInputRef = useRef<HTMLInputElement>(null);
+  const [selectedImportFile, setSelectedImportFile] = useState<File | null>(null);
+  const [importDragActive, setImportDragActive] = useState(false);
+  const [importFileError, setImportFileError] = useState('');
+  const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
 
   // Settings State for CRUD Operations
   const [auditorsList, setAuditorsList] = useState(INITIAL_AUDITORS);
@@ -858,23 +863,97 @@ export default function App() {
     }
   };
 
+  const formatImportFileSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const validateImportFile = (file: File) => {
+    const extension = file.name.split('.').pop()?.toLowerCase();
+    if (!extension || !['xlsx', 'xls'].includes(extension)) {
+      return 'Please select a valid Excel workbook (.xlsx or .xls).';
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      return 'The selected file is larger than 10 MB.';
+    }
+    return '';
+  };
+
+  const selectImportFile = (file: File | null) => {
+    if (!file) return;
+    const validationError = validateImportFile(file);
+    if (validationError) {
+      setSelectedImportFile(null);
+      setImportFileError(validationError);
+      if (importFileInputRef.current) importFileInputRef.current.value = '';
+      return;
+    }
+    setSelectedImportFile(file);
+    setImportFileError('');
+    setImportProgress({ current: 0, total: 0 });
+  };
+
+  const handleImportFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    selectImportFile(e.target.files?.[0] || null);
+  };
+
+  const handleImportDrop = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setImportDragActive(false);
+    if (importing) return;
+    selectImportFile(e.dataTransfer.files?.[0] || null);
+  };
+
+  const clearImportFile = () => {
+    if (importing) return;
+    setSelectedImportFile(null);
+    setImportFileError('');
+    setImportProgress({ current: 0, total: 0 });
+    if (importFileInputRef.current) importFileInputRef.current.value = '';
+  };
+
+  const closeImportModal = () => {
+    if (importing) return;
+    setShowImportModal(false);
+    setImportDragActive(false);
+    clearImportFile();
+  };
+
   const handleExcelImportProcess = async () => {
-    const fileInput = document.getElementById('excelImportModalInput') as HTMLInputElement;
-    const file = fileInput?.files?.[0];
+    const file = selectedImportFile;
     if (!file) {
-      alert('Please select an Excel file first.');
+      setImportFileError('Choose an Excel workbook before starting the import.');
       return;
     }
 
+    const validationError = validateImportFile(file);
+    if (validationError) {
+      setImportFileError(validationError);
+      return;
+    }
+
+    setImportFileError('');
     setImporting(true);
+    setImportProgress({ current: 0, total: 0 });
+
     try {
       const importedRows = await importFromExcel(file);
-      let successCount = 0;
+      if (!Array.isArray(importedRows) || importedRows.length === 0) {
+        throw new Error('No importable rows were found in this workbook.');
+      }
 
-      for (const row of importedRows) {
+      let successCount = 0;
+      let failedCount = 0;
+      setImportProgress({ current: 0, total: importedRows.length });
+
+      for (let index = 0; index < importedRows.length; index++) {
+        const row = importedRows[index];
         const importedStatus = normalizeFindingStatus(
           (row as any).status ?? (row as any).Status ?? (row as any).findingStatus ?? (row as any).finding_status
         );
+
         const payload = {
           no: row.no,
           auditDate: row.auditDate || new Date().toISOString().split('T')[0],
@@ -889,7 +968,7 @@ export default function App() {
           category: row.category || CATEGORIES[0],
           detailsFindings: row.detailsFindings || FINDING_DETAILS[0],
           remark: row.remark || '',
-          status: importedStatus || null,
+          status: importedStatus || 'Open',
           icarNum: row.icarNum || 'N/A',
           icarStatus: row.icarStatus || 'Locked',
           mqeEngineer: row.mqeEngineer || getMqeForPlatform(row.platform || PLATFORMS[0]),
@@ -902,9 +981,10 @@ export default function App() {
           body: JSON.stringify(payload)
         });
 
-        if (response.ok) {
-          successCount++;
-        }
+        if (response.ok) successCount++;
+        else failedCount++;
+
+        setImportProgress({ current: index + 1, total: importedRows.length });
       }
 
       const refreshResponse = await fetch(`${API_BASE_URL}/api/records`);
@@ -913,11 +993,19 @@ export default function App() {
         setRecords(Array.isArray(latestData) ? latestData.map(normalizeRecord) : []);
       }
 
-      alert(`Successfully imported and saved ${successCount} out of ${importedRows.length} records to the database!`);
+      if (failedCount > 0) {
+        alert(`Import finished: ${successCount} saved, ${failedCount} failed. Review the server log before retrying failed rows.`);
+      } else {
+        alert(`Import complete. ${successCount} record${successCount === 1 ? '' : 's'} saved successfully.`);
+      }
+
       setShowImportModal(false);
+      setSelectedImportFile(null);
+      setImportProgress({ current: 0, total: 0 });
+      if (importFileInputRef.current) importFileInputRef.current.value = '';
     } catch (err) {
       console.error('Import error:', err);
-      alert('Error parsing or saving Excel file to database.');
+      setImportFileError(err instanceof Error ? err.message : 'The workbook could not be processed. Check its format and try again.');
     } finally {
       setImporting(false);
     }
@@ -2943,49 +3031,219 @@ export default function App() {
       {/* Excel Import Modal */}
       <AnimatePresence>
         {showImportModal && (
-          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget && !importing) closeImportModal();
+            }}
+            className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[3px]"
+          >
+            <motion.div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="import-records-title"
+              initial={{ opacity: 0, scale: 0.98, y: 12 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="bg-white rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl border border-slate-200 p-8 space-y-6"
+              exit={{ opacity: 0, scale: 0.98, y: 12 }}
+              transition={{ duration: 0.16 }}
+              className="w-full max-w-2xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.28)]"
             >
-              <div className="flex justify-between items-center border-b border-slate-100 pb-4">
-                <div>
-                  <h3 className="text-base font-black text-slate-800 uppercase tracking-tight">Import Historical Records</h3>
-                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-0.5">Sync Excel tracker directly into MySQL database</p>
+              {/* Header */}
+              <div className="flex items-start justify-between gap-5 border-b border-slate-200 px-6 py-5 md:px-7">
+                <div className="flex min-w-0 items-start gap-3.5">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-700">
+                    <Upload size={18} />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 id="import-records-title" className="text-lg font-bold tracking-tight text-slate-900">
+                      Import Historical Records
+                    </h3>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">
+                      Validate an Excel tracker and append its findings to the IPQC database.
+                    </p>
+                  </div>
                 </div>
-                <button onClick={() => setShowImportModal(false)} className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-slate-100 text-slate-400">
-                  <X size={20} />
+                <button
+                  type="button"
+                  onClick={closeImportModal}
+                  disabled={importing}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                  aria-label="Close import dialog"
+                >
+                  <X size={18} />
                 </button>
               </div>
 
-              <div className="border-2 border-dashed border-slate-300 rounded-2xl p-8 text-center bg-slate-50 hover:bg-slate-100/50 transition-colors">
-                <input 
-                  id="excelImportModalInput"
-                  type="file"
-                  accept=".xlsx, .xls"
-                  className="text-xs font-bold text-slate-600 file:mr-4 file:py-2.5 file:px-5 file:rounded-xl file:border-0 file:text-xs file:font-black file:uppercase file:bg-brand-orange file:text-white hover:file:brightness-110 file:cursor-pointer"
-                />
+              <div className="space-y-4 px-6 py-5 md:px-7 md:py-6">
+                {/* Upload zone */}
+                <div
+                  onDragEnter={(e) => {
+                    e.preventDefault();
+                    if (!importing) setImportDragActive(true);
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    if (!importing) setImportDragActive(true);
+                  }}
+                  onDragLeave={(e) => {
+                    e.preventDefault();
+                    if (!e.currentTarget.contains(e.relatedTarget as Node)) setImportDragActive(false);
+                  }}
+                  onDrop={handleImportDrop}
+                  onClick={() => !importing && importFileInputRef.current?.click()}
+                  className={`group flex min-h-[190px] cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed px-6 py-7 text-center transition-all ${
+                    importDragActive
+                      ? 'border-brand-orange bg-orange-50/60 ring-4 ring-brand-orange/5'
+                      : selectedImportFile
+                        ? 'border-emerald-300 bg-emerald-50/25'
+                        : 'border-slate-300 bg-slate-50/60 hover:border-slate-400 hover:bg-slate-50'
+                  } ${importing ? 'pointer-events-none opacity-70' : ''}`}
+                >
+                  <input
+                    id="excelImportModalInput"
+                    ref={importFileInputRef}
+                    type="file"
+                    accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                    className="hidden"
+                    onChange={handleImportFileChange}
+                  />
+
+                  <div className={`mb-3 flex h-11 w-11 items-center justify-center rounded-xl border bg-white shadow-sm transition-colors ${
+                    selectedImportFile ? 'border-emerald-200 text-emerald-600' : 'border-slate-200 text-slate-500 group-hover:text-brand-orange'
+                  }`}>
+                    {selectedImportFile ? <CheckCircle2 size={20} /> : <Upload size={20} />}
+                  </div>
+
+                  <p className="text-sm font-bold text-slate-800">
+                    {selectedImportFile ? 'Workbook ready for import' : 'Drop your Excel workbook here'}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {selectedImportFile ? 'Choose another file to replace the current selection.' : 'or click anywhere in this area to browse your computer'}
+                  </p>
+
+                  {!selectedImportFile && (
+                    <span className="mt-4 inline-flex h-9 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 text-[11px] font-bold text-slate-700 shadow-sm transition-colors group-hover:border-brand-orange/40 group-hover:text-brand-orange">
+                      Choose Excel file
+                    </span>
+                  )}
+
+                  <p className="mt-4 text-[10px] font-medium text-slate-400">
+                    Supported: .xlsx, .xls <span className="mx-1.5 text-slate-300">•</span> Maximum file size: 10 MB
+                  </p>
+                </div>
+
+                {/* Selected file */}
+                <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                  <div className="border-b border-slate-100 bg-slate-50/70 px-4 py-2.5">
+                    <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Selected workbook</p>
+                  </div>
+                  <div className="flex min-h-[70px] items-center justify-between gap-4 px-4 py-3.5">
+                    {selectedImportFile ? (
+                      <>
+                        <div className="flex min-w-0 items-center gap-3">
+                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+                            <CheckCircle2 size={17} />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="truncate text-xs font-bold text-slate-800" title={selectedImportFile.name}>{selectedImportFile.name}</p>
+                            <p className="mt-0.5 text-[10px] text-slate-400">{formatImportFileSize(selectedImportFile.size)} · Ready to validate and import</p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); clearImportFile(); }}
+                          disabled={importing}
+                          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[10px] font-bold text-slate-500 transition-colors hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40"
+                        >
+                          <X size={13} /> Remove
+                        </button>
+                      </>
+                    ) : (
+                      <div className="flex items-center gap-3 text-slate-400">
+                        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100">
+                          <Upload size={16} />
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold text-slate-600">No workbook selected</p>
+                          <p className="mt-0.5 text-[10px]">Select or drag a file above to continue.</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {importFileError && (
+                  <div className="flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-rose-700">
+                    <AlertCircle size={15} className="mt-0.5 shrink-0" />
+                    <p className="text-[11px] font-medium leading-5">{importFileError}</p>
+                  </div>
+                )}
+
+                {/* Guidance */}
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3.5">
+                  <div className="flex items-start gap-3">
+                    <Info size={16} className="mt-0.5 shrink-0 text-slate-500" />
+                    <div>
+                      <p className="text-xs font-bold text-slate-700">Import guidance</p>
+                      <ul className="mt-1.5 space-y-1 text-[10px] leading-4 text-slate-500">
+                        <li>• Use the approved IPQC Excel column format.</li>
+                        <li>• Finding Status is imported separately from ICAR Status.</li>
+                        <li>• Records are appended to MySQL; existing rows are not automatically removed.</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Progress */}
+                {importing && importProgress.total > 0 && (
+                  <div className="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
+                    <div className="mb-2 flex items-center justify-between text-[10px] font-bold text-blue-700">
+                      <span>Saving records to database</span>
+                      <span>{importProgress.current} / {importProgress.total}</span>
+                    </div>
+                    <div className="h-1.5 overflow-hidden rounded-full bg-blue-100">
+                      <div
+                        className="h-full rounded-full bg-blue-600 transition-all duration-200"
+                        style={{ width: `${Math.min(100, (importProgress.current / importProgress.total) * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
-              <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
-                <button 
-                  onClick={() => setShowImportModal(false)}
-                  className="px-5 py-2.5 text-xs font-black uppercase tracking-widest text-slate-400 hover:text-slate-600 transition-colors"
+              {/* Footer */}
+              <div className="flex flex-col-reverse gap-2 border-t border-slate-200 bg-slate-50/60 px-6 py-4 sm:flex-row sm:items-center sm:justify-end md:px-7">
+                <button
+                  type="button"
+                  onClick={closeImportModal}
+                  disabled={importing}
+                  className="inline-flex h-10 items-center justify-center rounded-lg border border-slate-300 bg-white px-5 text-xs font-semibold text-slate-600 shadow-sm transition-colors hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   Cancel
                 </button>
-                <button 
-                  disabled={importing}
+                <button
+                  type="button"
+                  disabled={importing || !selectedImportFile}
                   onClick={handleExcelImportProcess}
-                  className="bg-brand-orange text-white px-8 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest shadow-lg shadow-brand-orange/20 hover:brightness-110 active:scale-95 transition-all disabled:opacity-50"
+                  className="inline-flex h-10 min-w-[210px] items-center justify-center gap-2 rounded-lg bg-brand-orange px-5 text-xs font-bold text-white shadow-sm transition-all hover:brightness-105 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
                 >
-                  {importing ? 'Processing & Saving...' : 'Process & Save to DB'}
+                  {importing ? (
+                    <>
+                      <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                      Processing records...
+                    </>
+                  ) : (
+                    <>
+                      <Upload size={14} />
+                      Process & Save to Database
+                    </>
+                  )}
                 </button>
               </div>
             </motion.div>
-          </div>
+          </motion.div>
         )}
       </AnimatePresence>
 
