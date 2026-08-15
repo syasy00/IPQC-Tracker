@@ -658,23 +658,37 @@ export default function App() {
   const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
 
   useEffect(() => {
-    if (highlightedId === null) return;
+    if (highlightedId === null || view !== 'ipqc') return;
 
     const idx = filteredRecords.findIndex(r => String(r.id) === String(highlightedId));
     if (idx === -1) return; // hidden by active filters - nothing to scroll to
 
     setCurrentPage(Math.floor(idx / pageSize) + 1);
 
-    const scrollTimer = setTimeout(() => {
-      rowRefs.current[String(highlightedId)]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 150);
+    // The row may not exist in the DOM yet - the 'add-audit' view has to
+    // finish its exit animation (AnimatePresence mode="wait") before the
+    // ipqc table even mounts, and the page-size slice above needs its own
+    // render too. Poll for the ref instead of guessing a fixed delay.
+    let frame: number;
+    let attempts = 0;
+    const tryScroll = () => {
+      const el = rowRefs.current[String(highlightedId)];
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else if (attempts < 60) { // ~1s ceiling at 60fps
+        attempts++;
+        frame = requestAnimationFrame(tryScroll);
+      }
+    };
+    frame = requestAnimationFrame(tryScroll);
+
     const clearTimer = setTimeout(() => setHighlightedId(null), 2600);
 
     return () => {
-      clearTimeout(scrollTimer);
+      cancelAnimationFrame(frame);
       clearTimeout(clearTimer);
     };
-  }, [highlightedId]);
+  }, [highlightedId, view]);
 
 
   const [selectedRecord, setSelectedRecord] = useState<AuditRecord | null>(null);
