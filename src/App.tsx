@@ -745,44 +745,46 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [filtersOpen, setFiltersOpen] = useState(false);
   
-  const [filterAuditor, setFilterAuditor] = useState('');
-  const [filterDept, setFilterDept] = useState('');
+  // Multi-select filters: OR within one filter group, AND across groups.
+  // Example: (Platform = Paramount OR Cumulus) AND Status = Open.
+  const [filterAuditor, setFilterAuditor] = useState<string[]>([]);
+  const [filterDept, setFilterDept] = useState<string[]>([]);
   const [filterFindings, setFilterFindings] = useState('');
-  const [filterCategory, setFilterCategory] = useState('');
-  const [filterStatus, setFilterStatus] = useState(''); // Finding status: Open / Closed
-  const [filterIcarStatus, setFilterIcarStatus] = useState(''); // ICAR status: Locked / Submitted
-  const [filterShift, setFilterShift] = useState('');
-  const [filterPlatform, setFilterPlatform] = useState('');
-  const [filterWW, setFilterWW] = useState('');
+  const [filterCategory, setFilterCategory] = useState<string[]>([]);
+  const [filterStatus, setFilterStatus] = useState<string[]>([]); // Finding status: Open / Closed
+  const [filterIcarStatus, setFilterIcarStatus] = useState<string[]>([]); // ICAR status: Locked / Submitted
+  const [filterShift, setFilterShift] = useState<string[]>([]);
+  const [filterPlatform, setFilterPlatform] = useState<string[]>([]);
+  const [filterWW, setFilterWW] = useState<string[]>([]);
   const [filterDate, setFilterDate] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const clearRecordFilters = () => {
     setFilterDate('');
-    setFilterAuditor('');
+    setFilterAuditor([]);
     setFilterFindings('');
-    setFilterDept('');
-    setFilterCategory('');
-    setFilterStatus('');
-    setFilterIcarStatus('');
-    setFilterShift('');
-    setFilterPlatform('');
+    setFilterDept([]);
+    setFilterCategory([]);
+    setFilterStatus([]);
+    setFilterIcarStatus([]);
+    setFilterShift([]);
+    setFilterPlatform([]);
     setSearchQuery('');
-    setFilterWW('');
+    setFilterWW([]);
   };
 
   const openRecordPreset = (preset: AIInsightFilters = {}) => {
     clearRecordFilters();
     setSelectedRecord(null);
 
-    if (preset.status) setFilterStatus(preset.status);
-    if (preset.icarStatus) setFilterIcarStatus(preset.icarStatus);
-    if (preset.platform) setFilterPlatform(preset.platform);
-    if (preset.category) setFilterCategory(preset.category);
-    if (preset.auditor) setFilterAuditor(preset.auditor);
-    if (preset.department) setFilterDept(preset.department);
-    if (preset.ww) setFilterWW(String(preset.ww));
+    if (preset.status) setFilterStatus([preset.status]);
+    if (preset.icarStatus) setFilterIcarStatus([preset.icarStatus]);
+    if (preset.platform) setFilterPlatform([preset.platform]);
+    if (preset.category) setFilterCategory([preset.category]);
+    if (preset.auditor) setFilterAuditor([preset.auditor]);
+    if (preset.department) setFilterDept([preset.department]);
+    if (preset.ww) setFilterWW([String(preset.ww)]);
 
     // MQE is not a dedicated table filter in the current records view, so
     // reuse global search for a model-suggested MQE drill-down.
@@ -856,16 +858,16 @@ export default function App() {
         value !== null && value !== undefined && String(value).toLowerCase().includes(searchQuery.toLowerCase())
       );
       
-      const matchesAuditor = !filterAuditor || String(r.auditors) === String(filterAuditor);
-      const matchesDept = !filterDept || String(r.department) === String(filterDept);
+      const matchesAuditor = filterAuditor.length === 0 || filterAuditor.includes(String(r.auditors || ''));
+      const matchesDept = filterDept.length === 0 || filterDept.includes(String(r.department || ''));
       const matchesFindings = !filterFindings || String(r.groupFinding) === String(filterFindings);
       const matchesDate = !filterDate || String(r.auditDate) === String(filterDate);
-      const matchesWW = !filterWW || String(r.ww) === String(filterWW);
-      const matchesCategory = !filterCategory || String(r.category) === String(filterCategory);
-      const matchesStatus = !filterStatus || getFindingStatus(r) === filterStatus;
-      const matchesIcarStatus = !filterIcarStatus || String(r.icarStatus || 'Locked') === String(filterIcarStatus);
-      const matchesShift = !filterShift || String(r.shift) === String(filterShift);
-      const matchesPlatform = !filterPlatform || String(r.platform) === String(filterPlatform);
+      const matchesWW = filterWW.length === 0 || filterWW.includes(String(r.ww || ''));
+      const matchesCategory = filterCategory.length === 0 || filterCategory.includes(String(r.category || ''));
+      const matchesStatus = filterStatus.length === 0 || filterStatus.includes(getFindingStatus(r));
+      const matchesIcarStatus = filterIcarStatus.length === 0 || filterIcarStatus.includes(String(r.icarStatus || 'Locked'));
+      const matchesShift = filterShift.length === 0 || filterShift.includes(String(r.shift || ''));
+      const matchesPlatform = filterPlatform.length === 0 || filterPlatform.includes(String(r.platform || ''));
 
       return matchesSearch && matchesAuditor && matchesDept && matchesFindings && 
              matchesDate && matchesWW && matchesCategory && matchesStatus && matchesIcarStatus && 
@@ -1221,9 +1223,18 @@ export default function App() {
     settings: 'Admin Panel',
   };
   const headerTitle = view === 'ipqc' && selectedRecord ? 'Finding Details' : (viewTitles[view] || 'IPQC Tracker');
+  // Count active filter GROUPS, not individual checked values.
   const activeFilterCount = [
-    filterAuditor, filterDept, filterFindings, filterCategory, filterStatus, filterIcarStatus,
-    filterShift, filterPlatform, filterWW, filterDate
+    filterAuditor.length > 0,
+    filterDept.length > 0,
+    Boolean(filterFindings),
+    filterCategory.length > 0,
+    filterStatus.length > 0,
+    filterIcarStatus.length > 0,
+    filterShift.length > 0,
+    filterPlatform.length > 0,
+    filterWW.length > 0,
+    Boolean(filterDate),
   ].filter(Boolean).length;
   const hasActiveQuery = searchQuery.trim().length > 0 || activeFilterCount > 0;
 
@@ -1241,7 +1252,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <aside className={`fixed md:static inset-y-0 left-0 z-50 bg-sidebar-bg transition-all duration-300 flex flex-col shrink-0 overflow-hidden ${sidebarOpen ? 'w-[220px] translate-x-0' : 'w-0 -translate-x-full md:w-20 md:translate-x-0'}`}>
+      <aside className={`fixed md:static inset-y-0 left-0 z-50 bg-sidebar-bg transition-[width,transform] duration-300 ease-out flex flex-col shrink-0 overflow-hidden ${sidebarOpen ? 'w-[232px] translate-x-0' : 'w-0 -translate-x-full md:w-[84px] md:translate-x-0'}`}>
         <div className={`h-[76px] border-b border-white/5 flex items-center gap-3 shrink-0 transition-all duration-300 ${sidebarOpen ? 'px-5' : 'px-0 md:justify-center'}`}>
           <div className="w-10 h-10 rounded-xl overflow-hidden bg-white shrink-0 flex items-center justify-center shadow-sm ring-1 ring-white/10">
             <img
@@ -1264,10 +1275,14 @@ export default function App() {
           )}
         </div>
 
-        <nav className="flex-1 space-y-1 mt-6 overflow-y-auto px-3">
-          <div className="px-3 mb-2">
-            <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] italic opacity-50">Insights</span>
-          </div>
+        <nav className={`flex-1 overflow-y-auto custom-scrollbar transition-all duration-300 ${sidebarOpen ? 'px-3 py-5' : 'px-2 py-5'}`}>
+          {sidebarOpen ? (
+            <div className="px-3 pb-2">
+              <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.22em]">Insights</span>
+            </div>
+          ) : (
+            <div className="mx-3 mb-3 h-px bg-white/[0.07]" aria-hidden="true" />
+          )}
           <NavItem 
             icon={<LayoutDashboard size={18} />} 
             label="Analytics" 
@@ -1276,9 +1291,13 @@ export default function App() {
             onClick={() => { setView('dashboard'); if (window.innerWidth < 768) setSidebarOpen(false); }}
           />
 
-          <div className="px-3 mt-6 mb-2">
-            <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] italic opacity-50">Operations</span>
-          </div>
+          {sidebarOpen ? (
+            <div className="px-3 pt-5 pb-2">
+              <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.22em]">Operations</span>
+            </div>
+          ) : (
+            <div className="mx-3 my-4 h-px bg-white/[0.07]" aria-hidden="true" />
+          )}
           <NavItem 
             icon={<ClipboardCheck size={18} />} 
             label="IPQC Records" 
@@ -1287,9 +1306,13 @@ export default function App() {
             onClick={() => { setSelectedRecord(null); setView('ipqc'); if (window.innerWidth < 768) setSidebarOpen(false); }}
           />
 
-          <div className="px-3 mt-6 mb-2">
-            <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.2em] italic opacity-50">System</span>
-          </div>
+          {sidebarOpen ? (
+            <div className="px-3 pt-5 pb-2">
+              <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.22em]">System</span>
+            </div>
+          ) : (
+            <div className="mx-3 my-4 h-px bg-white/[0.07]" aria-hidden="true" />
+          )}
           <NavItem 
             icon={isAdmin ? <AlertCircle size={18} /> : <Lock size={18} />} 
             label="Action Center" 
@@ -2085,11 +2108,11 @@ export default function App() {
                         const submittedCount = records.filter(r => r.icarStatus === 'Submitted').length;
                         return (
                           <>
-                            <button type="button" onClick={() => setFilterStatus(filterStatus === 'Open' ? '' : 'Open')} className="hover:text-slate-700 transition-colors">
+                            <button type="button" onClick={() => setFilterStatus(prev => prev.length === 1 && prev[0] === 'Open' ? [] : ['Open'])} className="hover:text-slate-700 transition-colors">
                               <span className="font-black text-slate-700">{openCount.toLocaleString()}</span> open
                             </button>
                             <span className="text-slate-300">·</span>
-                            <button type="button" onClick={() => setFilterStatus(filterStatus === 'Closed' ? '' : 'Closed')} className="hover:text-slate-700 transition-colors">
+                            <button type="button" onClick={() => setFilterStatus(prev => prev.length === 1 && prev[0] === 'Closed' ? [] : ['Closed'])} className="hover:text-slate-700 transition-colors">
                               <span className="font-black text-slate-700">{closedCount.toLocaleString()}</span> closed
                             </button>
                             {unclassifiedCount > 0 && (
@@ -2099,7 +2122,7 @@ export default function App() {
                               </>
                             )}
                             <span className="text-slate-300">·</span>
-                            <button type="button" onClick={() => setFilterIcarStatus(filterIcarStatus === 'Submitted' ? '' : 'Submitted')} className="hover:text-slate-700 transition-colors">
+                            <button type="button" onClick={() => setFilterIcarStatus(prev => prev.length === 1 && prev[0] === 'Submitted' ? [] : ['Submitted'])} className="hover:text-slate-700 transition-colors">
                               <span className="font-black text-slate-700">{submittedCount.toLocaleString()}</span> submitted ICAR
                             </button>
                             <span className="text-slate-300">·</span>
@@ -2118,19 +2141,7 @@ export default function App() {
                           <span className="h-3 w-px bg-slate-200" aria-hidden="true" />
                           <button
                             type="button"
-                            onClick={() => {
-                              setFilterDate('');
-                              setFilterAuditor('');
-                              setFilterFindings('');
-                              setFilterDept('');
-                              setFilterCategory('');
-                              setFilterStatus('');
-                              setFilterIcarStatus('');
-                              setFilterShift('');
-                              setFilterPlatform('');
-                              setSearchQuery('');
-                              setFilterWW('');
-                            }}
+                            onClick={clearRecordFilters}
                             className="font-black uppercase tracking-[0.12em] text-slate-400 hover:text-slate-700 transition-colors"
                           >
                             Clear all
@@ -2147,48 +2158,105 @@ export default function App() {
                       initial={{ height: 0, opacity: 0, marginBottom: 0 }}
                       animate={{ height: 'auto', opacity: 1, marginBottom: 16 }}
                       exit={{ height: 0, opacity: 0, marginBottom: 0 }}
-                      className="overflow-hidden"
+                      className={filtersOpen ? 'overflow-visible relative z-40' : 'overflow-hidden'}
                     >
-                      <div className="bg-slate-50/70 p-5 rounded-2xl border border-slate-200 shadow-inner">
-                        <div className="flex items-center justify-between mb-4">
+                      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+                        <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                           <div>
-                            <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-700">Advanced filters</h4>
-                            <p className="mt-1 text-[10px] font-medium text-slate-400">Narrow records by date, ownership, status and production context.</p>
+                            <h4 className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-700">Advanced filters</h4>
+                            <p className="mt-1 text-[10px] font-medium leading-4 text-slate-400">
+                              Select multiple values in each group. Values within a group use OR; different groups use AND.
+                            </p>
                           </div>
-                          {activeFilterCount > 0 && (
-                            <span className="rounded-full bg-brand-orange/10 px-2.5 py-1 text-[9px] font-black uppercase tracking-widest text-brand-orange">{activeFilterCount} active</span>
-                          )}
+                          <div className="flex items-center gap-2">
+                            {activeFilterCount > 0 && (
+                              <span className="rounded-full bg-brand-orange/10 px-2.5 py-1 text-[9px] font-black uppercase tracking-widest text-brand-orange">
+                                {activeFilterCount} active
+                              </span>
+                            )}
+                            {activeFilterCount > 0 && (
+                              <button
+                                type="button"
+                                onClick={clearRecordFilters}
+                                className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-400 transition-colors hover:text-slate-700"
+                              >
+                                Clear all
+                              </button>
+                            )}
+                          </div>
                         </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-                        <FilterInput label="Work Week (WW)" type="select" options={WWS} value={filterWW} onChange={setFilterWW} />
-                        <FilterInput label="Date" type="date" value={filterDate} onChange={setFilterDate} />
-                        <FilterInput label="Shift" type="select" options={SHIFTS} value={filterShift} onChange={setFilterShift} />
-                        <FilterInput label="Auditor" type="select" options={auditorsList} value={filterAuditor} onChange={setFilterAuditor} />
-                        <FilterInput label="Department" type="select" options={DEPARTMENTS} value={filterDept} onChange={setFilterDept} />
-                        <FilterInput label="Platform" type="select" options={platformsList} value={filterPlatform} onChange={setFilterPlatform} />
-                        <FilterInput label="Category" type="select" options={CATEGORIES} value={filterCategory} onChange={setFilterCategory} />
-                        <FilterInput label="Finding Status" type="select" options={['Open', 'Closed']} value={filterStatus} onChange={setFilterStatus} />
-                        <FilterInput label="ICAR Status" type="select" options={['Locked', 'Submitted']} value={filterIcarStatus} onChange={setFilterIcarStatus} />
-                        <div className="flex items-end lg:col-span-2">
-                          <button 
-                            onClick={() => {
-                              setFilterDate('');
-                              setFilterAuditor('');
-                              setFilterFindings('');
-                              setFilterDept('');
-                              setFilterCategory('');
-                              setFilterStatus('');
-                              setFilterIcarStatus('');
-                              setFilterShift('');
-                              setFilterPlatform('');
-                              setSearchQuery('');
-                              setFilterWW('');
-                            }}
-                            className="w-full bg-slate-100 border border-slate-200 rounded-xl text-slate-600 text-[10px] font-black uppercase p-3 hover:bg-slate-200 transition-colors"
-                          >
-                            Clear Filters
-                          </button>
-                        </div>
+
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5">
+                          <MultiSelectFilter
+                            label="Work Week"
+                            allLabel="All Work Weeks"
+                            options={WWS}
+                            values={filterWW}
+                            onChange={setFilterWW}
+                          />
+                          <FilterInput label="Date" type="date" value={filterDate} onChange={setFilterDate} />
+                          <MultiSelectFilter
+                            label="Shift"
+                            allLabel="All Shifts"
+                            options={SHIFTS}
+                            values={filterShift}
+                            onChange={setFilterShift}
+                          />
+                          <MultiSelectFilter
+                            label="Auditor"
+                            allLabel="All Auditors"
+                            options={auditorsList}
+                            values={filterAuditor}
+                            onChange={setFilterAuditor}
+                          />
+                          <MultiSelectFilter
+                            label="Department"
+                            allLabel="All Departments"
+                            options={DEPARTMENTS}
+                            values={filterDept}
+                            onChange={setFilterDept}
+                          />
+                          <MultiSelectFilter
+                            label="Platform"
+                            allLabel="All Platforms"
+                            options={platformsList}
+                            values={filterPlatform}
+                            onChange={setFilterPlatform}
+                          />
+                          <MultiSelectFilter
+                            label="Category"
+                            allLabel="All Categories"
+                            options={CATEGORIES}
+                            values={filterCategory}
+                            onChange={setFilterCategory}
+                          />
+                          <MultiSelectFilter
+                            label="Finding Status"
+                            allLabel="All Finding Statuses"
+                            options={['Open', 'Closed']}
+                            values={filterStatus}
+                            onChange={setFilterStatus}
+                            searchable={false}
+                          />
+                          <MultiSelectFilter
+                            label="ICAR Status"
+                            allLabel="All ICAR Statuses"
+                            options={['Locked', 'Submitted']}
+                            values={filterIcarStatus}
+                            onChange={setFilterIcarStatus}
+                            searchable={false}
+                          />
+
+                          <div className="flex items-end">
+                            <button
+                              type="button"
+                              onClick={clearRecordFilters}
+                              disabled={activeFilterCount === 0 && !searchQuery}
+                              className="h-[38px] w-full rounded-lg border border-slate-200 bg-slate-50 px-3 text-[10px] font-black uppercase tracking-[0.1em] text-slate-500 transition-all hover:border-slate-300 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              Clear Filters
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </motion.div>
@@ -4180,20 +4248,35 @@ export default function App() {
 
 function NavItem({ icon, label, active, collapsed, onClick, disabled }: { icon: any, label: string, active: boolean, collapsed: boolean, onClick: () => void, disabled?: boolean }) {
   return (
-    <button 
+    <button
+      type="button"
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
-      title={disabled ? 'Requires admin login' : undefined}
-      className={`w-full flex items-center gap-3 px-5 py-3 transition-all duration-200 text-[11px] font-semibold border-l-2 ${
+      title={disabled ? `${label} — requires admin login` : collapsed ? label : undefined}
+      aria-label={label}
+      className={`relative flex min-h-11 w-full items-center rounded-xl text-[11px] font-semibold transition-all duration-200 ${
+        collapsed ? 'justify-center px-0' : 'gap-3 px-3.5'
+      } ${
         disabled
-          ? 'text-slate-600 opacity-40 cursor-not-allowed border-transparent'
-          : active 
-            ? 'bg-sidebar-active text-white border-brand-orange shadow-[inset_0_0_20px_rgba(241,93,34,0.1)]' 
-            : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border-transparent'
+          ? 'cursor-not-allowed text-slate-600 opacity-40'
+          : active
+            ? 'bg-white/[0.08] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.03),0_6px_18px_rgba(0,0,0,0.08)]'
+            : 'text-slate-400 hover:bg-white/[0.045] hover:text-slate-100'
       }`}
     >
-      <div className={`shrink-0 transition-colors ${active && !disabled ? 'text-brand-orange' : ''}`}>{icon}</div>
-      {!collapsed && <span className="tracking-wide uppercase whitespace-nowrap">{label}</span>}
+      {active && !disabled && (
+        <span className="absolute bottom-2 left-0 top-2 w-[3px] rounded-r-full bg-brand-orange" aria-hidden="true" />
+      )}
+      <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg transition-all ${
+        active && !disabled ? 'text-brand-orange' : ''
+      }`}>
+        {icon}
+      </span>
+      {!collapsed && (
+        <span className="min-w-0 truncate whitespace-nowrap uppercase tracking-[0.08em]">
+          {label}
+        </span>
+      )}
     </button>
   );
 }
@@ -4223,10 +4306,203 @@ function KPICard({ label, value, trend, icon, color }: { label: string, value: s
   );
 }
 
+
+function MultiSelectFilter({
+  label,
+  options = [],
+  values = [],
+  onChange,
+  allLabel,
+  searchable = true,
+}: {
+  label: string;
+  options: Array<string | number>;
+  values: string[];
+  onChange: (next: string[]) => void;
+  allLabel?: string;
+  searchable?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  const normalizedOptions = useMemo(
+    () => Array.from(new Set(options.map((option) => String(option)))),
+    [options]
+  );
+
+  const visibleOptions = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return normalizedOptions;
+    return normalizedOptions.filter((option) => option.toLowerCase().includes(q));
+  }, [normalizedOptions, query]);
+
+  useEffect(() => {
+    if (!open) {
+      setQuery('');
+      return;
+    }
+
+    const handleOutside = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [open]);
+
+  const toggleValue = (value: string) => {
+    if (values.includes(value)) {
+      onChange(values.filter((item) => item !== value));
+    } else {
+      onChange([...values, value]);
+    }
+  };
+
+  const selectedSummary = (() => {
+    if (values.length === 0) return allLabel || `All ${label}`;
+    if (values.length === 1) return values[0];
+    return `${values[0]} +${values.length - 1}`;
+  })();
+
+  const allSelected = normalizedOptions.length > 0 && values.length === normalizedOptions.length;
+
+  return (
+    <div ref={rootRef} className="relative flex min-w-0 flex-col gap-1.5">
+      <label className="px-1 text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">
+        {label}
+      </label>
+
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        aria-expanded={open}
+        className={`flex h-[38px] w-full min-w-0 items-center justify-between gap-2 rounded-lg border bg-white px-3 text-left transition-all ${
+          open
+            ? 'border-brand-orange ring-4 ring-brand-orange/5'
+            : values.length > 0
+              ? 'border-slate-300 shadow-[0_1px_2px_rgba(15,23,42,0.03)]'
+              : 'border-slate-200 hover:border-slate-300'
+        }`}
+      >
+        <span className={`min-w-0 truncate text-[11px] font-bold ${values.length > 0 ? 'text-slate-800' : 'text-slate-500'}`}>
+          {selectedSummary}
+        </span>
+        <span className="flex shrink-0 items-center gap-1.5">
+          {values.length > 1 && (
+            <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-brand-orange/10 px-1.5 py-0.5 text-[8px] font-black text-brand-orange">
+              {values.length}
+            </span>
+          )}
+          <ChevronDown size={13} className={`text-slate-400 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
+        </span>
+      </button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: -6, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -6, scale: 0.98 }}
+            transition={{ duration: 0.14 }}
+            className="absolute left-0 right-0 top-[62px] z-[90] min-w-[240px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_18px_45px_rgba(15,23,42,0.16)]"
+          >
+            {(searchable || normalizedOptions.length > 7) && (
+              <div className="border-b border-slate-100 p-2.5">
+                <div className="relative">
+                  <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder={`Search ${label.toLowerCase()}...`}
+                    className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 pl-8 pr-2.5 text-[10px] font-semibold text-slate-700 outline-none transition-all placeholder:font-medium placeholder:text-slate-400 focus:border-brand-orange focus:bg-white focus:ring-3 focus:ring-brand-orange/5"
+                    autoFocus
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
+              <button
+                type="button"
+                onClick={() => onChange(allSelected ? [] : normalizedOptions)}
+                className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-500 transition-colors hover:text-slate-800"
+              >
+                {allSelected ? 'Clear all' : 'Select all'}
+              </button>
+              {values.length > 0 && (
+                <span className="text-[9px] font-bold text-slate-400">
+                  {values.length} selected
+                </span>
+              )}
+            </div>
+
+            <div className="max-h-56 overflow-y-auto p-1.5 custom-scrollbar">
+              {visibleOptions.length > 0 ? (
+                visibleOptions.map((option) => {
+                  const checked = values.includes(option);
+                  return (
+                    <label
+                      key={option}
+                      className={`flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-[10px] font-semibold transition-colors ${
+                        checked ? 'bg-orange-50 text-slate-800' : 'text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleValue(option)}
+                        className="h-3.5 w-3.5 rounded border-slate-300 accent-orange-500"
+                      />
+                      <span className="min-w-0 flex-1 truncate">{option}</span>
+                    </label>
+                  );
+                })
+              ) : (
+                <div className="px-3 py-6 text-center text-[10px] font-semibold text-slate-400">
+                  No matching options
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between border-t border-slate-100 bg-slate-50/70 px-3 py-2">
+              <button
+                type="button"
+                onClick={() => onChange([])}
+                disabled={values.length === 0}
+                className="text-[9px] font-black uppercase tracking-[0.1em] text-slate-400 transition-colors hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Clear
+              </button>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="rounded-lg bg-slate-900 px-3 py-1.5 text-[9px] font-black uppercase tracking-[0.1em] text-white transition-colors hover:bg-slate-800"
+              >
+                Done
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 function FilterInput({ label, value, onChange, type = 'text', options = [], placeholder }: any) {
   return (
     <div className="flex flex-col gap-1.5 overflow-hidden">
-      <label className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] px-1 italic">{label}</label>
+      <label className="px-1 text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">{label}</label>
       {type === 'select' ? (
         <div className="relative group">
           <select 
