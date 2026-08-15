@@ -26,8 +26,8 @@ const {
   JWT_SECRET,
   ADMIN_USERNAME,
   ADMIN_PASSWORD_HASH,
-  OPENAI_API_KEY,
-  OPENAI_MODEL = 'gpt-5.6'
+  GEMINI_API_KEY,
+  GEMINI_MODEL = 'gemini-3.6-flash'
 } = process.env;
 
 if (!JWT_SECRET || !ADMIN_USERNAME || !ADMIN_PASSWORD_HASH) {
@@ -38,10 +38,10 @@ if (!JWT_SECRET || !ADMIN_USERNAME || !ADMIN_PASSWORD_HASH) {
   );
 }
 
-if (!OPENAI_API_KEY) {
+if (!GEMINI_API_KEY) {
   console.warn(
-    'INFO: OPENAI_API_KEY is not configured. The application will work normally, ' +
-    'but the admin-only AI Insights page will remain unavailable until a key is added.'
+    'INFO: GEMINI_API_KEY is not configured. The application will work normally, ' +
+    'but the admin-only AI Insights page will remain unavailable until a Gemini API key is added.'
   );
 }
 
@@ -159,21 +159,13 @@ const topCounts = (rows, key, limit = 10) => {
     .slice(0, limit);
 };
 
-const getResponseText = (responseJson) => {
-  if (typeof responseJson?.output_text === 'string') {
-    return responseJson.output_text;
-  }
-
-  const parts = [];
-  for (const item of responseJson?.output || []) {
-    if (item?.type !== 'message') continue;
-    for (const content of item?.content || []) {
-      if (content?.type === 'output_text' && typeof content.text === 'string') {
-        parts.push(content.text);
-      }
-    }
-  }
-  return parts.join('\n').trim();
+const getGeminiResponseText = (responseJson) => {
+  const parts = responseJson?.candidates?.[0]?.content?.parts || [];
+  return parts
+    .map((part) => (typeof part?.text === 'string' ? part.text : ''))
+    .filter(Boolean)
+    .join('\n')
+    .trim();
 };
 
 const parseAiJson = (text) => {
@@ -341,9 +333,9 @@ app.post('/api/ai-insights', authenticateAdmin, async (req, res) => {
     return res.status(400).json({ error: 'Please keep the question under 1,200 characters.' });
   }
 
-  if (!OPENAI_API_KEY) {
+  if (!GEMINI_API_KEY) {
     return res.status(503).json({
-      error: 'AI Insights is not configured on the server. Add OPENAI_API_KEY to the server .env file and restart the backend.'
+      error: 'AI Insights is not configured on the server. Add GEMINI_API_KEY to the server .env file and restart the backend.'
     });
   }
 
@@ -510,41 +502,45 @@ Return ONLY valid JSON with this exact shape:
 Use at most four highlights.
 `;
 
-    const openAiResponse = await fetch('https://api.openai.com/v1/responses', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        max_output_tokens: 900,
-        input: [
-          {
-            role: 'system',
-            content: [{ type: 'input_text', text: systemInstruction }],
+    const geminiResponse = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent`,
+      {
+        method: 'POST',
+        headers: {
+          'x-goog-api-key': GEMINI_API_KEY,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          systemInstruction: {
+            parts: [{ text: systemInstruction }],
           },
-          {
-            role: 'user',
-            content: [{
-              type: 'input_text',
-              text: `Admin question:\n${question}\n\nCurrent IPQC snapshot:\n${JSON.stringify(snapshot)}`
-            }],
+          contents: [
+            {
+              role: 'user',
+              parts: [{
+                text: `Admin question:\n${question}\n\nCurrent IPQC snapshot:\n${JSON.stringify(snapshot)}`
+              }],
+            },
+          ],
+          generationConfig: {
+            temperature: 0.2,
+            maxOutputTokens: 900,
+            responseMimeType: 'application/json',
           },
-        ],
-      }),
-    });
+        }),
+      }
+    );
 
-    const openAiJson = await openAiResponse.json();
+    const geminiJson = await geminiResponse.json();
 
-    if (!openAiResponse.ok) {
-      console.error('OpenAI API error:', openAiJson);
+    if (!geminiResponse.ok) {
+      console.error('Gemini API error:', geminiJson);
       return res.status(502).json({
-        error: openAiJson?.error?.message || 'The AI service could not process the request.'
+        error: geminiJson?.error?.message || 'The Gemini AI service could not process the request.'
       });
     }
 
-    const modelText = getResponseText(openAiJson);
+    const modelText = getGeminiResponseText(geminiJson);
     const parsed = parseAiJson(modelText);
 
     if (!parsed || typeof parsed.answer !== 'string') {
