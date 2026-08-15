@@ -218,7 +218,7 @@ app.get('/api/records', (req, res) => {
       id, no, DATE_FORMAT(audit_date, '%Y-%m-%d') as auditDate, ww, shift, 
       auditor_name as auditors, pic_finding as personOnJob, department, 
       platform, area_station as areaStation, group_finding as groupFinding, 
-      category, finding_details as detailsFindings, picture, remark, 
+      category, finding_details as detailsFindings, picture, remark, status,
       icar_status as icarStatus, icar_num as icarNum, mqe_engineer as mqeEngineer 
     FROM audit_records 
     ORDER BY id ASC
@@ -234,7 +234,7 @@ app.post('/api/records', upload.single('picture'), (req, res) => {
   const {
     no, auditDate, ww, shift, auditors, personOnJob, department,
     platform, areaStation, groupFinding, category, detailsFindings,
-    remark, icarNum, icarStatus, mqeEngineer
+    remark, status, icarNum, icarStatus, mqeEngineer
   } = req.body;
 
   const picture = req.file ? `/uploads/${req.file.filename}` : (req.body.picture || null);
@@ -244,14 +244,14 @@ app.post('/api/records', upload.single('picture'), (req, res) => {
     INSERT INTO audit_records (
       no, audit_date, ww, shift, auditor_name, pic_finding, department,
       platform, area_station, group_finding, category, finding_details,
-      picture, remark, icar_status, icar_num, mqe_engineer
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      picture, remark, status, icar_status, icar_num, mqe_engineer
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
   const values = [
     rowNo, auditDate, ww, shift, auditors, personOnJob, department,
     platform, areaStation, groupFinding, category, detailsFindings,
-    picture, remark, icarStatus || 'Locked', icarNum || 'N/A', mqeEngineer
+    picture, remark, status || 'Open', icarStatus || 'Locked', icarNum || 'N/A', mqeEngineer
   ];
 
   db.query(sql, values, (err, result) => {
@@ -265,7 +265,7 @@ app.post('/api/records', upload.single('picture'), (req, res) => {
       no: rowNo || result.insertId,
       auditDate, ww, shift, auditors, personOnJob, department,
       platform, areaStation, groupFinding, category, detailsFindings,
-      picture, remark, icarStatus: icarStatus || 'Locked', icarNum: icarNum || 'N/A', mqeEngineer
+      picture, remark, status: status || 'Open', icarStatus: icarStatus || 'Locked', icarNum: icarNum || 'N/A', mqeEngineer
     };
     res.status(201).json(newRecord);
   });
@@ -277,7 +277,7 @@ app.put('/api/records/:id', upload.single('picture'), (req, res) => {
   const {
     no, auditDate, ww, shift, auditors, personOnJob, department,
     platform, areaStation, groupFinding, category, detailsFindings,
-    remark, icarNum, icarStatus, mqeEngineer
+    remark, status, icarNum, icarStatus, mqeEngineer
   } = req.body;
 
   const picture = req.file ? `/uploads/${req.file.filename}` : req.body.picture;
@@ -286,14 +286,14 @@ app.put('/api/records/:id', upload.single('picture'), (req, res) => {
     UPDATE audit_records SET 
       no = ?, audit_date = ?, ww = ?, shift = ?, auditor_name = ?, pic_finding = ?, department = ?,
       platform = ?, area_station = ?, group_finding = ?, category = ?, finding_details = ?,
-      picture = COALESCE(?, picture), remark = ?, icar_status = ?, icar_num = ?, mqe_engineer = ?
+      picture = COALESCE(?, picture), remark = ?, status = ?, icar_status = ?, icar_num = ?, mqe_engineer = ?
     WHERE id = ?
   `;
 
   const values = [
     no, auditDate, ww, shift, auditors, personOnJob, department,
     platform, areaStation, groupFinding, category, detailsFindings,
-    picture, remark, icarStatus || 'Locked', icarNum || 'N/A', mqeEngineer, id
+    picture, remark, status || 'Open', icarStatus || 'Locked', icarNum || 'N/A', mqeEngineer, id
   ];
 
   db.query(sql, values, (err) => {
@@ -305,7 +305,7 @@ app.put('/api/records/:id', upload.single('picture'), (req, res) => {
     const updatedRecord = {
       id, no, auditDate, ww, shift, auditors, personOnJob, department,
       platform, areaStation, groupFinding, category, detailsFindings,
-      picture, remark, icarStatus: icarStatus || 'Locked', icarNum: icarNum || 'N/A', mqeEngineer
+      picture, remark, status: status || 'Open', icarStatus: icarStatus || 'Locked', icarNum: icarNum || 'N/A', mqeEngineer
     };
     res.status(200).json(updatedRecord);
   });

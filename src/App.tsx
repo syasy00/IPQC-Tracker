@@ -372,8 +372,13 @@ export default function App() {
       mqes: Object.entries(mqes).map(([name, value]) => ({ name, value })),
       auditors: Object.entries(auditors).map(([name, value]) => ({ name, value })),
       weeklyTrends: Object.entries(weeklyTrends)
-        .sort((a, b) => a[0].localeCompare(b[0]))
-        .map(([name, value]) => ({ name, value }))
+        .map(([name, value]) => ({
+          name,
+          week: Number(name.replace('WW', '')),
+          value
+        }))
+        .sort((a, b) => a.week - b.week)
+        .map(({ name, value }) => ({ name, value }))
     };
   }, [records]);
 
