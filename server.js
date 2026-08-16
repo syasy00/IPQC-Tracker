@@ -7,10 +7,13 @@ import path from 'path';
 import fs from 'fs';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
+import nodemailer from 'nodemailer';
 
 dotenv.config();
 
 const app = express();
+app.set('trust proxy', 1);
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
@@ -20,8 +23,19 @@ const {
   JWT_SECRET,
   ADMIN_USERNAME,
   ADMIN_PASSWORD_HASH,
+  ADMIN_EMAIL,
   GEMINI_API_KEY,
-  GEMINI_MODEL = 'gemini-3.6-flash'
+  GEMINI_MODEL = 'gemini-3.6-flash',
+  APP_BASE_URL = '',
+  SMTP_HOST,
+  SMTP_PORT = '587',
+  SMTP_SECURE = 'false',
+  SMTP_USER,
+  SMTP_PASS,
+  SMTP_FROM_NAME = 'IPQC Tracker',
+  SMTP_FROM_EMAIL,
+  INVITE_EXPIRY_HOURS = '48',
+  RESET_EXPIRY_MINUTES = '60'
 } = process.env;
 
 if (!JWT_SECRET) {
@@ -32,6 +46,31 @@ if (!GEMINI_API_KEY) {
   console.warn(
     'INFO: GEMINI_API_KEY is not configured. The application will work normally, ' +
     'but the admin-only AI Insights page will remain unavailable until a Gemini API key is added.'
+  );
+}
+
+const isProduction = process.env.NODE_ENV === 'production';
+const smtpPort = Number(SMTP_PORT) || 587;
+const smtpSecure = String(SMTP_SECURE).toLowerCase() === 'true' || smtpPort === 465;
+const smtpFromEmail = String(SMTP_FROM_EMAIL || SMTP_USER || '').trim();
+const emailConfigured = Boolean(SMTP_HOST && smtpFromEmail);
+
+const mailTransporter = emailConfigured
+  ? nodemailer.createTransport({
+      host: SMTP_HOST,
+      port: smtpPort,
+      secure: smtpSecure,
+      ...(SMTP_USER
+        ? { auth: { user: SMTP_USER, pass: SMTP_PASS || '' } }
+        : {}),
+    })
+  : null;
+
+if (!emailConfigured) {
+  console.warn(
+    isProduction
+      ? 'WARNING: SMTP email is not configured. User invitations and password-reset emails will be unavailable.'
+      : 'INFO: SMTP email is not configured. Development invite/reset links will be printed to the server console.'
   );
 }
 
@@ -66,66 +105,142 @@ const queryDb = (sql, values = []) =>
     });
   });
 
-const toPublicUser = (row) => ({
-  id: Number(row.id),
-  username: String(row.username),
-  fullName: String(row.full_name || row.username),
-  role: row.role === 'admin' ? 'admin' : 'user',
-  jobTitle: row.job_title || '',
-  department: row.department || '',
-  isActive: Boolean(row.is_active),
-  lastLoginAt: row.last_login_at || null,
-  createdAt: row.created_at || null,
-  updatedAt: row.updated_at || null,
-});
+const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
+const isValidUsername = (value) => /^[A-Za-z0-9._-]{3,100}$/.test(String(value || '').trim());
+
+const toPublicUser = (row) => {
+  const hasPassword = row?.has_password !== undefined
+    ? Boolean(row.has_password)
+    : Boolean(row?.password_hash);
+  const isActive = Boolean(row?.is_active);
+  const accountStatus = !isActive ? 'inactive' : (hasPassword ? 'active' : 'pending');
+
+  return {
+    id: Number(row.id),
+    username: String(row.username),
+    email: row.email || '',
+    fullName: String(row.full_name || row.username),
+    role: row.role === 'admin' ? 'admin' : 'user',
+    jobTitle: row.job_title || '',
+    department: row.department || '',
+    isActive,
+    hasPassword,
+    accountStatus,
+    lastLoginAt: row.last_login_at || null,
+    invitedAt: row.invited_at || null,
+    activatedAt: row.activated_at || null,
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null,
+  };
+};
+
+const ensureUsersColumn = async (columnName, ddl) => {
+  const rows = await queryDb('SHOW COLUMNS FROM users LIKE ?', [columnName]);
+  if (rows.length === 0) {
+    await queryDb(`ALTER TABLE users ADD COLUMN ${ddl}`);
+    console.log(`Added users.${columnName}`);
+  }
+};
 
 const ensureUsersTable = async () => {
   await queryDb(`
     CREATE TABLE IF NOT EXISTS users (
       id INT NOT NULL AUTO_INCREMENT,
       username VARCHAR(100) NOT NULL,
-      password_hash VARCHAR(255) NOT NULL,
+      email VARCHAR(190) NULL,
+      password_hash VARCHAR(255) NULL,
       full_name VARCHAR(150) NOT NULL,
       role ENUM('user', 'admin') NOT NULL DEFAULT 'user',
       job_title VARCHAR(100) NULL,
       department VARCHAR(100) NULL,
       is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      session_version INT NOT NULL DEFAULT 0,
+      invited_at DATETIME NULL,
+      activated_at DATETIME NULL,
       last_login_at DATETIME NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       PRIMARY KEY (id),
       UNIQUE KEY uq_users_username (username),
+      UNIQUE KEY uq_users_email (email),
       INDEX idx_users_role (role),
       INDEX idx_users_active (is_active)
     )
   `);
 
-  // Migration bridge: seed the existing env-based admin into the users table
-  // once, if those legacy env values still exist. After the account exists in
-  // MySQL, ADMIN_USERNAME and ADMIN_PASSWORD_HASH can be removed from .env.
+  // Non-destructive migration from the previous users-table version.
+  await ensureUsersColumn('email', 'email VARCHAR(190) NULL');
+  await ensureUsersColumn('session_version', 'session_version INT NOT NULL DEFAULT 0');
+  await ensureUsersColumn('invited_at', 'invited_at DATETIME NULL');
+  await ensureUsersColumn('activated_at', 'activated_at DATETIME NULL');
+
+  // Invitations need a NULL password until the employee chooses their own.
+  await queryDb('ALTER TABLE users MODIFY COLUMN password_hash VARCHAR(255) NULL');
+
+  const indexes = await queryDb('SHOW INDEX FROM users');
+  if (!indexes.some((row) => row.Key_name === 'uq_users_email')) {
+    await queryDb('ALTER TABLE users ADD UNIQUE KEY uq_users_email (email)');
+  }
+
+  // Migration bridge: seed the existing env-based admin into MySQL once.
   if (ADMIN_USERNAME && ADMIN_PASSWORD_HASH) {
     const existing = await queryDb(
-      'SELECT id FROM users WHERE username = ? LIMIT 1',
+      'SELECT id, email FROM users WHERE username = ? LIMIT 1',
       [ADMIN_USERNAME]
     );
 
     if (existing.length === 0) {
       await queryDb(
         `INSERT INTO users
-          (username, password_hash, full_name, role, job_title, department, is_active)
-         VALUES (?, ?, ?, 'admin', ?, ?, TRUE)`,
-        [ADMIN_USERNAME, ADMIN_PASSWORD_HASH, 'System Administrator', 'Quality Administrator', 'Quality Team']
+          (username, email, password_hash, full_name, role, job_title, department,
+           is_active, session_version, activated_at)
+         VALUES (?, ?, ?, ?, 'admin', ?, ?, TRUE, 0, NOW())`,
+        [
+          ADMIN_USERNAME,
+          ADMIN_EMAIL && isValidEmail(ADMIN_EMAIL) ? ADMIN_EMAIL.trim().toLowerCase() : null,
+          ADMIN_PASSWORD_HASH,
+          'System Administrator',
+          'Quality Administrator',
+          'Quality Team'
+        ]
       );
       console.log('Bootstrap administrator migrated into the users table.');
+    } else if (!existing[0].email && ADMIN_EMAIL && isValidEmail(ADMIN_EMAIL)) {
+      try {
+        await queryDb('UPDATE users SET email = ? WHERE id = ?', [ADMIN_EMAIL.trim().toLowerCase(), existing[0].id]);
+      } catch (err) {
+        console.warn('Could not attach ADMIN_EMAIL to the existing bootstrap administrator:', err?.message || err);
+      }
     }
   }
 };
 
-const usersReady = ensureUsersTable().catch((err) => {
-  console.error('Failed to initialize users table:', err);
+const ensureAccountTokensTable = async () => {
+  await queryDb(`
+    CREATE TABLE IF NOT EXISTS account_tokens (
+      id BIGINT NOT NULL AUTO_INCREMENT,
+      user_id INT NOT NULL,
+      purpose ENUM('invite', 'password_reset') NOT NULL,
+      token_hash CHAR(64) NOT NULL,
+      expires_at DATETIME NOT NULL,
+      used_at DATETIME NULL,
+      created_by INT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_account_tokens_hash (token_hash),
+      INDEX idx_account_tokens_user (user_id, purpose),
+      INDEX idx_account_tokens_expiry (expires_at)
+    )
+  `);
+};
+
+const usersReady = (async () => {
+  await ensureUsersTable();
+  await ensureAccountTokensTable();
+})().catch((err) => {
+  console.error('Failed to initialize authentication tables:', err);
   throw err;
 });
-
 
 // ==========================================
 // Traceability / Audit Trail
@@ -141,8 +256,6 @@ const ensureAuditRecordColumn = async (columnName, ddl) => {
 };
 
 const ensureAuditTrailSchema = async () => {
-  // audit_records exists in the current IPQC application. Do not create or wipe
-  // it here: only extend it with non-destructive traceability fields.
   const tableRows = await queryDb(`SHOW TABLES LIKE 'audit_records'`);
   if (tableRows.length > 0) {
     await ensureAuditRecordColumn('created_by', 'created_by INT NULL');
@@ -192,10 +305,11 @@ const logAuditEvent = async (req, {
   entityId = null,
   description,
   metadata = null,
+  actorOverride = null,
 }) => {
   try {
     await auditTrailReady;
-    const actor = req.user || {};
+    const actor = actorOverride || req.user || {};
     await queryDb(
       `INSERT INTO audit_log
         (actor_user_id, actor_username, actor_name, actor_role,
@@ -215,7 +329,6 @@ const logAuditEvent = async (req, {
       ]
     );
   } catch (err) {
-    // Business operation remains successful even if logging has a temporary issue.
     console.error('Audit log write failed:', err);
   }
 };
@@ -246,14 +359,172 @@ const selectRecordById = async (id) => {
   return rows[0] || null;
 };
 
+// ==========================================
+// Invitation / Password Reset Email Helpers
+// ==========================================
+const escapeHtml = (value) => String(value ?? '')
+  .replaceAll('&', '&amp;')
+  .replaceAll('<', '&lt;')
+  .replaceAll('>', '&gt;')
+  .replaceAll('"', '&quot;')
+  .replaceAll("'", '&#039;');
+
+const getAppBaseUrl = (req) => {
+  const configured = String(APP_BASE_URL || '').trim().replace(/\/+$/, '');
+  if (configured) return configured;
+  const origin = String(req.headers.origin || '').trim().replace(/\/+$/, '');
+  if (origin) return origin;
+  return `${req.protocol}://${req.get('host')}`;
+};
+
+const buildOneTimeUrl = (req, key, rawToken) =>
+  `${getAppBaseUrl(req)}/?${key}=${encodeURIComponent(rawToken)}`;
+
+const tokenHash = (rawToken) =>
+  crypto.createHash('sha256').update(String(rawToken)).digest('hex');
+
+const createOneTimeToken = async ({ userId, purpose, createdBy = null }) => {
+  await queryDb(
+    `UPDATE account_tokens SET used_at = NOW()
+     WHERE user_id = ? AND purpose = ? AND used_at IS NULL`,
+    [userId, purpose]
+  );
+
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  const ttlMs = purpose === 'invite'
+    ? Math.max(1, Number(INVITE_EXPIRY_HOURS) || 48) * 60 * 60 * 1000
+    : Math.max(5, Number(RESET_EXPIRY_MINUTES) || 60) * 60 * 1000;
+  const expiresAt = new Date(Date.now() + ttlMs);
+
+  await queryDb(
+    `INSERT INTO account_tokens
+      (user_id, purpose, token_hash, expires_at, created_by)
+     VALUES (?, ?, ?, ?, ?)`,
+    [userId, purpose, tokenHash(rawToken), expiresAt, createdBy]
+  );
+
+  return { rawToken, expiresAt };
+};
+
+const findValidOneTimeToken = async (rawToken, purpose) => {
+  if (!rawToken || String(rawToken).length < 20) return null;
+  const rows = await queryDb(`
+    SELECT
+      t.id AS token_id, t.user_id, t.purpose, t.expires_at,
+      u.id, u.username, u.email, u.password_hash, u.full_name, u.role,
+      u.job_title, u.department, u.is_active, u.session_version,
+      u.invited_at, u.activated_at, u.last_login_at, u.created_at, u.updated_at
+    FROM account_tokens t
+    INNER JOIN users u ON u.id = t.user_id
+    WHERE t.token_hash = ?
+      AND t.purpose = ?
+      AND t.used_at IS NULL
+      AND t.expires_at > NOW()
+    LIMIT 1
+  `, [tokenHash(rawToken), purpose]);
+  return rows[0] || null;
+};
+
+const consumeToken = async (tokenId, userId, purpose) => {
+  await queryDb('UPDATE account_tokens SET used_at = NOW() WHERE id = ?', [tokenId]);
+  await queryDb(
+    `UPDATE account_tokens SET used_at = NOW()
+     WHERE user_id = ? AND purpose = ? AND used_at IS NULL`,
+    [userId, purpose]
+  );
+};
+
+const sendSystemEmail = async ({ to, subject, text, html, previewUrl }) => {
+  if (!mailTransporter) {
+    if (isProduction) {
+      const err = new Error('Email delivery is not configured on the server.');
+      err.code = 'EMAIL_NOT_CONFIGURED';
+      throw err;
+    }
+    console.log(`\n[IPQC EMAIL PREVIEW]\nTO: ${to}\nSUBJECT: ${subject}\nLINK: ${previewUrl}\n`);
+    return { sent: false, mode: 'console' };
+  }
+
+  await mailTransporter.sendMail({
+    from: `"${String(SMTP_FROM_NAME).replaceAll('"', '')}" <${smtpFromEmail}>`,
+    to,
+    subject,
+    text,
+    html,
+  });
+  return { sent: true, mode: 'smtp' };
+};
+
+const sendInvitationEmail = async (req, user, rawToken) => {
+  const inviteUrl = buildOneTimeUrl(req, 'invite', rawToken);
+  const hours = Math.max(1, Number(INVITE_EXPIRY_HOURS) || 48);
+  const name = escapeHtml(user.fullName || user.username);
+  const safeUrl = escapeHtml(inviteUrl);
+
+  const delivery = await sendSystemEmail({
+    to: user.email,
+    subject: 'Set up your IPQC Tracker account',
+    previewUrl: inviteUrl,
+    text: `Hello ${user.fullName},\n\nYou have been invited to IPQC Tracker. Set your password using this link:\n${inviteUrl}\n\nThis link expires in ${hours} hours.`,
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:620px;margin:auto;color:#0f172a;line-height:1.6">
+        <h2 style="margin-bottom:8px">IPQC Tracker account invitation</h2>
+        <p>Hello ${name},</p>
+        <p>An administrator has created your IPQC Tracker access. Use the button below to create your own password.</p>
+        <p style="margin:28px 0"><a href="${safeUrl}" style="display:inline-block;background:#F15D22;color:#fff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:700">Set up account</a></p>
+        <p style="font-size:13px;color:#64748b">This secure link expires in ${hours} hours. If you were not expecting this invitation, contact your IPQC administrator.</p>
+      </div>`,
+  });
+
+  return { ...delivery, previewUrl: delivery.mode === 'console' ? inviteUrl : undefined };
+};
+
+const sendPasswordResetEmail = async (req, user, rawToken) => {
+  const resetUrl = buildOneTimeUrl(req, 'reset', rawToken);
+  const minutes = Math.max(5, Number(RESET_EXPIRY_MINUTES) || 60);
+  const name = escapeHtml(user.fullName || user.username);
+  const safeUrl = escapeHtml(resetUrl);
+
+  const delivery = await sendSystemEmail({
+    to: user.email,
+    subject: 'Reset your IPQC Tracker password',
+    previewUrl: resetUrl,
+    text: `Hello ${user.fullName},\n\nA password reset was requested for your IPQC Tracker account. Set a new password using this link:\n${resetUrl}\n\nThis link expires in ${minutes} minutes.`,
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:620px;margin:auto;color:#0f172a;line-height:1.6">
+        <h2 style="margin-bottom:8px">Reset your IPQC Tracker password</h2>
+        <p>Hello ${name},</p>
+        <p>Use the button below to set a new password for your account.</p>
+        <p style="margin:28px 0"><a href="${safeUrl}" style="display:inline-block;background:#0f172a;color:#fff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:700">Reset password</a></p>
+        <p style="font-size:13px;color:#64748b">This secure link expires in ${minutes} minutes. If you did not request a reset, you can ignore this email.</p>
+      </div>`,
+  });
+
+  return { ...delivery, previewUrl: delivery.mode === 'console' ? resetUrl : undefined };
+};
+
+// Small in-memory rate limiter for authentication endpoints. In a horizontally
+// scaled deployment, move this to Redis or another shared store.
+const authRateBuckets = new Map();
+const allowAuthAttempt = (key, maxAttempts, windowMs) => {
+  const now = Date.now();
+  const current = authRateBuckets.get(key);
+  if (!current || current.resetAt <= now) {
+    authRateBuckets.set(key, { count: 1, resetAt: now + windowMs });
+    return true;
+  }
+  if (current.count >= maxAttempts) return false;
+  current.count += 1;
+  return true;
+};
+
 const extractBearerToken = (req) => {
   const authHeader = req.headers.authorization || '';
   return authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
 };
 
-// Authenticates either a normal user or an administrator. We re-check the
-// database on every protected request so disabling an account or changing its
-// role takes effect immediately instead of waiting for a JWT to expire.
+// Authenticates either a normal user or an administrator. The account is
+// re-checked on every protected request so deactivation takes effect immediately.
 const authenticateUser = async (req, res, next) => {
   const token = extractBearerToken(req);
   if (!token) {
@@ -272,19 +543,25 @@ const authenticateUser = async (req, res, next) => {
     }
 
     const rows = await queryDb(
-      `SELECT id, username, full_name, role, job_title, department, is_active,
-              last_login_at, created_at, updated_at
+      `SELECT id, username, email, full_name, role, job_title, department, is_active,
+              session_version, invited_at, activated_at, last_login_at, created_at, updated_at,
+              (password_hash IS NOT NULL) AS has_password
        FROM users
        WHERE id = ?
        LIMIT 1`,
       [userId]
     );
 
-    if (rows.length === 0 || !rows[0].is_active) {
-      return res.status(401).json({ error: 'Account is inactive or no longer exists' });
+    const user = rows[0];
+    if (!user || !user.is_active || !user.has_password) {
+      return res.status(401).json({ error: 'Account is inactive or no longer available' });
     }
 
-    req.user = toPublicUser(rows[0]);
+    if (Number(decoded.sessionVersion || 0) !== Number(user.session_version || 0)) {
+      return res.status(401).json({ error: 'Your session is no longer valid. Please sign in again.' });
+    }
+
+    req.user = toPublicUser(user);
     next();
   } catch (err) {
     if (err?.name === 'JsonWebTokenError' || err?.name === 'TokenExpiredError') {
@@ -302,52 +579,67 @@ const requireAdmin = (req, res, next) => {
   next();
 };
 
-// Shared login for both system roles: user and admin.
+// Shared login: users may enter either company email or username.
 app.post('/api/login', async (req, res) => {
-  const username = String(req.body?.username || '').trim();
+  const identifier = String(req.body?.identifier || req.body?.username || '').trim();
   const password = String(req.body?.password || '');
 
-  if (!username || !password) {
-    return res.status(400).json({ error: 'Username and password are required' });
+  if (!identifier || !password) {
+    return res.status(400).json({ error: 'Email/username and password are required' });
   }
   if (!JWT_SECRET) {
     return res.status(500).json({ error: 'Server authentication is not configured. Contact the administrator.' });
   }
 
+  const rateKey = `login:${getRequestIp(req)}:${identifier.toLowerCase()}`;
+  if (!allowAuthAttempt(rateKey, 10, 15 * 60 * 1000)) {
+    return res.status(429).json({ error: 'Too many sign-in attempts. Please wait a few minutes and try again.' });
+  }
+
   try {
     await usersReady;
     const rows = await queryDb(
-      `SELECT id, username, password_hash, full_name, role, job_title, department,
-              is_active, last_login_at, created_at, updated_at
+      `SELECT id, username, email, password_hash, full_name, role, job_title, department,
+              is_active, session_version, invited_at, activated_at, last_login_at, created_at, updated_at
        FROM users
-       WHERE username = ?
+       WHERE username = ? OR email = ?
        LIMIT 1`,
-      [username]
+      [identifier, identifier.toLowerCase()]
     );
 
     const user = rows[0];
-    // Use the same error for unknown/inactive/bad-password accounts to avoid
-    // revealing which usernames exist.
-    if (!user || !user.is_active) {
-      return res.status(401).json({ error: 'Invalid username or password' });
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid email/username or password' });
+    }
+    if (!user.is_active) {
+      return res.status(403).json({ error: 'This account is inactive. Contact your IPQC administrator.' });
+    }
+    if (!user.password_hash) {
+      return res.status(403).json({ error: 'Account setup is incomplete. Use your invitation email to create your password.' });
     }
 
     const passwordMatches = await bcrypt.compare(password, user.password_hash);
     if (!passwordMatches) {
-      return res.status(401).json({ error: 'Invalid username or password' });
+      return res.status(401).json({ error: 'Invalid email/username or password' });
     }
 
     await queryDb('UPDATE users SET last_login_at = NOW() WHERE id = ?', [user.id]);
 
     const token = jwt.sign(
-      { userId: Number(user.id), username: user.username, role: user.role },
+      {
+        userId: Number(user.id),
+        username: user.username,
+        role: user.role,
+        sessionVersion: Number(user.session_version || 0),
+      },
       JWT_SECRET,
       { expiresIn: '8h' }
     );
 
     const refreshed = await queryDb(
-      `SELECT id, username, full_name, role, job_title, department, is_active,
-              last_login_at, created_at, updated_at
+      `SELECT id, username, email, full_name, role, job_title, department, is_active,
+              invited_at, activated_at, last_login_at, created_at, updated_at,
+              (password_hash IS NOT NULL) AS has_password
        FROM users WHERE id = ? LIMIT 1`,
       [user.id]
     );
@@ -368,14 +660,214 @@ app.get('/api/verify', authenticateUser, (req, res) => {
 });
 
 // ==========================================
+// Public account setup / password recovery
+// ==========================================
+app.get('/api/auth/invite/validate', async (req, res) => {
+  try {
+    await usersReady;
+    const row = await findValidOneTimeToken(String(req.query.token || ''), 'invite');
+    if (!row || !row.is_active || row.password_hash) {
+      return res.status(400).json({ error: 'This invitation link is invalid, expired or already used.' });
+    }
+    res.status(200).json({
+      valid: true,
+      account: {
+        fullName: row.full_name,
+        email: row.email,
+        username: row.username,
+        role: row.role === 'admin' ? 'admin' : 'user',
+      },
+      expiresAt: row.expires_at,
+    });
+  } catch (err) {
+    console.error('Validate invitation error:', err);
+    res.status(500).json({ error: 'Could not validate this invitation.' });
+  }
+});
+
+app.post('/api/auth/invite/accept', async (req, res) => {
+  const rawToken = String(req.body?.token || '');
+  const password = String(req.body?.password || '');
+
+  if (password.length < 10) {
+    return res.status(400).json({ error: 'Password must be at least 10 characters.' });
+  }
+
+  const rateKey = `invite-accept:${getRequestIp(req)}`;
+  if (!allowAuthAttempt(rateKey, 15, 15 * 60 * 1000)) {
+    return res.status(429).json({ error: 'Too many attempts. Please wait and try again.' });
+  }
+
+  try {
+    await usersReady;
+    const row = await findValidOneTimeToken(rawToken, 'invite');
+    if (!row || !row.is_active || row.password_hash) {
+      return res.status(400).json({ error: 'This invitation link is invalid, expired or already used.' });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    await queryDb(
+      `UPDATE users
+       SET password_hash = ?, activated_at = NOW(), session_version = session_version + 1
+       WHERE id = ?`,
+      [passwordHash, row.id]
+    );
+    await consumeToken(row.token_id, row.id, 'invite');
+
+    const activatedRows = await queryDb(
+      `SELECT id, username, email, full_name, role, job_title, department, is_active,
+              invited_at, activated_at, last_login_at, created_at, updated_at,
+              (password_hash IS NOT NULL) AS has_password
+       FROM users WHERE id = ? LIMIT 1`,
+      [row.id]
+    );
+    const activatedUser = toPublicUser(activatedRows[0]);
+
+    await logAuditEvent(req, {
+      action: 'USER_INVITE_ACCEPTED',
+      entityType: 'user',
+      entityId: activatedUser.id,
+      description: `${activatedUser.fullName} completed account setup`,
+      actorOverride: activatedUser,
+    });
+
+    res.status(200).json({ message: 'Account setup complete. You can now sign in.' });
+  } catch (err) {
+    console.error('Accept invitation error:', err);
+    res.status(500).json({ error: 'Could not complete account setup.' });
+  }
+});
+
+app.post('/api/password-reset/request', async (req, res) => {
+  const identifier = String(req.body?.identifier || '').trim();
+  if (!identifier) {
+    return res.status(400).json({ error: 'Enter your email or username.' });
+  }
+
+  const rateKey = `reset-request:${getRequestIp(req)}`;
+  if (!allowAuthAttempt(rateKey, 5, 15 * 60 * 1000)) {
+    return res.status(429).json({ error: 'Too many reset requests. Please wait a few minutes and try again.' });
+  }
+
+  const generic = 'If an active account with an email address matches, a password-reset link has been sent.';
+
+  try {
+    await usersReady;
+    const rows = await queryDb(
+      `SELECT id, username, email, full_name, role, job_title, department, is_active,
+              password_hash, session_version
+       FROM users
+       WHERE username = ? OR email = ?
+       LIMIT 1`,
+      [identifier, identifier.toLowerCase()]
+    );
+    const user = rows[0];
+
+    if (!user || !user.is_active || !user.password_hash || !user.email) {
+      return res.status(200).json({ message: generic });
+    }
+
+    const { rawToken } = await createOneTimeToken({
+      userId: user.id,
+      purpose: 'password_reset',
+      createdBy: null,
+    });
+
+    let delivery;
+    try {
+      delivery = await sendPasswordResetEmail(req, toPublicUser(user), rawToken);
+    } catch (emailErr) {
+      console.error('Password-reset email delivery failed:', emailErr);
+      if (emailErr?.code === 'EMAIL_NOT_CONFIGURED') {
+        return res.status(503).json({ error: 'Password recovery email is not configured. Contact your IPQC administrator.' });
+      }
+      return res.status(200).json({ message: generic });
+    }
+
+    res.status(200).json({
+      message: generic,
+      ...(delivery.previewUrl ? { previewUrl: delivery.previewUrl } : {}),
+    });
+  } catch (err) {
+    console.error('Password reset request error:', err);
+    res.status(200).json({ message: generic });
+  }
+});
+
+app.get('/api/password-reset/validate', async (req, res) => {
+  try {
+    await usersReady;
+    const row = await findValidOneTimeToken(String(req.query.token || ''), 'password_reset');
+    if (!row || !row.is_active || !row.password_hash) {
+      return res.status(400).json({ error: 'This password-reset link is invalid, expired or already used.' });
+    }
+    res.status(200).json({
+      valid: true,
+      account: { fullName: row.full_name, email: row.email, username: row.username },
+      expiresAt: row.expires_at,
+    });
+  } catch (err) {
+    console.error('Validate password-reset error:', err);
+    res.status(500).json({ error: 'Could not validate this password-reset link.' });
+  }
+});
+
+app.post('/api/password-reset/confirm', async (req, res) => {
+  const rawToken = String(req.body?.token || '');
+  const password = String(req.body?.password || '');
+  if (password.length < 10) {
+    return res.status(400).json({ error: 'Password must be at least 10 characters.' });
+  }
+
+  try {
+    await usersReady;
+    const row = await findValidOneTimeToken(rawToken, 'password_reset');
+    if (!row || !row.is_active || !row.password_hash) {
+      return res.status(400).json({ error: 'This password-reset link is invalid, expired or already used.' });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    await queryDb(
+      `UPDATE users
+       SET password_hash = ?, session_version = session_version + 1
+       WHERE id = ?`,
+      [passwordHash, row.id]
+    );
+    await consumeToken(row.token_id, row.id, 'password_reset');
+
+    const userRows = await queryDb(
+      `SELECT id, username, email, full_name, role, job_title, department, is_active,
+              invited_at, activated_at, last_login_at, created_at, updated_at,
+              (password_hash IS NOT NULL) AS has_password
+       FROM users WHERE id = ? LIMIT 1`,
+      [row.id]
+    );
+    const user = toPublicUser(userRows[0]);
+    await logAuditEvent(req, {
+      action: 'USER_PASSWORD_CHANGED',
+      entityType: 'user',
+      entityId: user.id,
+      description: `${user.fullName} reset their account password`,
+      actorOverride: user,
+    });
+
+    res.status(200).json({ message: 'Password updated. Existing sessions have been signed out.' });
+  } catch (err) {
+    console.error('Confirm password-reset error:', err);
+    res.status(500).json({ error: 'Could not reset this password.' });
+  }
+});
+
+// ==========================================
 // User Management (admin only)
 // ==========================================
 app.get('/api/users', authenticateUser, requireAdmin, async (req, res) => {
   try {
     await usersReady;
     const rows = await queryDb(`
-      SELECT id, username, full_name, role, job_title, department, is_active,
-             last_login_at, created_at, updated_at
+      SELECT id, username, email, full_name, role, job_title, department, is_active,
+             invited_at, activated_at, last_login_at, created_at, updated_at,
+             (password_hash IS NOT NULL) AS has_password
       FROM users
       ORDER BY is_active DESC, role DESC, full_name ASC, username ASC
     `);
@@ -386,59 +878,138 @@ app.get('/api/users', authenticateUser, requireAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/users', authenticateUser, requireAdmin, async (req, res) => {
-  const username = String(req.body?.username || '').trim();
+const createUniqueUsername = async (email, preferred = '') => {
+  const preferredValue = String(preferred || '').trim();
+  if (preferredValue) {
+    if (!isValidUsername(preferredValue)) {
+      const err = new Error('Username must be 3-100 characters using letters, numbers, dot, underscore or hyphen');
+      err.code = 'INVALID_USERNAME';
+      throw err;
+    }
+    const taken = await queryDb('SELECT id FROM users WHERE username = ? LIMIT 1', [preferredValue]);
+    if (taken.length > 0) {
+      const err = new Error('That username is already in use');
+      err.code = 'USERNAME_TAKEN';
+      throw err;
+    }
+    return preferredValue;
+  }
+
+  let base = String(email).split('@')[0].toLowerCase().replace(/[^a-z0-9._-]+/g, '.').replace(/^\.+|\.+$/g, '');
+  if (base.length < 3) base = `user.${base || 'ipqc'}`;
+  base = base.slice(0, 90);
+  let candidate = base;
+  let suffix = 1;
+  while (true) {
+    const rows = await queryDb('SELECT id FROM users WHERE username = ? LIMIT 1', [candidate]);
+    if (rows.length === 0) return candidate;
+    suffix += 1;
+    candidate = `${base.slice(0, 90 - String(suffix).length)}${suffix}`;
+  }
+};
+
+app.post('/api/users/invite', authenticateUser, requireAdmin, async (req, res) => {
   const fullName = String(req.body?.fullName || '').trim();
-  const password = String(req.body?.password || '');
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const preferredUsername = String(req.body?.username || '').trim();
   const role = req.body?.role === 'admin' ? 'admin' : 'user';
   const jobTitle = String(req.body?.jobTitle || '').trim() || null;
   const department = String(req.body?.department || '').trim() || null;
 
-  if (!username || !fullName || !password) {
-    return res.status(400).json({ error: 'Full name, username and password are required' });
+  if (!fullName || !email) {
+    return res.status(400).json({ error: 'Full name and company email are required' });
   }
-  if (!/^[A-Za-z0-9._-]{3,100}$/.test(username)) {
-    return res.status(400).json({ error: 'Username must be 3-100 characters using letters, numbers, dot, underscore or hyphen' });
+  if (!isValidEmail(email)) {
+    return res.status(400).json({ error: 'Enter a valid email address' });
   }
-  if (password.length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  if (isProduction && !emailConfigured) {
+    return res.status(503).json({ error: 'Email delivery is not configured. Configure SMTP before inviting users.' });
   }
 
   try {
-    const passwordHash = await bcrypt.hash(password, 12);
+    await usersReady;
+    const emailTaken = await queryDb('SELECT id FROM users WHERE email = ? LIMIT 1', [email]);
+    if (emailTaken.length > 0) {
+      return res.status(409).json({ error: 'An account already uses that email address' });
+    }
+
+    const username = await createUniqueUsername(email, preferredUsername);
     const result = await queryDb(
       `INSERT INTO users
-        (username, password_hash, full_name, role, job_title, department, is_active)
-       VALUES (?, ?, ?, ?, ?, ?, TRUE)`,
-      [username, passwordHash, fullName, role, jobTitle, department]
+        (username, email, password_hash, full_name, role, job_title, department,
+         is_active, session_version, invited_at, activated_at)
+       VALUES (?, ?, NULL, ?, ?, ?, ?, TRUE, 0, NOW(), NULL)`,
+      [username, email, fullName, role, jobTitle, department]
     );
 
     const rows = await queryDb(
-      `SELECT id, username, full_name, role, job_title, department, is_active,
-              last_login_at, created_at, updated_at
+      `SELECT id, username, email, full_name, role, job_title, department, is_active,
+              invited_at, activated_at, last_login_at, created_at, updated_at,
+              (password_hash IS NOT NULL) AS has_password
        FROM users WHERE id = ? LIMIT 1`,
       [result.insertId]
     );
     const createdUser = toPublicUser(rows[0]);
+
+    const { rawToken } = await createOneTimeToken({
+      userId: createdUser.id,
+      purpose: 'invite',
+      createdBy: req.user.id,
+    });
+
+    let delivery = { sent: false, mode: 'failed' };
+    try {
+      delivery = await sendInvitationEmail(req, createdUser, rawToken);
+    } catch (emailErr) {
+      console.error('Invitation email delivery failed:', emailErr);
+    }
+
     await logAuditEvent(req, {
-      action: 'USER_CREATED',
+      action: 'USER_INVITED',
       entityType: 'user',
       entityId: createdUser.id,
-      description: `Created user ${createdUser.fullName} (${createdUser.role})`,
-      metadata: { username: createdUser.username, role: createdUser.role, jobTitle: createdUser.jobTitle, department: createdUser.department },
+      description: `Invited ${createdUser.fullName} as ${createdUser.role}`,
+      metadata: {
+        email: createdUser.email,
+        username: createdUser.username,
+        role: createdUser.role,
+        jobTitle: createdUser.jobTitle,
+        department: createdUser.department,
+        deliveryMode: delivery.mode,
+      },
     });
-    res.status(201).json(createdUser);
+
+    res.status(201).json({
+      user: createdUser,
+      delivery: {
+        sent: Boolean(delivery.sent),
+        mode: delivery.mode,
+        ...(delivery.previewUrl ? { previewUrl: delivery.previewUrl } : {}),
+      },
+      message: delivery.sent
+        ? `Invitation sent to ${createdUser.email}`
+        : delivery.previewUrl
+          ? 'Development invitation created. Use the preview link below.'
+          : 'Account created as Pending, but the invitation email could not be delivered. Fix email delivery and resend the invitation.',
+    });
   } catch (err) {
-    if (err?.code === 'ER_DUP_ENTRY') {
-      return res.status(409).json({ error: 'That username is already in use' });
+    if (err?.code === 'ER_DUP_ENTRY' || err?.code === 'USERNAME_TAKEN') {
+      return res.status(409).json({ error: err.message || 'That username or email is already in use' });
     }
-    console.error('Create user error:', err);
-    res.status(500).json({ error: 'Failed to create user' });
+    if (err?.code === 'INVALID_USERNAME') {
+      return res.status(400).json({ error: err.message });
+    }
+    console.error('Invite user error:', err);
+    res.status(500).json({ error: 'Failed to create invitation' });
   }
 });
 
 const activeAdminCount = async () => {
-  const rows = await queryDb(`SELECT COUNT(*) AS total FROM users WHERE role = 'admin' AND is_active = TRUE`);
+  const rows = await queryDb(`
+    SELECT COUNT(*) AS total
+    FROM users
+    WHERE role = 'admin' AND is_active = TRUE AND password_hash IS NOT NULL
+  `);
   return Number(rows[0]?.total || 0);
 };
 
@@ -458,39 +1029,56 @@ app.put('/api/users/:id', authenticateUser, requireAdmin, async (req, res) => {
   if (!username || !fullName) {
     return res.status(400).json({ error: 'Full name and username are required' });
   }
-  if (!/^[A-Za-z0-9._-]{3,100}$/.test(username)) {
+  if (!isValidUsername(username)) {
     return res.status(400).json({ error: 'Username must be 3-100 characters using letters, numbers, dot, underscore or hyphen' });
   }
 
   try {
     const currentRows = await queryDb(
-      'SELECT id, username, full_name, role, job_title, department, is_active FROM users WHERE id = ? LIMIT 1',
+      `SELECT id, username, email, password_hash, full_name, role, job_title,
+              department, is_active, session_version
+       FROM users WHERE id = ? LIMIT 1`,
       [targetId]
     );
     if (currentRows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
     const target = currentRows[0];
+    const email = String(req.body?.email ?? target.email ?? '').trim().toLowerCase() || null;
+    if (email && !isValidEmail(email)) {
+      return res.status(400).json({ error: 'Enter a valid email address' });
+    }
 
     if (targetId === Number(req.user.id) && (!isActive || role !== 'admin')) {
       return res.status(400).json({ error: 'You cannot deactivate or remove administrator access from your own account' });
     }
 
-    const removesActiveAdmin = target.role === 'admin' && Boolean(target.is_active) && (role !== 'admin' || !isActive);
+    const removesActiveAdmin = target.role === 'admin' && Boolean(target.is_active) && Boolean(target.password_hash) && (role !== 'admin' || !isActive);
     if (removesActiveAdmin && await activeAdminCount() <= 1) {
       return res.status(400).json({ error: 'At least one active administrator account must remain' });
     }
 
     await queryDb(
       `UPDATE users
-       SET username = ?, full_name = ?, role = ?, job_title = ?, department = ?, is_active = ?
+       SET username = ?, email = ?, full_name = ?, role = ?, job_title = ?, department = ?, is_active = ?
        WHERE id = ?`,
-      [username, fullName, role, jobTitle, department, isActive ? 1 : 0, targetId]
+      [username, email, fullName, role, jobTitle, department, isActive ? 1 : 0, targetId]
     );
 
+    // Revoke outstanding setup/reset links when access is disabled or the
+    // destination email changes. A reactivated pending account must receive a
+    // fresh invitation from the admin.
+    if (!isActive || (target.email || '') !== (email || '')) {
+      await queryDb(
+        'UPDATE account_tokens SET used_at = NOW() WHERE user_id = ? AND used_at IS NULL',
+        [targetId]
+      );
+    }
+
     const rows = await queryDb(
-      `SELECT id, username, full_name, role, job_title, department, is_active,
-              last_login_at, created_at, updated_at
+      `SELECT id, username, email, full_name, role, job_title, department, is_active,
+              invited_at, activated_at, last_login_at, created_at, updated_at,
+              (password_hash IS NOT NULL) AS has_password
        FROM users WHERE id = ? LIMIT 1`,
       [targetId]
     );
@@ -499,6 +1087,7 @@ app.put('/api/users/:id', authenticateUser, requireAdmin, async (req, res) => {
       role: target.role !== updatedUser.role ? { from: target.role, to: updatedUser.role } : undefined,
       active: Boolean(target.is_active) !== updatedUser.isActive ? { from: Boolean(target.is_active), to: updatedUser.isActive } : undefined,
       username: target.username !== updatedUser.username ? { from: target.username, to: updatedUser.username } : undefined,
+      email: (target.email || '') !== (updatedUser.email || '') ? { from: target.email || '', to: updatedUser.email || '' } : undefined,
       fullName: target.full_name !== updatedUser.fullName ? { from: target.full_name, to: updatedUser.fullName } : undefined,
       jobTitle: (target.job_title || '') !== (updatedUser.jobTitle || '') ? { from: target.job_title || '', to: updatedUser.jobTitle || '' } : undefined,
       department: (target.department || '') !== (updatedUser.department || '') ? { from: target.department || '', to: updatedUser.department || '' } : undefined,
@@ -518,42 +1107,99 @@ app.put('/api/users/:id', authenticateUser, requireAdmin, async (req, res) => {
     res.status(200).json(updatedUser);
   } catch (err) {
     if (err?.code === 'ER_DUP_ENTRY') {
-      return res.status(409).json({ error: 'That username is already in use' });
+      return res.status(409).json({ error: 'That username or email is already in use' });
     }
     console.error('Update user error:', err);
     res.status(500).json({ error: 'Failed to update user' });
   }
 });
 
-app.post('/api/users/:id/reset-password', authenticateUser, requireAdmin, async (req, res) => {
+app.post('/api/users/:id/resend-invite', authenticateUser, requireAdmin, async (req, res) => {
   const targetId = Number(req.params.id);
-  const password = String(req.body?.password || '');
   if (!Number.isInteger(targetId) || targetId <= 0) {
     return res.status(400).json({ error: 'Invalid user id' });
   }
-  if (password.length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  if (isProduction && !emailConfigured) {
+    return res.status(503).json({ error: 'Email delivery is not configured. Configure SMTP before sending invitations.' });
   }
 
   try {
-    const rows = await queryDb('SELECT id FROM users WHERE id = ? LIMIT 1', [targetId]);
-    if (rows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    const passwordHash = await bcrypt.hash(password, 12);
-    await queryDb('UPDATE users SET password_hash = ? WHERE id = ?', [passwordHash, targetId]);
-    const targetRows = await queryDb('SELECT username, full_name FROM users WHERE id = ? LIMIT 1', [targetId]);
-    const targetUser = targetRows[0];
+    const rows = await queryDb(
+      `SELECT id, username, email, full_name, role, job_title, department, is_active,
+              invited_at, activated_at, last_login_at, created_at, updated_at,
+              (password_hash IS NOT NULL) AS has_password
+       FROM users WHERE id = ? LIMIT 1`,
+      [targetId]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    const user = toPublicUser(rows[0]);
+    if (!user.isActive) return res.status(400).json({ error: 'Reactivate this account before resending an invitation.' });
+    if (user.hasPassword) return res.status(400).json({ error: 'This account is already set up. Send a password-reset link instead.' });
+    if (!user.email) return res.status(400).json({ error: 'This account does not have an email address.' });
+
+    const { rawToken } = await createOneTimeToken({ userId: user.id, purpose: 'invite', createdBy: req.user.id });
+    const delivery = await sendInvitationEmail(req, user, rawToken);
+    await queryDb('UPDATE users SET invited_at = NOW() WHERE id = ?', [user.id]);
+
     await logAuditEvent(req, {
-      action: 'USER_PASSWORD_RESET',
+      action: 'USER_INVITE_RESENT',
       entityType: 'user',
-      entityId: targetId,
-      description: `Reset password for ${targetUser?.full_name || targetUser?.username || `user #${targetId}`}`,
+      entityId: user.id,
+      description: `Resent account invitation to ${user.fullName}`,
+      metadata: { email: user.email, deliveryMode: delivery.mode },
     });
-    res.status(200).json({ message: 'Password reset successfully' });
+
+    res.status(200).json({
+      message: delivery.sent ? `Invitation resent to ${user.email}` : 'Development invitation refreshed.',
+      delivery,
+    });
   } catch (err) {
-    console.error('Reset password error:', err);
-    res.status(500).json({ error: 'Failed to reset password' });
+    console.error('Resend invitation error:', err);
+    res.status(err?.code === 'EMAIL_NOT_CONFIGURED' ? 503 : 500).json({ error: err.message || 'Failed to resend invitation' });
+  }
+});
+
+app.post('/api/users/:id/send-password-reset', authenticateUser, requireAdmin, async (req, res) => {
+  const targetId = Number(req.params.id);
+  if (!Number.isInteger(targetId) || targetId <= 0) {
+    return res.status(400).json({ error: 'Invalid user id' });
+  }
+  if (isProduction && !emailConfigured) {
+    return res.status(503).json({ error: 'Email delivery is not configured. Configure SMTP before sending reset links.' });
+  }
+
+  try {
+    const rows = await queryDb(
+      `SELECT id, username, email, full_name, role, job_title, department, is_active,
+              invited_at, activated_at, last_login_at, created_at, updated_at,
+              (password_hash IS NOT NULL) AS has_password
+       FROM users WHERE id = ? LIMIT 1`,
+      [targetId]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    const user = toPublicUser(rows[0]);
+    if (!user.isActive) return res.status(400).json({ error: 'Reactivate this account before sending a reset link.' });
+    if (!user.hasPassword) return res.status(400).json({ error: 'This account is still pending setup. Resend the invitation instead.' });
+    if (!user.email) return res.status(400).json({ error: 'This account does not have an email address.' });
+
+    const { rawToken } = await createOneTimeToken({ userId: user.id, purpose: 'password_reset', createdBy: req.user.id });
+    const delivery = await sendPasswordResetEmail(req, user, rawToken);
+
+    await logAuditEvent(req, {
+      action: 'PASSWORD_RESET_LINK_SENT',
+      entityType: 'user',
+      entityId: user.id,
+      description: `Sent password-reset link to ${user.fullName}`,
+      metadata: { email: user.email, deliveryMode: delivery.mode },
+    });
+
+    res.status(200).json({
+      message: delivery.sent ? `Password-reset link sent to ${user.email}` : 'Development password-reset link created.',
+      delivery,
+    });
+  } catch (err) {
+    console.error('Admin password-reset email error:', err);
+    res.status(err?.code === 'EMAIL_NOT_CONFIGURED' ? 503 : 500).json({ error: err.message || 'Failed to send password-reset link' });
   }
 });
 
