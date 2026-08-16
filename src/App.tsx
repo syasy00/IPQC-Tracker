@@ -139,6 +139,12 @@ const calculateWW = (dateStr: string): string => {
   return weekNo.toString();
 };
 
+const getTodayLocalISO = (): string => {
+  const now = new Date();
+  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+  return local.toISOString().split('T')[0];
+};
+
 const DEPARTMENTS = [
   'Production Team',
   'Test Team',
@@ -797,25 +803,34 @@ export default function App() {
     setView('ipqc');
   };
 
-  const [newAudit, setNewAudit] = useState<Partial<IPQCAuditRecord>>({
-    no: undefined,
-    auditDate: new Date().toISOString().split('T')[0],
-    ww: calculateWW(new Date().toISOString().split('T')[0]),
-    shift: SHIFTS[0],
-    auditors: auditorsList[0],
-    personOnJob: '',
-    department: DEPARTMENTS[0],
-    platform: PLATFORMS[0],
-    areaStation: '',
-    groupFinding: CATEGORY_GROUP_MAPPING[CATEGORIES[0]],
-    category: CATEGORIES[0],
-    detailsFindings: FINDING_DETAILS[0],
-    remark: '',
-    status: 'Open',
-    icarNum: 'N/A',
-    icarStatus: 'Locked',
-    mqeEngineer: INITIAL_PLATFORM_MQE_MAPPING[PLATFORMS[0]] || ''
-  });
+  // A fresh Add Finding form must never inherit an old record or silently
+  // preselect operational values. Only true system defaults are populated:
+  // today's date, auto WW, Finding=Open and ICAR=N/A/Locked.
+  const createEmptyAudit = (): Partial<IPQCAuditRecord> => {
+    const today = getTodayLocalISO();
+    return {
+      no: undefined,
+      auditDate: today,
+      ww: calculateWW(today),
+      shift: '',
+      auditors: '',
+      personOnJob: '',
+      department: '',
+      platform: '',
+      areaStation: '',
+      groupFinding: '',
+      category: '',
+      detailsFindings: '',
+      remark: '',
+      status: 'Open',
+      icarNum: 'N/A',
+      icarStatus: 'Locked',
+      mqeEngineer: '',
+      picture: '',
+    };
+  };
+
+  const [newAudit, setNewAudit] = useState<Partial<IPQCAuditRecord>>(() => createEmptyAudit());
 
   // Keep the stored WW when an existing record is opened. Recalculate WW only
   // when the user deliberately changes the audit date, so View and Edit never
@@ -840,7 +855,7 @@ export default function App() {
     setNewAudit(prev => ({
       ...prev,
       platform: plat,
-      mqeEngineer: getMqeForPlatform(plat)
+      mqeEngineer: plat ? getMqeForPlatform(plat) : ''
     }));
   };
 
@@ -942,6 +957,22 @@ export default function App() {
   const [openRowAction, setOpenRowAction] = useState<string | number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const handleOpenAddFinding = () => {
+    setEditingId(null);
+    setSelectedRecord(null);
+    setOpenRowAction(null);
+    setNewAudit(createEmptyAudit());
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    setView('add-audit');
+  };
+
+  const handleCloseAuditForm = () => {
+    setEditingId(null);
+    setNewAudit(createEmptyAudit());
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    setView('ipqc');
+  };
+
   const handleImageChange = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -959,7 +990,9 @@ export default function App() {
     const payload = {
       ...newAudit,
       groupFinding: CATEGORY_GROUP_MAPPING[newAudit.category || ''] || '',
-      ww: calculateWW(newAudit.auditDate || new Date().toISOString().split('T')[0]),
+      // Date changes already recalculate WW. Keeping the current WW here avoids
+      // silently changing a stored historical WW when an existing record is edited.
+      ww: newAudit.ww || (newAudit.auditDate ? calculateWW(newAudit.auditDate) : ''),
       status: normalizeFindingStatus(newAudit.status) || 'Open',
       icarStatus: (newAudit.icarNum && newAudit.icarNum !== 'N/A') ? 'Submitted' : 'Locked'
     };
@@ -971,13 +1004,14 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
-        if (response.ok) {
-          const updated = normalizeRecord(await response.json());
-          setRecords(records.map(r => String(r.id) === String(editingId) ? updated : r));
-          setHighlightedId(updated.id);
-        } else {
-          alert('Failed to update record.');
+        if (!response.ok) {
+          alert('Failed to update record. Your form has been kept so you can retry.');
+          return;
         }
+
+        const updated = normalizeRecord(await response.json());
+        setRecords(records.map(r => String(r.id) === String(editingId) ? updated : r));
+        setHighlightedId(updated.id);
       } else {
         const response = await fetch(`${API_BASE_URL}/api/records`, {
           method: 'POST',
@@ -985,41 +1019,21 @@ export default function App() {
           body: JSON.stringify(payload),
         });
 
-        if (response.ok) {
-          const created = normalizeRecord(await response.json());
-          setRecords([...records, created]);
-          setHighlightedId(created.id);
-        } else {
-          alert('Failed to save the audit record to database.');
+        if (!response.ok) {
+          alert('Failed to save the audit record. Your form has been kept so you can retry.');
+          return;
         }
+
+        const created = normalizeRecord(await response.json());
+        setRecords([...records, created]);
+        setHighlightedId(created.id);
       }
 
-      setNewAudit({
-        no: undefined,
-        auditDate: new Date().toISOString().split('T')[0],
-        ww: calculateWW(new Date().toISOString().split('T')[0]),
-        shift: SHIFTS[0],
-        auditors: auditorsList[0] || '',
-        personOnJob: '',
-        department: DEPARTMENTS[0],
-        platform: PLATFORMS[0],
-        areaStation: '',
-        groupFinding: CATEGORY_GROUP_MAPPING[CATEGORIES[0]],
-        category: CATEGORIES[0],
-        detailsFindings: FINDING_DETAILS[0],
-        remark: '',
-        status: 'Open',
-        icarNum: 'N/A',
-        icarStatus: 'Locked',
-        mqeEngineer: getMqeForPlatform(PLATFORMS[0]),
-        picture: '',
-      });
+      setNewAudit(createEmptyAudit());
       setEditingId(null);
       setView('ipqc');
-      
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
+
+      if (fileInputRef.current) fileInputRef.current.value = '';
     } catch (error) {
       console.error('Error submitting audit:', error);
       alert('A network error occurred while contacting the server.');
@@ -1031,15 +1045,15 @@ export default function App() {
       no: record.no,
       auditDate: record.auditDate || '',
       ww: record.ww || '',
-      shift: record.shift || 'A',
-      auditors: record.auditors || auditorsList[0],
+      shift: record.shift || '',
+      auditors: record.auditors || '',
       personOnJob: record.personOnJob || '',
-      department: record.department || DEPARTMENTS[0],
-      platform: record.platform || PLATFORMS[0],
+      department: record.department || '',
+      platform: record.platform || '',
       areaStation: record.areaStation || '',
       groupFinding: record.groupFinding || '',
-      category: record.category || CATEGORIES[0],
-      detailsFindings: record.detailsFindings || FINDING_DETAILS[0],
+      category: record.category || '',
+      detailsFindings: record.detailsFindings || '',
       remark: record.remark || '',
       status: getFindingStatus(record) || '',
       icarNum: record.icarNum || 'N/A',
@@ -2080,7 +2094,7 @@ export default function App() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => { setEditingId(null); setView('add-audit'); }}
+                        onClick={handleOpenAddFinding}
                         className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-brand-orange px-5 text-[10px] font-black uppercase tracking-[0.12em] text-white shadow-[0_8px_18px_rgba(241,93,34,0.16)] transition-all hover:brightness-110 active:translate-y-px"
                       >
                         <Plus size={16} />
@@ -2494,7 +2508,7 @@ export default function App() {
                     <div className="min-w-0">
                       <button
                         type="button"
-                        onClick={() => { setView('ipqc'); setEditingId(null); }}
+                        onClick={handleCloseAuditForm}
                         className="mb-3 inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 transition-colors hover:text-brand-orange"
                       >
                         <ChevronLeft size={15} />
@@ -2564,16 +2578,19 @@ export default function App() {
                           />
                           <FormSelect
                             label="Shift"
-                            value={newAudit.shift}
+                            required
+                            value={newAudit.shift || ''}
                             onChange={(v: string) => setNewAudit({ ...newAudit, shift: v })}
                             options={SHIFTS}
+                            placeholder="Select shift"
                           />
                           <FormSelect
                             label="Department"
                             required
-                            value={newAudit.department}
+                            value={newAudit.department || ''}
                             onChange={(v: string) => setNewAudit({ ...newAudit, department: v })}
                             options={DEPARTMENTS}
+                            placeholder="Select department"
                           />
                         </div>
                       </section>
@@ -2595,9 +2612,10 @@ export default function App() {
                           <FormSelect
                             label="Platform"
                             required
-                            value={newAudit.platform}
+                            value={newAudit.platform || ''}
                             onChange={handlePlatformChange}
                             options={platformsList}
+                            placeholder="Select platform"
                           />
                           <FormInput
                             label="Area / station"
@@ -2627,17 +2645,19 @@ export default function App() {
                           <FormSelect
                             label="Category"
                             required
-                            value={newAudit.category}
+                            value={newAudit.category || ''}
                             onChange={handleCategoryChange}
                             options={CATEGORIES}
+                            placeholder="Select category"
                           />
                           <AutoField label="Group finding" value={newAudit.groupFinding} />
                           <FormSelect
                             label="Finding details"
                             required
-                            value={newAudit.detailsFindings}
+                            value={newAudit.detailsFindings || ''}
                             onChange={(v: string) => setNewAudit({ ...newAudit, detailsFindings: v })}
                             options={FINDING_DETAILS}
+                            placeholder="Select finding detail"
                           />
                         </div>
 
@@ -2689,9 +2709,10 @@ export default function App() {
                           <FormSelect
                             label="IPQC auditor"
                             required
-                            value={newAudit.auditors}
+                            value={newAudit.auditors || ''}
                             onChange={(v: string) => setNewAudit({ ...newAudit, auditors: v })}
                             options={auditorsList}
+                            placeholder="Select auditor"
                           />
                           <FormInput
                             label="PIC name (finding)"
@@ -2843,7 +2864,7 @@ export default function App() {
                           </div>
                           <div className="py-3">
                             <p className="text-[10px] font-medium text-slate-400">MQE owner</p>
-                            <p className="mt-1 text-xs font-semibold text-brand-orange">{newAudit.mqeEngineer || 'Unassigned'}</p>
+                            <p className="mt-1 text-xs font-semibold text-brand-orange">{newAudit.mqeEngineer || 'Pending platform selection'}</p>
                           </div>
                           <div className="py-3">
                             <p className="text-[10px] font-medium text-slate-400">Finding</p>
@@ -2895,7 +2916,7 @@ export default function App() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => { setView('ipqc'); setEditingId(null); }}
+                          onClick={handleCloseAuditForm}
                           className="mt-2 inline-flex h-10 w-full items-center justify-center rounded-lg text-xs font-semibold text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-800"
                         >
                           Cancel
