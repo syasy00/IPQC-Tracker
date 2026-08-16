@@ -126,6 +126,126 @@ const usersReady = ensureUsersTable().catch((err) => {
   throw err;
 });
 
+
+// ==========================================
+// Traceability / Audit Trail
+// ==========================================
+// Existing audit_records rows are preserved. New traceability columns are added
+// only when missing; historical rows simply show an unknown creator/editor.
+const ensureAuditRecordColumn = async (columnName, ddl) => {
+  const rows = await queryDb(`SHOW COLUMNS FROM audit_records LIKE ?`, [columnName]);
+  if (rows.length === 0) {
+    await queryDb(`ALTER TABLE audit_records ADD COLUMN ${ddl}`);
+    console.log(`Added audit_records.${columnName}`);
+  }
+};
+
+const ensureAuditTrailSchema = async () => {
+  // audit_records exists in the current IPQC application. Do not create or wipe
+  // it here: only extend it with non-destructive traceability fields.
+  const tableRows = await queryDb(`SHOW TABLES LIKE 'audit_records'`);
+  if (tableRows.length > 0) {
+    await ensureAuditRecordColumn('created_by', 'created_by INT NULL');
+    await ensureAuditRecordColumn('updated_by', 'updated_by INT NULL');
+    await ensureAuditRecordColumn('created_at', 'created_at DATETIME NULL');
+    await ensureAuditRecordColumn('updated_at', 'updated_at DATETIME NULL');
+  } else {
+    console.warn('audit_records table was not found; traceability columns will be added after the table exists.');
+  }
+
+  await queryDb(`
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id BIGINT NOT NULL AUTO_INCREMENT,
+      actor_user_id INT NULL,
+      actor_username VARCHAR(100) NOT NULL,
+      actor_name VARCHAR(150) NOT NULL,
+      actor_role ENUM('user', 'admin') NOT NULL DEFAULT 'user',
+      action VARCHAR(80) NOT NULL,
+      entity_type VARCHAR(50) NOT NULL,
+      entity_id VARCHAR(100) NULL,
+      description VARCHAR(500) NOT NULL,
+      metadata JSON NULL,
+      ip_address VARCHAR(45) NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      INDEX idx_audit_log_created_at (created_at),
+      INDEX idx_audit_log_actor (actor_user_id),
+      INDEX idx_audit_log_entity (entity_type, entity_id),
+      INDEX idx_audit_log_action (action)
+    )
+  `);
+};
+
+const auditTrailReady = Promise.all([usersReady, ensureAuditTrailSchema()]).catch((err) => {
+  console.error('Failed to initialize audit trail schema:', err);
+  throw err;
+});
+
+const getRequestIp = (req) => {
+  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return forwarded || req.socket?.remoteAddress || null;
+};
+
+const logAuditEvent = async (req, {
+  action,
+  entityType,
+  entityId = null,
+  description,
+  metadata = null,
+}) => {
+  try {
+    await auditTrailReady;
+    const actor = req.user || {};
+    await queryDb(
+      `INSERT INTO audit_log
+        (actor_user_id, actor_username, actor_name, actor_role,
+         action, entity_type, entity_id, description, metadata, ip_address)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        actor.id || null,
+        String(actor.username || 'unknown'),
+        String(actor.fullName || actor.username || 'Unknown user'),
+        actor.role === 'admin' ? 'admin' : 'user',
+        String(action),
+        String(entityType),
+        entityId === null || entityId === undefined ? null : String(entityId),
+        String(description).slice(0, 500),
+        metadata ? JSON.stringify(metadata) : null,
+        getRequestIp(req),
+      ]
+    );
+  } catch (err) {
+    // Business operation remains successful even if logging has a temporary issue.
+    console.error('Audit log write failed:', err);
+  }
+};
+
+const formatRecordNumber = (record, fallbackId) =>
+  record?.no !== null && record?.no !== undefined && record?.no !== ''
+    ? `#${record.no}`
+    : `#${fallbackId}`;
+
+const selectRecordById = async (id) => {
+  const rows = await queryDb(`
+    SELECT
+      ar.id, ar.no, DATE_FORMAT(ar.audit_date, '%Y-%m-%d') AS auditDate, ar.ww, ar.shift,
+      ar.auditor_name AS auditors, ar.pic_finding AS personOnJob, ar.department,
+      ar.platform, ar.area_station AS areaStation, ar.group_finding AS groupFinding,
+      ar.category, ar.finding_details AS detailsFindings, ar.picture, ar.remark, ar.status,
+      ar.icar_status AS icarStatus, ar.icar_num AS icarNum, ar.mqe_engineer AS mqeEngineer,
+      ar.created_by AS createdByUserId, ar.updated_by AS updatedByUserId,
+      ar.created_at AS createdAt, ar.updated_at AS updatedAt,
+      creator.full_name AS createdByName, creator.username AS createdByUsername,
+      editor.full_name AS updatedByName, editor.username AS updatedByUsername
+    FROM audit_records ar
+    LEFT JOIN users creator ON creator.id = ar.created_by
+    LEFT JOIN users editor ON editor.id = ar.updated_by
+    WHERE ar.id = ?
+    LIMIT 1
+  `, [id]);
+  return rows[0] || null;
+};
+
 const extractBearerToken = (req) => {
   const authHeader = req.headers.authorization || '';
   return authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
@@ -299,7 +419,15 @@ app.post('/api/users', authenticateUser, requireAdmin, async (req, res) => {
        FROM users WHERE id = ? LIMIT 1`,
       [result.insertId]
     );
-    res.status(201).json(toPublicUser(rows[0]));
+    const createdUser = toPublicUser(rows[0]);
+    await logAuditEvent(req, {
+      action: 'USER_CREATED',
+      entityType: 'user',
+      entityId: createdUser.id,
+      description: `Created user ${createdUser.fullName} (${createdUser.role})`,
+      metadata: { username: createdUser.username, role: createdUser.role, jobTitle: createdUser.jobTitle, department: createdUser.department },
+    });
+    res.status(201).json(createdUser);
   } catch (err) {
     if (err?.code === 'ER_DUP_ENTRY') {
       return res.status(409).json({ error: 'That username is already in use' });
@@ -335,7 +463,10 @@ app.put('/api/users/:id', authenticateUser, requireAdmin, async (req, res) => {
   }
 
   try {
-    const currentRows = await queryDb('SELECT id, role, is_active FROM users WHERE id = ? LIMIT 1', [targetId]);
+    const currentRows = await queryDb(
+      'SELECT id, username, full_name, role, job_title, department, is_active FROM users WHERE id = ? LIMIT 1',
+      [targetId]
+    );
     if (currentRows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -363,7 +494,28 @@ app.put('/api/users/:id', authenticateUser, requireAdmin, async (req, res) => {
        FROM users WHERE id = ? LIMIT 1`,
       [targetId]
     );
-    res.status(200).json(toPublicUser(rows[0]));
+    const updatedUser = toPublicUser(rows[0]);
+    const changes = {
+      role: target.role !== updatedUser.role ? { from: target.role, to: updatedUser.role } : undefined,
+      active: Boolean(target.is_active) !== updatedUser.isActive ? { from: Boolean(target.is_active), to: updatedUser.isActive } : undefined,
+      username: target.username !== updatedUser.username ? { from: target.username, to: updatedUser.username } : undefined,
+      fullName: target.full_name !== updatedUser.fullName ? { from: target.full_name, to: updatedUser.fullName } : undefined,
+      jobTitle: (target.job_title || '') !== (updatedUser.jobTitle || '') ? { from: target.job_title || '', to: updatedUser.jobTitle || '' } : undefined,
+      department: (target.department || '') !== (updatedUser.department || '') ? { from: target.department || '', to: updatedUser.department || '' } : undefined,
+    };
+    const cleanChanges = Object.fromEntries(Object.entries(changes).filter(([, value]) => value !== undefined));
+    let action = 'USER_UPDATED';
+    if (cleanChanges.active) action = updatedUser.isActive ? 'USER_ACTIVATED' : 'USER_DEACTIVATED';
+    else if (cleanChanges.role) action = 'USER_ROLE_CHANGED';
+
+    await logAuditEvent(req, {
+      action,
+      entityType: 'user',
+      entityId: updatedUser.id,
+      description: `${action === 'USER_DEACTIVATED' ? 'Deactivated' : action === 'USER_ACTIVATED' ? 'Activated' : action === 'USER_ROLE_CHANGED' ? 'Changed role for' : 'Updated'} user ${updatedUser.fullName}`,
+      metadata: cleanChanges,
+    });
+    res.status(200).json(updatedUser);
   } catch (err) {
     if (err?.code === 'ER_DUP_ENTRY') {
       return res.status(409).json({ error: 'That username is already in use' });
@@ -390,6 +542,14 @@ app.post('/api/users/:id/reset-password', authenticateUser, requireAdmin, async 
     }
     const passwordHash = await bcrypt.hash(password, 12);
     await queryDb('UPDATE users SET password_hash = ? WHERE id = ?', [passwordHash, targetId]);
+    const targetRows = await queryDb('SELECT username, full_name FROM users WHERE id = ? LIMIT 1', [targetId]);
+    const targetUser = targetRows[0];
+    await logAuditEvent(req, {
+      action: 'USER_PASSWORD_RESET',
+      entityType: 'user',
+      entityId: targetId,
+      description: `Reset password for ${targetUser?.full_name || targetUser?.username || `user #${targetId}`}`,
+    });
     res.status(200).json({ message: 'Password reset successfully' });
   } catch (err) {
     console.error('Reset password error:', err);
@@ -590,22 +750,54 @@ app.get('/api/settings', authenticateUser, (req, res) => {
 });
 
 // API: Replace auditors + platform-MQE mapping (admin only)
-app.put('/api/settings', authenticateUser, requireAdmin, (req, res) => {
+app.put('/api/settings', authenticateUser, requireAdmin, async (req, res) => {
   const { auditors, mqeMappings } = req.body || {};
   if (!Array.isArray(auditors) || typeof mqeMappings !== 'object' || mqeMappings === null) {
     return res.status(400).json({ error: 'auditors must be an array and mqeMappings must be an object' });
   }
-  db.query(
-    'UPDATE app_settings SET auditors = ?, mqe_mappings = ? WHERE id = 1',
-    [JSON.stringify(auditors), JSON.stringify(mqeMappings)],
-    (err) => {
-      if (err) {
-        console.error('Failed to update settings:', err);
-        return res.status(500).json({ error: 'Failed to update settings' });
-      }
-      res.status(200).json({ auditors, mqeMappings });
+
+  try {
+    const beforeRows = await queryDb('SELECT auditors, mqe_mappings FROM app_settings WHERE id = 1 LIMIT 1');
+    const before = beforeRows[0] || { auditors: [], mqe_mappings: {} };
+    const previousAuditors = typeof before.auditors === 'string' ? JSON.parse(before.auditors) : (before.auditors || []);
+    const previousMappings = typeof before.mqe_mappings === 'string' ? JSON.parse(before.mqe_mappings) : (before.mqe_mappings || {});
+
+    await queryDb(
+      'UPDATE app_settings SET auditors = ?, mqe_mappings = ? WHERE id = 1',
+      [JSON.stringify(auditors), JSON.stringify(mqeMappings)]
+    );
+
+    const auditorsChanged = JSON.stringify(previousAuditors) !== JSON.stringify(auditors);
+    const mappingsChanged = JSON.stringify(previousMappings) !== JSON.stringify(mqeMappings);
+    if (auditorsChanged || mappingsChanged) {
+      const action = auditorsChanged && mappingsChanged
+        ? 'SETTINGS_UPDATED'
+        : mappingsChanged
+          ? 'MQE_MAPPING_UPDATED'
+          : 'AUDITOR_LIST_UPDATED';
+      const description = action === 'MQE_MAPPING_UPDATED'
+        ? 'Changed Platform → MQE ownership mapping'
+        : action === 'AUDITOR_LIST_UPDATED'
+          ? 'Changed IPQC auditor list'
+          : 'Changed IPQC auditor list and Platform → MQE mapping';
+
+      await logAuditEvent(req, {
+        action,
+        entityType: 'settings',
+        entityId: 'app_settings',
+        description,
+        metadata: {
+          auditorCount: auditors.length,
+          mappedPlatformCount: Object.values(mqeMappings).filter((value) => String(value || '').trim()).length,
+        },
+      });
     }
-  );
+
+    res.status(200).json({ auditors, mqeMappings });
+  } catch (err) {
+    console.error('Failed to update settings:', err);
+    res.status(500).json({ error: 'Failed to update settings' });
+  }
 });
 
 // Configure Image Uploads
@@ -627,32 +819,47 @@ const upload = multer({ storage: storage });
 // auth below, but the safest move is to delete this route entirely once
 // you're done testing - it has no place in a production build.
 // ==========================================
-app.delete('/api/reset-database', authenticateUser, requireAdmin, (req, res) => {
-  db.query('TRUNCATE TABLE audit_records', (err) => {
-    if (err) {
-      console.error('Failed to clear database:', err);
-      return res.status(500).json({ error: 'Failed to reset database' });
-    }
+app.delete('/api/reset-database', authenticateUser, requireAdmin, async (req, res) => {
+  try {
+    await queryDb('TRUNCATE TABLE audit_records');
+    await logAuditEvent(req, {
+      action: 'DATABASE_RESET',
+      entityType: 'system',
+      entityId: 'audit_records',
+      description: 'Reset the IPQC findings database',
+    });
     res.status(200).json({ message: 'Database wiped clean! Auto-increment reset to 1.' });
-  });
+  } catch (err) {
+    console.error('Failed to clear database:', err);
+    res.status(500).json({ error: 'Failed to reset database' });
+  }
 });
 
-// API: Get All Records (READ) - FIXED TO ASCENDING ORDER
-app.get('/api/records', authenticateUser, (req, res) => {
-  const sql = `
-    SELECT 
-      id, no, DATE_FORMAT(audit_date, '%Y-%m-%d') as auditDate, ww, shift, 
-      auditor_name as auditors, pic_finding as personOnJob, department, 
-      platform, area_station as areaStation, group_finding as groupFinding, 
-      category, finding_details as detailsFindings, picture, remark, status,
-      icar_status as icarStatus, icar_num as icarNum, mqe_engineer as mqeEngineer 
-    FROM audit_records 
-    ORDER BY id ASC
-  `;
-  db.query(sql, (err, results) => {
-    if (err) return res.status(500).json(err);
+// API: Get All Records (READ) with creator/editor traceability.
+app.get('/api/records', authenticateUser, async (req, res) => {
+  try {
+    await auditTrailReady;
+    const results = await queryDb(`
+      SELECT
+        ar.id, ar.no, DATE_FORMAT(ar.audit_date, '%Y-%m-%d') AS auditDate, ar.ww, ar.shift,
+        ar.auditor_name AS auditors, ar.pic_finding AS personOnJob, ar.department,
+        ar.platform, ar.area_station AS areaStation, ar.group_finding AS groupFinding,
+        ar.category, ar.finding_details AS detailsFindings, ar.picture, ar.remark, ar.status,
+        ar.icar_status AS icarStatus, ar.icar_num AS icarNum, ar.mqe_engineer AS mqeEngineer,
+        ar.created_by AS createdByUserId, ar.updated_by AS updatedByUserId,
+        ar.created_at AS createdAt, ar.updated_at AS updatedAt,
+        creator.full_name AS createdByName, creator.username AS createdByUsername,
+        editor.full_name AS updatedByName, editor.username AS updatedByUsername
+      FROM audit_records ar
+      LEFT JOIN users creator ON creator.id = ar.created_by
+      LEFT JOIN users editor ON editor.id = ar.updated_by
+      ORDER BY ar.id ASC
+    `);
     res.status(200).json(results);
-  });
+  } catch (err) {
+    console.error('Failed to fetch records:', err);
+    res.status(500).json({ error: 'Failed to fetch records' });
+  }
 });
 
 
@@ -971,7 +1178,7 @@ Use at most four highlights.
 });
 
 // API: Add a New Record (CREATE)
-app.post('/api/records', authenticateUser, upload.single('picture'), (req, res) => {
+app.post('/api/records', authenticateUser, upload.single('picture'), async (req, res) => {
   const {
     no, auditDate, ww, shift, auditors, personOnJob, department,
     platform, areaStation, groupFinding, category, detailsFindings,
@@ -981,39 +1188,56 @@ app.post('/api/records', authenticateUser, upload.single('picture'), (req, res) 
   const picture = req.file ? `/uploads/${req.file.filename}` : (req.body.picture || null);
   const rowNo = no !== undefined && no !== null && no !== '' ? no : null;
 
-  const sql = `
-    INSERT INTO audit_records (
-      no, audit_date, ww, shift, auditor_name, pic_finding, department,
-      platform, area_station, group_finding, category, finding_details,
-      picture, remark, status, icar_status, icar_num, mqe_engineer
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `;
+  try {
+    await auditTrailReady;
+    const result = await queryDb(
+      `INSERT INTO audit_records (
+        no, audit_date, ww, shift, auditor_name, pic_finding, department,
+        platform, area_station, group_finding, category, finding_details,
+        picture, remark, status, icar_status, icar_num, mqe_engineer,
+        created_by, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [
+        rowNo, auditDate, ww, shift, auditors, personOnJob, department,
+        platform, areaStation, groupFinding, category, detailsFindings,
+        picture, remark, status || 'Open', icarStatus || 'Locked', icarNum || 'N/A', mqeEngineer,
+        req.user.id,
+      ]
+    );
 
-  const values = [
-    rowNo, auditDate, ww, shift, auditors, personOnJob, department,
-    platform, areaStation, groupFinding, category, detailsFindings,
-    picture, remark, status || 'Open', icarStatus || 'Locked', icarNum || 'N/A', mqeEngineer
-  ];
-
-  db.query(sql, values, (err, result) => {
-    if (err) {
-      console.error('Database insertion error:', err);
-      return res.status(500).json({ error: 'Database insertion failed' });
+    if (rowNo === null) {
+      // Preserve the app's existing display behavior where a missing "No." uses
+      // the inserted id, while keeping the database value nullable.
     }
-    
-    const newRecord = {
-      id: result.insertId,
-      no: rowNo || result.insertId,
-      auditDate, ww, shift, auditors, personOnJob, department,
-      platform, areaStation, groupFinding, category, detailsFindings,
-      picture, remark, status: status || 'Open', icarStatus: icarStatus || 'Locked', icarNum: icarNum || 'N/A', mqeEngineer
-    };
-    res.status(201).json(newRecord);
-  });
+
+    const created = await selectRecordById(result.insertId);
+    const source = String(req.headers['x-audit-source'] || '').trim().toLowerCase();
+    const action = source === 'excel-import' ? 'FINDING_IMPORTED' : 'FINDING_CREATED';
+    await logAuditEvent(req, {
+      action,
+      entityType: 'finding',
+      entityId: result.insertId,
+      description: `${action === 'FINDING_IMPORTED' ? 'Imported' : 'Created'} Finding ${formatRecordNumber(created, result.insertId)}`,
+      metadata: {
+        platform: created?.platform || '',
+        category: created?.category || '',
+        status: created?.status || 'Open',
+        icarStatus: created?.icarStatus || 'Locked',
+      },
+    });
+
+    res.status(201).json({
+      ...created,
+      no: created?.no ?? result.insertId,
+    });
+  } catch (err) {
+    console.error('Database insertion error:', err);
+    res.status(500).json({ error: 'Database insertion failed' });
+  }
 });
 
-// API: Update an Existing Record (UPDATE) - FIXED MISSING 'NO' FIELD
-app.put('/api/records/:id', authenticateUser, upload.single('picture'), (req, res) => {
+// API: Update an Existing Record (UPDATE)
+app.put('/api/records/:id', authenticateUser, upload.single('picture'), async (req, res) => {
   const { id } = req.params;
   const {
     no, auditDate, ww, shift, auditors, personOnJob, department,
@@ -1023,42 +1247,128 @@ app.put('/api/records/:id', authenticateUser, upload.single('picture'), (req, re
 
   const picture = req.file ? `/uploads/${req.file.filename}` : req.body.picture;
 
-  const sql = `
-    UPDATE audit_records SET 
-      no = ?, audit_date = ?, ww = ?, shift = ?, auditor_name = ?, pic_finding = ?, department = ?,
-      platform = ?, area_station = ?, group_finding = ?, category = ?, finding_details = ?,
-      picture = COALESCE(?, picture), remark = ?, status = ?, icar_status = ?, icar_num = ?, mqe_engineer = ?
-    WHERE id = ?
-  `;
-
-  const values = [
-    no, auditDate, ww, shift, auditors, personOnJob, department,
-    platform, areaStation, groupFinding, category, detailsFindings,
-    picture, remark, status || 'Open', icarStatus || 'Locked', icarNum || 'N/A', mqeEngineer, id
-  ];
-
-  db.query(sql, values, (err) => {
-    if (err) {
-      console.error('Database update error:', err);
-      return res.status(500).json({ error: 'Database update failed' });
+  try {
+    await auditTrailReady;
+    const before = await selectRecordById(id);
+    if (!before) {
+      return res.status(404).json({ error: 'Record not found' });
     }
 
-    const updatedRecord = {
-      id, no, auditDate, ww, shift, auditors, personOnJob, department,
-      platform, areaStation, groupFinding, category, detailsFindings,
-      picture, remark, status: status || 'Open', icarStatus: icarStatus || 'Locked', icarNum: icarNum || 'N/A', mqeEngineer
-    };
-    res.status(200).json(updatedRecord);
-  });
+    await queryDb(
+      `UPDATE audit_records SET
+        no = ?, audit_date = ?, ww = ?, shift = ?, auditor_name = ?, pic_finding = ?, department = ?,
+        platform = ?, area_station = ?, group_finding = ?, category = ?, finding_details = ?,
+        picture = COALESCE(?, picture), remark = ?, status = ?, icar_status = ?, icar_num = ?, mqe_engineer = ?,
+        updated_by = ?, updated_at = NOW()
+       WHERE id = ?`,
+      [
+        no, auditDate, ww, shift, auditors, personOnJob, department,
+        platform, areaStation, groupFinding, category, detailsFindings,
+        picture, remark, status || 'Open', icarStatus || 'Locked', icarNum || 'N/A', mqeEngineer,
+        req.user.id, id,
+      ]
+    );
+
+    const updated = await selectRecordById(id);
+    const source = String(req.headers['x-audit-source'] || '').trim().toLowerCase();
+    const action = source === 'mqe-recalculate' ? 'FINDING_MQE_RECALCULATED' : 'FINDING_UPDATED';
+
+    const trackedKeys = ['auditDate', 'ww', 'shift', 'auditors', 'personOnJob', 'department', 'platform',
+      'areaStation', 'groupFinding', 'category', 'detailsFindings', 'remark', 'status', 'icarNum',
+      'icarStatus', 'mqeEngineer'];
+    const changedFields = trackedKeys.filter((key) => String(before?.[key] ?? '') !== String(updated?.[key] ?? ''));
+
+    await logAuditEvent(req, {
+      action,
+      entityType: 'finding',
+      entityId: id,
+      description: `${action === 'FINDING_MQE_RECALCULATED' ? 'Recalculated MQE ownership for' : 'Updated'} Finding ${formatRecordNumber(updated, id)}`,
+      metadata: {
+        changedFields,
+        status: updated?.status || '',
+        icarStatus: updated?.icarStatus || '',
+      },
+    });
+
+    res.status(200).json(updated);
+  } catch (err) {
+    console.error('Database update error:', err);
+    res.status(500).json({ error: 'Database update failed' });
+  }
 });
 
 // API: Delete a Record (DELETE)
-app.delete('/api/records/:id', authenticateUser, (req, res) => {
+app.delete('/api/records/:id', authenticateUser, async (req, res) => {
   const { id } = req.params;
-  db.query('DELETE FROM audit_records WHERE id = ?', [id], (err) => {
-    if (err) return res.status(500).json(err);
+  try {
+    await auditTrailReady;
+    const before = await selectRecordById(id);
+    if (!before) {
+      return res.status(404).json({ error: 'Record not found' });
+    }
+
+    await queryDb('DELETE FROM audit_records WHERE id = ?', [id]);
+    await logAuditEvent(req, {
+      action: 'FINDING_DELETED',
+      entityType: 'finding',
+      entityId: id,
+      description: `Deleted Finding ${formatRecordNumber(before, id)}`,
+      metadata: {
+        platform: before.platform || '',
+        category: before.category || '',
+        detailsFindings: before.detailsFindings || '',
+        status: before.status || '',
+      },
+    });
     res.status(200).json({ message: 'Deleted successfully' });
-  });
+  } catch (err) {
+    console.error('Delete record error:', err);
+    res.status(500).json({ error: 'Failed to delete record' });
+  }
+});
+
+// Per-finding history is available to any authenticated user viewing that finding.
+app.get('/api/records/:id/history', authenticateUser, async (req, res) => {
+  try {
+    await auditTrailReady;
+    const rows = await queryDb(
+      `SELECT id, actor_user_id AS actorUserId, actor_username AS actorUsername,
+              actor_name AS actorName, actor_role AS actorRole, action,
+              entity_type AS entityType, entity_id AS entityId, description,
+              metadata, created_at AS createdAt
+       FROM audit_log
+       WHERE entity_type = 'finding' AND entity_id = ?
+       ORDER BY id DESC
+       LIMIT 30`,
+      [String(req.params.id)]
+    );
+    res.status(200).json(rows);
+  } catch (err) {
+    console.error('Finding history error:', err);
+    res.status(500).json({ error: 'Failed to load finding history' });
+  }
+});
+
+// Admin operational audit trail: latest mutations across findings, users and settings.
+app.get('/api/audit-log', authenticateUser, requireAdmin, async (req, res) => {
+  try {
+    await auditTrailReady;
+    const requestedLimit = Number(req.query.limit || 80);
+    const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(100, Math.floor(requestedLimit))) : 80;
+    const rows = await queryDb(
+      `SELECT id, actor_user_id AS actorUserId, actor_username AS actorUsername,
+              actor_name AS actorName, actor_role AS actorRole, action,
+              entity_type AS entityType, entity_id AS entityId, description,
+              metadata, ip_address AS ipAddress, created_at AS createdAt
+       FROM audit_log
+       ORDER BY id DESC
+       LIMIT ${limit}`
+    );
+    res.status(200).json(rows);
+  } catch (err) {
+    console.error('Audit log error:', err);
+    res.status(500).json({ error: 'Failed to load audit log' });
+  }
 });
 
 app.use(express.static('dist'));

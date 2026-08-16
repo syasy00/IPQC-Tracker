@@ -7,8 +7,8 @@ export interface AuditRecord {
   auditDate: string;
   ww: string;
   shift: string;
-  auditors: string; // IPQC Auditor Name
-  personOnJob: string; // PIC Finding
+  auditors: string; 
+  personOnJob: string; 
   department: string;
   platform: string;
   areaStation: string;
@@ -17,9 +17,20 @@ export interface AuditRecord {
   detailsFindings: string;
   picture?: string;
   remark?: string;
+  status?: 'Open' | 'Closed' | string | null;
   icarNum?: string;
   icarStatus?: 'Locked' | 'Submitted';
   mqeEngineer?: string;
+
+
+  createdByUserId?: number | null;
+  createdByName?: string | null;
+  createdByUsername?: string | null;
+  createdAt?: string | null;
+  updatedByUserId?: number | null;
+  updatedByName?: string | null;
+  updatedByUsername?: string | null;
+  updatedAt?: string | null;
 }
 
 export type ViewState = 'dashboard' | 'ipqc' | 'import' | 'checklist' | 'add-audit' | 'history' | 'settings';
