@@ -7,8 +7,8 @@ export interface AuditRecord {
   auditDate: string;
   ww: string;
   shift: string;
-  auditors: string; 
-  personOnJob: string; 
+  auditors: string; // IPQC Auditor Name
+  personOnJob: string; // PIC Finding
   department: string;
   platform: string;
   areaStation: string;
@@ -22,7 +22,8 @@ export interface AuditRecord {
   icarStatus?: 'Locked' | 'Submitted';
   mqeEngineer?: string;
 
-
+  // Verified account traceability. New records are stamped by the backend from
+  // the signed-in employee/admin session; historical legacy rows may be null.
   createdByUserId?: number | null;
   createdByName?: string | null;
   createdByUsername?: string | null;

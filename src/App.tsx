@@ -37,11 +37,7 @@ import {
   Eye,
   EyeOff,
   ShieldCheck,
-  ArrowRight,
-  Mail,
-  Send,
-  KeyRound,
-  RefreshCw
+  ArrowRight
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -116,38 +112,36 @@ type AIInsightResult = {
 };
 
 type UserRole = 'user' | 'admin';
-
-type AccountStatus = 'pending' | 'active' | 'inactive';
-type AuthScreen = 'login' | 'forgot' | 'invite' | 'reset';
+type LoginMode = 'user' | 'admin';
 
 type CurrentUser = {
   id: number;
   username: string;
-  email?: string;
+  employeeId?: string;
   fullName: string;
   role: UserRole;
   jobTitle?: string;
   department?: string;
   isActive?: boolean;
-  accountStatus?: AccountStatus;
+  mustChangeCredential?: boolean;
+  credentialReady?: boolean;
   lastLoginAt?: string | null;
 };
 
 type ManagedUser = CurrentUser & {
   isActive: boolean;
-  hasPassword: boolean;
-  accountStatus: AccountStatus;
-  invitedAt?: string | null;
-  activatedAt?: string | null;
+  mustChangeCredential: boolean;
+  credentialReady: boolean;
   createdAt?: string | null;
   updatedAt?: string | null;
 };
 
-type OneTimeAccountInfo = {
+type PublicEmployee = {
+  id: number;
+  employeeId: string;
   fullName: string;
-  email?: string;
-  username?: string;
-  role?: UserRole;
+  jobTitle?: string;
+  department?: string;
 };
 
 const AUTH_TOKEN_STORAGE_KEY = 'ipqc_auth_token';
@@ -163,25 +157,6 @@ const readStoredCurrentUser = (): CurrentUser | null => {
   } catch {
     return null;
   }
-};
-
-const getInitialAuthUrlState = (): { screen: AuthScreen; token: string } => {
-  if (typeof window === 'undefined') return { screen: 'login', token: '' };
-  const params = new URLSearchParams(window.location.search);
-  const invite = params.get('invite') || '';
-  if (invite) return { screen: 'invite', token: invite };
-  const reset = params.get('reset') || '';
-  if (reset) return { screen: 'reset', token: reset };
-  return { screen: 'login', token: '' };
-};
-
-const clearAuthQueryParams = () => {
-  if (typeof window === 'undefined') return;
-  const url = new URL(window.location.href);
-  url.searchParams.delete('invite');
-  url.searchParams.delete('reset');
-  const next = `${url.pathname}${url.search}${url.hash}`;
-  window.history.replaceState({}, document.title, next);
 };
 
 const AI_SUGGESTED_QUESTIONS = [
@@ -262,15 +237,15 @@ const auditActionLabel = (action: string): string => {
     FINDING_UPDATED: 'Updated finding',
     FINDING_MQE_RECALCULATED: 'Recalculated MQE',
     FINDING_DELETED: 'Deleted finding',
-    USER_INVITED: 'Invited user',
-    USER_INVITE_RESENT: 'Resent invitation',
-    USER_INVITE_ACCEPTED: 'Completed account setup',
+    USER_CREATED: 'Created user',
     USER_UPDATED: 'Updated user',
     USER_ACTIVATED: 'Activated user',
     USER_DEACTIVATED: 'Deactivated user',
     USER_ROLE_CHANGED: 'Changed user role',
-    PASSWORD_RESET_LINK_SENT: 'Sent password reset',
-    USER_PASSWORD_CHANGED: 'Changed password',
+    USER_CREDENTIAL_RESET: 'Reset credential',
+    USER_PIN_CHANGED: 'Changed PIN',
+    ADMIN_PASSWORD_CHANGED: 'Changed admin password',
+    USER_SIGNED_IN: 'Signed in',
     AUDITOR_LIST_UPDATED: 'Updated auditor list',
     MQE_MAPPING_UPDATED: 'Updated MQE mapping',
     SETTINGS_UPDATED: 'Updated settings',
@@ -413,12 +388,14 @@ export default function App() {
   const isAuthenticated = Boolean(authToken && currentUser);
   const isAdmin = currentUser?.role === 'admin';
 
-  const [initialAuthUrl] = useState(() => getInitialAuthUrlState());
-  const [authScreen, setAuthScreen] = useState<AuthScreen>(initialAuthUrl.screen);
-  const [authOneTimeToken, setAuthOneTimeToken] = useState(initialAuthUrl.token);
   const [showLoginModal, setShowLoginModal] = useState(() => (
-    initialAuthUrl.screen !== 'login' || !localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || !readStoredCurrentUser()
+    !localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || !readStoredCurrentUser()
   ));
+  const [loginMode, setLoginMode] = useState<LoginMode>('user');
+  const [publicEmployees, setPublicEmployees] = useState<PublicEmployee[]>([]);
+  const [publicEmployeesLoading, setPublicEmployeesLoading] = useState(false);
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
+  const [loginPin, setLoginPin] = useState('');
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
@@ -426,16 +403,11 @@ export default function App() {
   const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [sessionExpired, setSessionExpired] = useState(false);
 
-  const [forgotIdentifier, setForgotIdentifier] = useState('');
-  const [forgotMessage, setForgotMessage] = useState('');
-  const [forgotPreviewUrl, setForgotPreviewUrl] = useState('');
-  const [publicAuthLoading, setPublicAuthLoading] = useState(false);
-  const [publicAuthError, setPublicAuthError] = useState('');
-  const [publicAuthSuccess, setPublicAuthSuccess] = useState('');
-  const [oneTimeAccount, setOneTimeAccount] = useState<OneTimeAccountInfo | null>(null);
-  const [newAccountPassword, setNewAccountPassword] = useState('');
-  const [confirmAccountPassword, setConfirmAccountPassword] = useState('');
-  const [showNewAccountPassword, setShowNewAccountPassword] = useState(false);
+  const [showCredentialChangeModal, setShowCredentialChangeModal] = useState(false);
+  const [newCredential, setNewCredential] = useState('');
+  const [confirmCredential, setConfirmCredential] = useState('');
+  const [credentialChangeError, setCredentialChangeError] = useState('');
+  const [changingCredential, setChangingCredential] = useState(false);
 
   const clearAuthSession = (expired = false) => {
     localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
@@ -446,7 +418,7 @@ export default function App() {
     setAuthToken(null);
     setCurrentUser(null);
     setSessionExpired(expired);
-    if (authScreen === 'login' || authScreen === 'forgot') setAuthScreen('login');
+    setShowCredentialChangeModal(false);
     setShowLoginModal(true);
     if (view === 'settings' || view === 'action-center' || view === 'ai-insights') setView('ipqc');
   };
@@ -458,6 +430,7 @@ export default function App() {
     };
     const response = await fetch(url, { ...options, headers });
     if (response.status === 401) clearAuthSession(true);
+    if (response.status === 428) setShowCredentialChangeModal(true);
     return response;
   };
 
@@ -474,6 +447,26 @@ export default function App() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Standard-user sign in uses a simple approved employee selector + 6-digit PIN.
+  // The public endpoint returns only active standard-user display information.
+  useEffect(() => {
+    if (!showLoginModal || loginMode !== 'user') return;
+    let cancelled = false;
+    setPublicEmployeesLoading(true);
+    fetch(`${API_BASE_URL}/api/public-users`)
+      .then(async (response) => {
+        const data = await response.json().catch(() => ([]));
+        if (!cancelled && response.ok) setPublicEmployees(Array.isArray(data) ? data : []);
+      })
+      .catch(() => {
+        if (!cancelled) setPublicEmployees([]);
+      })
+      .finally(() => {
+        if (!cancelled) setPublicEmployeesLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [showLoginModal, loginMode]);
   
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
@@ -509,11 +502,12 @@ export default function App() {
   const [usersLoading, setUsersLoading] = useState(false);
   const [usersSaving, setUsersSaving] = useState(false);
   const [userManagementError, setUserManagementError] = useState('');
-  const [userManagementNotice, setUserManagementNotice] = useState<{ message: string; previewUrl?: string; warning?: boolean } | null>(null);
   const [showCreateUser, setShowCreateUser] = useState(false);
   const [newUserDraft, setNewUserDraft] = useState({
-    fullName: '', email: '', username: '', role: 'user' as UserRole, jobTitle: '', department: ''
+    fullName: '', employeeId: '', username: '', credential: '', role: 'user' as UserRole, jobTitle: '', department: ''
   });
+  const [resetCredentialUserId, setResetCredentialUserId] = useState<number | null>(null);
+  const [resetCredentialValue, setResetCredentialValue] = useState('');
 
   // Admin audit trail: recent business/system mutations with authenticated actor.
   const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([]);
@@ -598,14 +592,15 @@ export default function App() {
         setCurrentUser(data.user);
         localStorage.setItem(CURRENT_USER_STORAGE_KEY, JSON.stringify(data.user));
         setSessionExpired(false);
-        setShowLoginModal(authScreen !== 'login');
+        setShowLoginModal(false);
+        setShowCredentialChangeModal(Boolean(data.user.mustChangeCredential));
       })
       .catch(() => {
         if (!cancelled) clearAuthSession(true);
       });
 
     return () => { cancelled = true; };
-  }, [authToken, authScreen]);
+  }, [authToken]);
 
 
   const analyticsData = useMemo(() => {
@@ -722,129 +717,16 @@ export default function App() {
     return [...source].sort((a, b) => b.value - a.value);
   }, [analyticsData, analyticsDimension]);
 
-  useEffect(() => {
-    if (!authOneTimeToken || (authScreen !== 'invite' && authScreen !== 'reset')) return;
-
-    let cancelled = false;
-    setPublicAuthLoading(true);
-    setPublicAuthError('');
-    setPublicAuthSuccess('');
-    setOneTimeAccount(null);
-    setShowLoginModal(true);
-
-    const endpoint = authScreen === 'invite'
-      ? `${API_BASE_URL}/api/auth/invite/validate?token=${encodeURIComponent(authOneTimeToken)}`
-      : `${API_BASE_URL}/api/password-reset/validate?token=${encodeURIComponent(authOneTimeToken)}`;
-
-    fetch(endpoint)
-      .then(async response => {
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.error || 'This secure link could not be validated.');
-        if (!cancelled) setOneTimeAccount(data.account || null);
-      })
-      .catch(err => {
-        if (!cancelled) setPublicAuthError(err instanceof Error ? err.message : 'This secure link could not be validated.');
-      })
-      .finally(() => {
-        if (!cancelled) setPublicAuthLoading(false);
-      });
-
-    return () => { cancelled = true; };
-  }, [authScreen, authOneTimeToken]);
-
-  const returnToLogin = () => {
-    clearAuthQueryParams();
-    setAuthScreen('login');
-    setAuthOneTimeToken('');
-    setOneTimeAccount(null);
-    setNewAccountPassword('');
-    setConfirmAccountPassword('');
-    setShowNewAccountPassword(false);
-    setPublicAuthError('');
-    setPublicAuthSuccess('');
-    setForgotMessage('');
-    setForgotPreviewUrl('');
-    setShowLoginModal(true);
-  };
-
-  const handleForgotPasswordRequest = async (e: FormEvent) => {
-    e.preventDefault();
-    const identifier = forgotIdentifier.trim();
-    if (!identifier || publicAuthLoading) return;
-
-    setPublicAuthLoading(true);
-    setPublicAuthError('');
-    setForgotMessage('');
-    setForgotPreviewUrl('');
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/password-reset/request`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || 'Could not request a password reset.');
-      setForgotMessage(data.message || 'If a matching account exists, a reset link has been sent.');
-      setForgotPreviewUrl(data.previewUrl || '');
-    } catch (err) {
-      setPublicAuthError(err instanceof Error ? err.message : 'Could not request a password reset.');
-    } finally {
-      setPublicAuthLoading(false);
-    }
-  };
-
-  const validateNewPassword = () => {
-    if (newAccountPassword.length < 10) return 'Password must be at least 10 characters.';
-    if (newAccountPassword !== confirmAccountPassword) return 'Passwords do not match.';
-    return '';
-  };
-
-  const handleCompleteOneTimePassword = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!authOneTimeToken || publicAuthLoading) return;
-    const validation = validateNewPassword();
-    if (validation) {
-      setPublicAuthError(validation);
-      return;
-    }
-
-    setPublicAuthLoading(true);
-    setPublicAuthError('');
-    try {
-      const endpoint = authScreen === 'invite'
-        ? `${API_BASE_URL}/api/auth/invite/accept`
-        : `${API_BASE_URL}/api/password-reset/confirm`;
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: authOneTimeToken, password: newAccountPassword }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || 'Could not update your account password.');
-      setPublicAuthSuccess(data.message || (authScreen === 'invite' ? 'Account setup complete.' : 'Password updated.'));
-      setNewAccountPassword('');
-      setConfirmAccountPassword('');
-      clearAuthQueryParams();
-      if (authScreen === 'reset') {
-        localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
-        localStorage.removeItem(CURRENT_USER_STORAGE_KEY);
-        setAuthToken(null);
-        setCurrentUser(null);
-        setSessionExpired(false);
-      }
-    } catch (err) {
-      setPublicAuthError(err instanceof Error ? err.message : 'Could not update your account password.');
-    } finally {
-      setPublicAuthLoading(false);
-    }
-  };
-
   const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
 
-    const identifier = loginUsername.trim();
-    if (!identifier || !loginPassword) {
-      setLoginError('Enter your email/username and password to continue.');
+    if (loginMode === 'user') {
+      if (!selectedEmployeeId || !/^\d{6}$/.test(loginPin)) {
+        setLoginError('Select your name and enter your 6-digit PIN.');
+        return;
+      }
+    } else if (!loginUsername.trim() || !loginPassword) {
+      setLoginError('Enter your administrator username and password.');
       return;
     }
 
@@ -855,11 +737,12 @@ export default function App() {
       const response = await fetch(`${API_BASE_URL}/api/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier, password: loginPassword }),
+        body: JSON.stringify(loginMode === 'user'
+          ? { mode: 'user', employeeId: selectedEmployeeId, pin: loginPin }
+          : { mode: 'admin', username: loginUsername.trim(), password: loginPassword }),
       });
 
       const data = await response.json().catch(() => ({}));
-
       if (response.ok && data.token && data.user) {
         localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, data.token);
         localStorage.setItem(CURRENT_USER_STORAGE_KEY, JSON.stringify(data.user));
@@ -867,15 +750,18 @@ export default function App() {
         localStorage.removeItem('ipqc_admin_username');
         setAuthToken(data.token);
         setCurrentUser(data.user);
-        setAuthScreen('login');
         setShowLoginModal(false);
         setSessionExpired(false);
         setLoginError('');
+        setLoginPin('');
         setLoginPassword('');
         setLoginUsername('');
         setShowLoginPassword(false);
+        setShowCredentialChangeModal(Boolean(data.user.mustChangeCredential));
       } else {
-        setLoginError(data.error || 'Sign in could not be completed. Please try again.');
+        setLoginError(data.error || (loginMode === 'user'
+          ? 'Invalid employee or PIN. Please try again.'
+          : 'Invalid administrator credentials. Please try again.'));
       }
     } catch (err) {
       setLoginError('Could not reach the server. Check your connection and try again.');
@@ -884,11 +770,60 @@ export default function App() {
     }
   };
 
+  const handleCredentialChange = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!authToken || !currentUser || changingCredential) return;
+
+    const isUserPin = currentUser.role === 'user';
+    if (isUserPin && !/^\d{6}$/.test(newCredential)) {
+      setCredentialChangeError('Choose a 6-digit PIN.');
+      return;
+    }
+    if (!isUserPin && newCredential.length < 10) {
+      setCredentialChangeError('Administrator password must be at least 10 characters.');
+      return;
+    }
+    if (newCredential !== confirmCredential) {
+      setCredentialChangeError(isUserPin ? 'PINs do not match.' : 'Passwords do not match.');
+      return;
+    }
+
+    setChangingCredential(true);
+    setCredentialChangeError('');
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/change-credential`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify(isUserPin ? { pin: newCredential } : { password: newCredential }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.token || !data.user) {
+        throw new Error(data.error || 'Could not update your credential.');
+      }
+
+      localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, data.token);
+      localStorage.setItem(CURRENT_USER_STORAGE_KEY, JSON.stringify(data.user));
+      setAuthToken(data.token);
+      setCurrentUser(data.user);
+      setNewCredential('');
+      setConfirmCredential('');
+      setShowCredentialChangeModal(false);
+    } catch (err) {
+      setCredentialChangeError(err instanceof Error ? err.message : 'Could not update your credential.');
+    } finally {
+      setChangingCredential(false);
+    }
+  };
+
   const closeLoginModal = () => {
-    if (loggingIn || publicAuthLoading || !isAuthenticated || authScreen !== 'login') return;
+    if (loggingIn || !isAuthenticated) return;
     setShowLoginModal(false);
     setLoginError('');
     setSessionExpired(false);
+    setLoginPin('');
     setLoginPassword('');
     setShowLoginPassword(false);
   };
@@ -901,7 +836,9 @@ export default function App() {
     setAuthToken(null);
     setCurrentUser(null);
     setSessionExpired(false);
-    setAuthScreen('login');
+    setShowCredentialChangeModal(false);
+    setSelectedEmployeeId('');
+    setLoginPin('');
     setShowLoginModal(true);
     setProfileMenuOpen(false);
     setView('ipqc');
@@ -1042,32 +979,25 @@ export default function App() {
     }
   }, [view, isAdmin, authToken]);
 
-  const handleInviteUser = async (e: FormEvent) => {
+  const handleCreateUser = async (e: FormEvent) => {
     e.preventDefault();
     if (usersSaving) return;
     setUsersSaving(true);
     setUserManagementError('');
-    setUserManagementNotice(null);
     try {
-      const response = await authFetch(`${API_BASE_URL}/api/users/invite`, {
+      const response = await authFetch(`${API_BASE_URL}/api/users`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newUserDraft),
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || 'Failed to create invitation.');
-      const createdUser = data.user as ManagedUser;
-      setManagedUsers(prev => [...prev, createdUser].sort((a, b) => a.fullName.localeCompare(b.fullName)));
-      setNewUserDraft({ fullName: '', email: '', username: '', role: 'user', jobTitle: '', department: '' });
+      if (!response.ok) throw new Error(data.error || 'Failed to create user.');
+      setManagedUsers(prev => [...prev, data].sort((a, b) => a.fullName.localeCompare(b.fullName)));
+      setNewUserDraft({ fullName: '', employeeId: '', username: '', credential: '', role: 'user', jobTitle: '', department: '' });
       setShowCreateUser(false);
-      setUserManagementNotice({
-        message: data.message || `Invitation created for ${createdUser.fullName}.`,
-        previewUrl: data.delivery?.previewUrl || '',
-        warning: data.delivery?.mode === 'failed',
-      });
       fetchAuditLog();
     } catch (err) {
-      setUserManagementError(err instanceof Error ? err.message : 'Failed to create invitation.');
+      setUserManagementError(err instanceof Error ? err.message : 'Failed to create user.');
     } finally {
       setUsersSaving(false);
     }
@@ -1077,13 +1007,12 @@ export default function App() {
     if (usersSaving) return;
     setUsersSaving(true);
     setUserManagementError('');
-    setUserManagementNotice(null);
     try {
       const payload = {
         username: patch.username ?? user.username,
-        email: patch.email ?? user.email ?? '',
+        employeeId: patch.employeeId ?? user.employeeId ?? '',
         fullName: patch.fullName ?? user.fullName,
-        role: patch.role ?? user.role,
+        role: user.role,
         jobTitle: patch.jobTitle ?? user.jobTitle ?? '',
         department: patch.department ?? user.department ?? '',
         isActive: patch.isActive ?? user.isActive,
@@ -1100,7 +1029,6 @@ export default function App() {
         setCurrentUser(data);
         localStorage.setItem(CURRENT_USER_STORAGE_KEY, JSON.stringify(data));
       }
-      setUserManagementNotice({ message: `${data.fullName || user.fullName} account updated.` });
       fetchAuditLog();
     } catch (err) {
       setUserManagementError(err instanceof Error ? err.message : 'Failed to update user.');
@@ -1109,51 +1037,37 @@ export default function App() {
     }
   };
 
-  const handleResendInvite = async (user: ManagedUser) => {
-    if (usersSaving) return;
+  const handleResetUserCredential = async (e: FormEvent) => {
+    e.preventDefault();
+    const target = managedUsers.find(user => user.id === resetCredentialUserId);
+    if (!target || usersSaving) return;
+    const valid = target.role === 'user' ? /^\d{6}$/.test(resetCredentialValue) : resetCredentialValue.length >= 10;
+    if (!valid) return;
+
     setUsersSaving(true);
     setUserManagementError('');
-    setUserManagementNotice(null);
     try {
-      const response = await authFetch(`${API_BASE_URL}/api/users/${user.id}/resend-invite`, {
+      const response = await authFetch(`${API_BASE_URL}/api/users/${target.id}/reset-credential`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credential: resetCredentialValue }),
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || 'Failed to resend invitation.');
-      setUserManagementNotice({
-        message: data.message || `Invitation resent to ${user.email}.`,
-        previewUrl: data.delivery?.previewUrl || '',
-      });
-      await fetchManagedUsers();
+      if (!response.ok) throw new Error(data.error || 'Failed to reset credential.');
+      setResetCredentialUserId(null);
+      setResetCredentialValue('');
+      fetchManagedUsers();
       fetchAuditLog();
     } catch (err) {
-      setUserManagementError(err instanceof Error ? err.message : 'Failed to resend invitation.');
+      setUserManagementError(err instanceof Error ? err.message : 'Failed to reset credential.');
     } finally {
       setUsersSaving(false);
     }
   };
 
-  const handleSendPasswordReset = async (user: ManagedUser) => {
-    if (usersSaving) return;
-    setUsersSaving(true);
-    setUserManagementError('');
-    setUserManagementNotice(null);
-    try {
-      const response = await authFetch(`${API_BASE_URL}/api/users/${user.id}/send-password-reset`, {
-        method: 'POST',
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || 'Failed to send password-reset link.');
-      setUserManagementNotice({
-        message: data.message || `Password-reset link sent to ${user.email}.`,
-        previewUrl: data.delivery?.previewUrl || '',
-      });
-      fetchAuditLog();
-    } catch (err) {
-      setUserManagementError(err instanceof Error ? err.message : 'Failed to send password-reset link.');
-    } finally {
-      setUsersSaving(false);
-    }
+  const generateTemporaryPin = () => {
+    const pin = String(Math.floor(100000 + Math.random() * 900000));
+    setNewUserDraft(prev => ({ ...prev, credential: pin }));
   };
 
   // Backfills mqeEngineer on existing records using the current Platform-MQE
@@ -1910,6 +1824,7 @@ export default function App() {
                             {isAdmin ? 'Admin' : 'User'}
                           </span>
                           {currentUser?.jobTitle && <span className="truncate text-[10px] font-semibold text-slate-400">{currentUser.jobTitle}</span>}
+                          {currentUser?.role === 'user' && currentUser.employeeId && <span className="truncate font-mono text-[9px] font-semibold text-slate-400">ID {currentUser.employeeId}</span>}
                         </div>
                       </div>
                     </div>
@@ -4096,117 +4011,78 @@ export default function App() {
                         <div>
                           <h3 className="text-sm font-black text-slate-900">User Access Management</h3>
                           <p className="mt-0.5 max-w-2xl text-[10px] font-medium leading-4 text-slate-400">
-                            Invite employees by company email. They create their own password from a secure, expiring link; administrators never need to know employee passwords.
+                            Standard users sign in with Employee ID + a simple 6-digit PIN. Administrators use a username + strong password. Temporary credentials must be changed on first sign-in.
                           </p>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[9px] font-black uppercase tracking-wider text-emerald-700">
-                          {managedUsers.filter(user => user.accountStatus === 'active').length} active
-                        </span>
-                        <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[9px] font-black uppercase tracking-wider text-amber-700">
-                          {managedUsers.filter(user => user.accountStatus === 'pending').length} pending
+                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[9px] font-black uppercase tracking-wider text-slate-500">
+                          {managedUsers.filter(user => user.isActive).length} active
                         </span>
                         <button
                           type="button"
-                          onClick={() => {
-                            setShowCreateUser(value => !value);
-                            setUserManagementError('');
-                            setUserManagementNotice(null);
-                          }}
+                          onClick={() => { setShowCreateUser(value => !value); setUserManagementError(''); }}
                           className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-brand-orange px-3.5 text-[10px] font-black uppercase tracking-wider text-white transition-all hover:brightness-105"
                         >
-                          <Mail size={13} /> {showCreateUser ? 'Close' : 'Invite user'}
+                          <Plus size={13} /> {showCreateUser ? 'Close' : 'Add account'}
                         </button>
                       </div>
                     </div>
 
                     {showCreateUser && (
-                      <form onSubmit={handleInviteUser} className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
-                        <div className="mb-3 flex items-start gap-2.5 rounded-lg border border-blue-100 bg-blue-50/70 px-3 py-2.5">
-                          <Mail size={14} className="mt-0.5 shrink-0 text-blue-600" />
-                          <p className="text-[10px] font-medium leading-4 text-blue-700">
-                            The employee receives a setup link and chooses their own password. The account remains <span className="font-black">Pending</span> until setup is completed.
-                          </p>
+                      <form onSubmit={handleCreateUser} className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+                        <div className="mb-3 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-[10px] font-semibold leading-4 text-blue-700">
+                          For floor users, create a temporary 6-digit PIN and give it directly to the employee. They will be forced to choose their own PIN on first sign-in. No email or SMTP is required.
                         </div>
                         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                          <FormInput
-                            label="Full name"
-                            required
-                            value={newUserDraft.fullName}
-                            onChange={(v: string) => setNewUserDraft(prev => ({ ...prev, fullName: v }))}
-                            placeholder="Employee full name"
-                          />
-                          <FormInput
-                            label="Company email"
-                            type="email"
-                            required
-                            value={newUserDraft.email}
-                            onChange={(v: string) => setNewUserDraft(prev => ({ ...prev, email: v }))}
-                            placeholder="name@company.com"
-                          />
-                          <FormInput
-                            label="Username (optional)"
-                            value={newUserDraft.username}
-                            onChange={(v: string) => setNewUserDraft(prev => ({ ...prev, username: v }))}
-                            placeholder="Auto-created from email if blank"
-                          />
-                          <FormSelect
-                            label="System role"
-                            required
-                            value={newUserDraft.role}
-                            onChange={(v: UserRole) => setNewUserDraft(prev => ({ ...prev, role: v }))}
-                            options={['user', 'admin']}
-                          />
-                          <FormInput
-                            label="Job title / function"
-                            value={newUserDraft.jobTitle}
-                            onChange={(v: string) => setNewUserDraft(prev => ({ ...prev, jobTitle: v }))}
-                            placeholder="Operator, IPQC Auditor, MQE..."
-                          />
-                          <FormInput
-                            label="Department"
-                            value={newUserDraft.department}
-                            onChange={(v: string) => setNewUserDraft(prev => ({ ...prev, department: v }))}
-                            placeholder="Production, Quality, Test..."
-                          />
+                          <FormInput label="Full name" required value={newUserDraft.fullName} onChange={(v: string) => setNewUserDraft(prev => ({ ...prev, fullName: v }))} placeholder="Employee full name" />
+                          <FormSelect label="System role" required value={newUserDraft.role} onChange={(v: UserRole) => setNewUserDraft(prev => ({ ...prev, role: v, employeeId: '', username: '', credential: '' }))} options={['user', 'admin']} />
+                          {newUserDraft.role === 'user' ? (
+                            <FormInput label="Employee ID" required value={newUserDraft.employeeId} onChange={(v: string) => setNewUserDraft(prev => ({ ...prev, employeeId: v }))} placeholder="e.g. 104582" />
+                          ) : (
+                            <FormInput label="Admin username" required value={newUserDraft.username} onChange={(v: string) => setNewUserDraft(prev => ({ ...prev, username: v }))} placeholder="e.g. quality.admin" />
+                          )}
+                          <FormInput label="Job title / function" value={newUserDraft.jobTitle} onChange={(v: string) => setNewUserDraft(prev => ({ ...prev, jobTitle: v }))} placeholder="Operator, IPQC Auditor, MQE..." />
+                          <FormInput label="Department" value={newUserDraft.department} onChange={(v: string) => setNewUserDraft(prev => ({ ...prev, department: v }))} placeholder="Production, Quality, Test..." />
+                          <div className="flex flex-col gap-1.5">
+                            <label className="text-[11px] font-semibold text-slate-700">
+                              {newUserDraft.role === 'user' ? 'Temporary 6-digit PIN' : 'Temporary admin password'}<span className="ml-0.5 text-rose-500">*</span>
+                            </label>
+                            <div className="flex gap-2">
+                              <input
+                                type={newUserDraft.role === 'user' ? 'text' : 'password'}
+                                inputMode={newUserDraft.role === 'user' ? 'numeric' : undefined}
+                                maxLength={newUserDraft.role === 'user' ? 6 : undefined}
+                                value={newUserDraft.credential}
+                                onChange={(e) => setNewUserDraft(prev => ({
+                                  ...prev,
+                                  credential: newUserDraft.role === 'user' ? e.target.value.replace(/\D/g, '').slice(0, 6) : e.target.value,
+                                }))}
+                                placeholder={newUserDraft.role === 'user' ? '6 digits' : 'Minimum 10 characters'}
+                                className="h-11 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3.5 text-sm font-medium text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/10"
+                              />
+                              {newUserDraft.role === 'user' && (
+                                <button type="button" onClick={generateTemporaryPin} className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-[9px] font-black uppercase tracking-wider text-slate-600 hover:bg-slate-50">
+                                  Generate
+                                </button>
+                              )}
+                            </div>
+                          </div>
                         </div>
                         <div className="mt-3 flex justify-end">
                           <button
                             type="submit"
-                            disabled={usersSaving || !newUserDraft.fullName.trim() || !newUserDraft.email.trim()}
+                            disabled={usersSaving || !newUserDraft.fullName.trim() || (
+                              newUserDraft.role === 'user'
+                                ? !newUserDraft.employeeId.trim() || !/^\d{6}$/.test(newUserDraft.credential)
+                                : !newUserDraft.username.trim() || newUserDraft.credential.length < 10
+                            )}
                             className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 text-[10px] font-black uppercase tracking-wider text-white transition-all hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
                           >
-                            {usersSaving ? <RefreshCw size={14} className="animate-spin" /> : <Send size={14} />}
-                            Send invitation
+                            <ShieldCheck size={14} /> Create account
                           </button>
                         </div>
                       </form>
-                    )}
-
-                    {userManagementNotice && (
-                      <div className={`mt-3 flex items-start gap-2 rounded-lg border px-3 py-2.5 text-[11px] font-semibold ${
-                        userManagementNotice.warning
-                          ? 'border-amber-200 bg-amber-50 text-amber-800'
-                          : 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                      }`}>
-                        {userManagementNotice.warning
-                          ? <AlertCircle size={14} className="mt-0.5 shrink-0" />
-                          : <CheckCircle2 size={14} className="mt-0.5 shrink-0" />}
-                        <div className="min-w-0">
-                          <p>{userManagementNotice.message}</p>
-                          {userManagementNotice.previewUrl && (
-                            <a
-                              href={userManagementNotice.previewUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="mt-1 inline-flex items-center gap-1 text-[10px] font-black underline underline-offset-2"
-                            >
-                              Open local development link <ArrowRight size={11} />
-                            </a>
-                          )}
-                        </div>
-                      </div>
                     )}
 
                     {userManagementError && (
@@ -4217,23 +4093,22 @@ export default function App() {
                   </div>
 
                   <div className="overflow-auto custom-scrollbar">
-                    <table className="w-full min-w-[1120px] text-left">
+                    <table className="w-full min-w-[940px] text-left">
                       <thead className="bg-slate-50/95">
                         <tr className="border-b border-slate-200">
-                          <th className="px-5 py-3 text-[9px] font-black uppercase tracking-[0.14em] text-slate-400 md:px-6">User</th>
-                          <th className="px-5 py-3 text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Email</th>
-                          <th className="px-5 py-3 text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Username</th>
+                          <th className="px-5 py-3 text-[9px] font-black uppercase tracking-[0.14em] text-slate-400 md:px-6">Person</th>
+                          <th className="px-5 py-3 text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Identity</th>
                           <th className="px-5 py-3 text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Department</th>
                           <th className="px-5 py-3 text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Role</th>
-                          <th className="px-5 py-3 text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Access</th>
-                          <th className="px-5 py-3 text-right text-[9px] font-black uppercase tracking-[0.14em] text-slate-400 md:px-6">Account security</th>
+                          <th className="px-5 py-3 text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Status</th>
+                          <th className="px-5 py-3 text-right text-[9px] font-black uppercase tracking-[0.14em] text-slate-400 md:px-6">Security</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {usersLoading ? (
-                          <tr><td colSpan={7} className="px-6 py-10 text-center text-xs font-semibold text-slate-400">Loading user accounts...</td></tr>
+                          <tr><td colSpan={6} className="px-6 py-10 text-center text-xs font-semibold text-slate-400">Loading accounts...</td></tr>
                         ) : managedUsers.length === 0 ? (
-                          <tr><td colSpan={7} className="px-6 py-10 text-center text-xs font-semibold text-slate-400">No user accounts found.</td></tr>
+                          <tr><td colSpan={6} className="px-6 py-10 text-center text-xs font-semibold text-slate-400">No accounts found.</td></tr>
                         ) : managedUsers.map(user => (
                           <tr key={user.id} className="transition-colors hover:bg-slate-50/70">
                             <td className="px-5 py-3.5 md:px-6">
@@ -4248,63 +4123,43 @@ export default function App() {
                               </div>
                             </td>
                             <td className="px-5 py-3.5">
-                              <p className="max-w-[230px] truncate text-[11px] font-semibold text-slate-600">{user.email || '—'}</p>
+                              <p className="font-mono text-[11px] font-semibold text-slate-600">{user.role === 'user' ? (user.employeeId || 'ID not set') : user.username}</p>
+                              <p className="mt-0.5 text-[9px] font-semibold uppercase tracking-wider text-slate-400">{user.role === 'user' ? 'Employee ID' : 'Admin username'}</p>
                             </td>
-                            <td className="px-5 py-3.5 font-mono text-[11px] font-semibold text-slate-600">{user.username}</td>
                             <td className="px-5 py-3.5 text-xs font-semibold text-slate-600">{user.department || '—'}</td>
                             <td className="px-5 py-3.5">
-                              <select
-                                value={user.role}
-                                disabled={usersSaving || currentUser?.id === user.id}
-                                onChange={(e) => updateManagedUser(user, { role: e.target.value as UserRole })}
-                                className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-[10px] font-black uppercase tracking-wider text-slate-600 outline-none disabled:bg-slate-50 disabled:text-slate-400"
-                              >
-                                <option value="user">User</option>
-                                <option value="admin">Admin</option>
-                              </select>
+                              <span className={`inline-flex rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-wider ${user.role === 'admin' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+                                {user.role}
+                              </span>
                             </td>
                             <td className="px-5 py-3.5">
+                              <div className="flex flex-col items-start gap-1.5">
+                                <button
+                                  type="button"
+                                  disabled={usersSaving || currentUser?.id === user.id}
+                                  onClick={() => updateManagedUser(user, { isActive: !user.isActive })}
+                                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-wider disabled:cursor-not-allowed disabled:opacity-50 ${user.isActive ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-500'}`}
+                                >
+                                  <span className={`h-1.5 w-1.5 rounded-full ${user.isActive ? 'bg-emerald-500' : 'bg-slate-400'}`} />
+                                  {user.isActive ? 'Active' : 'Inactive'}
+                                </button>
+                                {user.mustChangeCredential && user.isActive && (
+                                  <span className="text-[9px] font-bold text-amber-600">Temporary credential</span>
+                                )}
+                                {!user.credentialReady && (
+                                  <span className="text-[9px] font-bold text-rose-600">Credential not set</span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="px-5 py-3.5 text-right md:px-6">
                               <button
                                 type="button"
                                 disabled={usersSaving || currentUser?.id === user.id}
-                                onClick={() => updateManagedUser(user, { isActive: !user.isActive })}
-                                title={user.isActive ? 'Deactivate account' : 'Reactivate account'}
-                                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-wider disabled:cursor-not-allowed disabled:opacity-50 ${
-                                  user.accountStatus === 'active'
-                                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                                    : user.accountStatus === 'pending'
-                                      ? 'border-amber-200 bg-amber-50 text-amber-700'
-                                      : 'border-slate-200 bg-slate-50 text-slate-500'
-                                }`}
+                                onClick={() => { setResetCredentialUserId(user.id); setResetCredentialValue(''); setUserManagementError(''); }}
+                                className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[9px] font-black uppercase tracking-wider text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
                               >
-                                <span className={`h-1.5 w-1.5 rounded-full ${
-                                  user.accountStatus === 'active' ? 'bg-emerald-500' : user.accountStatus === 'pending' ? 'bg-amber-500' : 'bg-slate-400'
-                                }`} />
-                                {user.accountStatus === 'active' ? 'Active' : user.accountStatus === 'pending' ? 'Pending setup' : 'Inactive'}
+                                <Lock size={12} /> {user.role === 'user' ? 'Reset PIN' : 'Reset password'}
                               </button>
-                            </td>
-                            <td className="px-5 py-3.5 text-right md:px-6">
-                              {user.accountStatus === 'pending' ? (
-                                <button
-                                  type="button"
-                                  disabled={usersSaving || !user.email}
-                                  onClick={() => handleResendInvite(user)}
-                                  className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[9px] font-black uppercase tracking-wider text-amber-700 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-40"
-                                >
-                                  <Send size={12} /> Resend invite
-                                </button>
-                              ) : user.accountStatus === 'active' ? (
-                                <button
-                                  type="button"
-                                  disabled={usersSaving || !user.email}
-                                  onClick={() => handleSendPasswordReset(user)}
-                                  className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[9px] font-black uppercase tracking-wider text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
-                                >
-                                  <KeyRound size={12} /> Send reset link
-                                </button>
-                              ) : (
-                                <span className="text-[9px] font-bold uppercase tracking-wider text-slate-300">Reactivate first</span>
-                              )}
                             </td>
                           </tr>
                         ))}
@@ -4312,9 +4167,36 @@ export default function App() {
                     </table>
                   </div>
 
-                  <div className="border-t border-slate-100 bg-slate-50/60 px-5 py-3 text-[9px] font-medium leading-4 text-slate-400 md:px-6">
-                    Pending accounts cannot sign in until the employee accepts the invitation and creates a password. Deactivation preserves findings and audit history.
-                  </div>
+                  {resetCredentialUserId && (() => {
+                    const target = managedUsers.find(user => user.id === resetCredentialUserId);
+                    if (!target) return null;
+                    const isPin = target.role === 'user';
+                    const valid = isPin ? /^\d{6}$/.test(resetCredentialValue) : resetCredentialValue.length >= 10;
+                    return (
+                      <form onSubmit={handleResetUserCredential} className="flex flex-col gap-3 border-t border-slate-100 bg-slate-50/70 px-5 py-4 md:flex-row md:items-end md:px-6">
+                        <div className="flex-1">
+                          <label className="mb-1.5 block text-[10px] font-bold text-slate-600">
+                            Temporary {isPin ? 'PIN' : 'password'} for {target.fullName}
+                          </label>
+                          <input
+                            type={isPin ? 'text' : 'password'}
+                            inputMode={isPin ? 'numeric' : undefined}
+                            maxLength={isPin ? 6 : undefined}
+                            value={resetCredentialValue}
+                            onChange={(e) => setResetCredentialValue(isPin ? e.target.value.replace(/\D/g, '').slice(0, 6) : e.target.value)}
+                            placeholder={isPin ? '6 digits' : 'Minimum 10 characters'}
+                            autoComplete="new-password"
+                            className="h-10 w-full max-w-md rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 outline-none focus:border-brand-orange focus:ring-4 focus:ring-orange-100/60"
+                          />
+                          <p className="mt-1 text-[9px] font-medium text-slate-400">The account holder must replace this temporary credential at the next sign-in.</p>
+                        </div>
+                        <div className="flex gap-2">
+                          <button type="button" onClick={() => { setResetCredentialUserId(null); setResetCredentialValue(''); }} className="h-10 rounded-lg border border-slate-200 bg-white px-3.5 text-[10px] font-black uppercase tracking-wider text-slate-500">Cancel</button>
+                          <button type="submit" disabled={usersSaving || !valid} className="h-10 rounded-lg bg-slate-900 px-4 text-[10px] font-black uppercase tracking-wider text-white disabled:opacity-40">Update credential</button>
+                        </div>
+                      </form>
+                    );
+                  })()}
                 </section>
 
                 {/* Operational audit trail */}
@@ -4327,7 +4209,7 @@ export default function App() {
                       <div>
                         <h3 className="text-sm font-black text-slate-900">Operational Audit Trail</h3>
                         <p className="mt-0.5 text-[10px] font-medium text-slate-400">
-                          Authenticated changes to findings, accounts and protected system configuration.
+                          Verified PIN/password activity across findings, accounts and protected system configuration.
                         </p>
                       </div>
                     </div>
@@ -4957,9 +4839,7 @@ export default function App() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/30 p-4 backdrop-blur-[2px]"
-            onMouseDown={(e) => {
-              if (e.target === e.currentTarget) closeLoginModal();
-            }}
+            onMouseDown={(e) => { if (e.target === e.currentTarget) closeLoginModal(); }}
           >
             <motion.div
               role="dialog"
@@ -4969,334 +4849,223 @@ export default function App() {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.98, y: 12 }}
               transition={{ duration: 0.18, ease: 'easeOut' }}
-              className="w-full max-w-[440px] overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.22)]"
+              className="w-full max-w-[460px] overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.22)]"
             >
               <div className="border-b border-slate-100 px-7 py-6 sm:px-8">
                 <div className="flex items-start gap-3.5">
                   <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-orange-100 bg-orange-50 text-brand-orange">
-                    {authScreen === 'invite' ? <Mail size={20} strokeWidth={2.2} /> : authScreen === 'forgot' || authScreen === 'reset' ? <KeyRound size={20} strokeWidth={2.2} /> : <Lock size={20} strokeWidth={2.2} />}
+                    <Lock size={20} strokeWidth={2.2} />
                   </div>
                   <div className="min-w-0 pt-0.5">
-                    <h3 id="account-login-title" className="text-[21px] font-black tracking-[-0.02em] text-slate-900">
-                      {authScreen === 'invite'
-                        ? 'Set up your IPQC account'
-                        : authScreen === 'forgot'
-                          ? 'Reset your password'
-                          : authScreen === 'reset'
-                            ? 'Choose a new password'
-                            : 'Sign in to IPQC Tracker'}
-                    </h3>
+                    <h3 id="account-login-title" className="text-[21px] font-black tracking-[-0.02em] text-slate-900">IPQC Tracker</h3>
                     <p className="mt-1 text-[12px] font-medium leading-5 text-slate-500">
-                      {authScreen === 'invite'
-                        ? 'Create your own password to activate the account your administrator invited.'
-                        : authScreen === 'forgot'
-                          ? 'Enter your email or username and we’ll send a secure reset link to your registered email.'
-                          : authScreen === 'reset'
-                            ? 'Set a new password for your IPQC Tracker account.'
-                            : 'Use your company email or username to access the Quality Management System.'}
+                      Floor users use a simple Employee ID + PIN. Administrators use their protected account credentials.
                     </p>
                   </div>
                 </div>
               </div>
 
               <div className="px-7 py-6 sm:px-8">
-                {authScreen === 'login' && sessionExpired && (
+                {sessionExpired && (
                   <div className="mb-5 flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-amber-800">
                     <Clock size={16} className="mt-0.5 shrink-0" />
                     <div>
-                      <p className="text-[12px] font-bold">Session expired</p>
-                      <p className="mt-0.5 text-[11px] font-medium leading-4 text-amber-700">
-                        Sign in again to continue your IPQC session.
+                      <p className="text-[12px] font-bold">Session ended</p>
+                      <p className="mt-0.5 text-[11px] font-medium leading-4 text-amber-700">Identify yourself again to continue.</p>
+                    </div>
+                  </div>
+                )}
+
+                <div className="mb-5 grid grid-cols-2 rounded-xl bg-slate-100 p-1">
+                  <button
+                    type="button"
+                    onClick={() => { setLoginMode('user'); setLoginError(''); }}
+                    className={`h-10 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${loginMode === 'user' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                  >
+                    Employee
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setLoginMode('admin'); setLoginError(''); }}
+                    className={`h-10 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${loginMode === 'admin' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                  >
+                    Administrator
+                  </button>
+                </div>
+
+                <form onSubmit={handleLogin} className="space-y-5">
+                  {loginMode === 'user' ? (
+                    <>
+                      <div>
+                        <label htmlFor="employee-login-select" className="mb-2 block text-[12px] font-bold text-slate-700">Who are you?</label>
+                        <div className="relative">
+                          <select
+                            id="employee-login-select"
+                            value={selectedEmployeeId}
+                            onChange={(e) => { setSelectedEmployeeId(e.target.value); if (loginError) setLoginError(''); }}
+                            disabled={loggingIn || publicEmployeesLoading}
+                            autoFocus
+                            className="h-12 w-full appearance-none rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 pr-10 text-[13px] font-semibold text-slate-900 outline-none transition-all hover:border-slate-300 focus:border-brand-orange focus:bg-white focus:ring-4 focus:ring-orange-100/70 disabled:opacity-60"
+                          >
+                            <option value="">{publicEmployeesLoading ? 'Loading employees...' : 'Select your name'}</option>
+                            {publicEmployees.map(employee => (
+                              <option key={employee.id} value={employee.employeeId}>
+                                {employee.fullName} — {employee.employeeId}{employee.jobTitle ? ` · ${employee.jobTitle}` : ''}
+                              </option>
+                            ))}
+                          </select>
+                          <ChevronDown size={15} className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                        </div>
+                      </div>
+                      <div>
+                        <label htmlFor="employee-login-pin" className="mb-2 block text-[12px] font-bold text-slate-700">6-digit PIN</label>
+                        <input
+                          id="employee-login-pin"
+                          type="password"
+                          inputMode="numeric"
+                          maxLength={6}
+                          value={loginPin}
+                          onChange={(e) => { setLoginPin(e.target.value.replace(/\D/g, '').slice(0, 6)); if (loginError) setLoginError(''); }}
+                          placeholder="••••••"
+                          autoComplete="off"
+                          disabled={loggingIn}
+                          className="h-12 w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 text-center font-mono text-lg font-black tracking-[0.35em] text-slate-900 outline-none transition-all placeholder:tracking-[0.25em] placeholder:text-slate-300 hover:border-slate-300 focus:border-brand-orange focus:bg-white focus:ring-4 focus:ring-orange-100/70 disabled:opacity-60"
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        <label htmlFor="account-login-username" className="mb-2 block text-[12px] font-bold text-slate-700">Administrator username</label>
+                        <input
+                          id="account-login-username"
+                          type="text"
+                          value={loginUsername}
+                          onChange={(e) => { setLoginUsername(e.target.value); if (loginError) setLoginError(''); }}
+                          placeholder="Enter admin username"
+                          autoComplete="username"
+                          autoFocus
+                          disabled={loggingIn}
+                          className="h-12 w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 text-[13px] font-semibold text-slate-900 outline-none transition-all placeholder:text-slate-400 hover:border-slate-300 focus:border-brand-orange focus:bg-white focus:ring-4 focus:ring-orange-100/70 disabled:opacity-60"
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="account-login-password" className="mb-2 block text-[12px] font-bold text-slate-700">Password</label>
+                        <div className="relative">
+                          <input
+                            id="account-login-password"
+                            type={showLoginPassword ? 'text' : 'password'}
+                            value={loginPassword}
+                            onChange={(e) => { setLoginPassword(e.target.value); if (loginError) setLoginError(''); }}
+                            placeholder="Enter password"
+                            autoComplete="current-password"
+                            disabled={loggingIn}
+                            className="h-12 w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 pr-12 text-[13px] font-semibold text-slate-900 outline-none transition-all placeholder:text-slate-400 hover:border-slate-300 focus:border-brand-orange focus:bg-white focus:ring-4 focus:ring-orange-100/70 disabled:opacity-60"
+                          />
+                          <button type="button" onClick={() => setShowLoginPassword(value => !value)} className="absolute inset-y-0 right-0 flex w-12 items-center justify-center text-slate-400 hover:text-slate-700">
+                            {showLoginPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {loginError && (
+                    <div role="alert" className="flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-3 text-rose-700">
+                      <AlertCircle size={16} className="mt-0.5 shrink-0" />
+                      <p className="text-[11px] font-semibold leading-5">{loginError}</p>
+                    </div>
+                  )}
+
+                  <div className="flex items-start gap-2.5 rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-3">
+                    <ShieldCheck size={16} className="mt-0.5 shrink-0 text-slate-500" />
+                    <div>
+                      <p className="text-[11px] font-bold text-slate-600">Simple for the floor, accountable for QMS</p>
+                      <p className="mt-0.5 text-[10.5px] font-medium leading-4 text-slate-400">
+                        Your verified identity is attached automatically to created, edited and deleted findings. Never share your PIN.
                       </p>
                     </div>
                   </div>
-                )}
 
-                {authScreen === 'login' && (
-                  <form onSubmit={handleLogin} className="space-y-5">
-                    <div>
-                      <label htmlFor="account-login-username" className="mb-2 block text-[12px] font-bold text-slate-700">
-                        Email or username
-                      </label>
-                      <input
-                        id="account-login-username"
-                        type="text"
-                        value={loginUsername}
-                        onChange={(e) => {
-                          setLoginUsername(e.target.value);
-                          if (loginError) setLoginError('');
-                        }}
-                        placeholder="name@company.com or username"
-                        autoComplete="username"
-                        autoFocus
-                        disabled={loggingIn}
-                        className="h-12 w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 text-[13px] font-semibold text-slate-900 outline-none transition-all placeholder:font-medium placeholder:text-slate-400 hover:border-slate-300 focus:border-brand-orange focus:bg-white focus:ring-4 focus:ring-orange-100/70 disabled:cursor-not-allowed disabled:opacity-60"
-                      />
-                    </div>
-
-                    <div>
-                      <div className="mb-2 flex items-center justify-between gap-3">
-                        <label htmlFor="account-login-password" className="block text-[12px] font-bold text-slate-700">
-                          Password
-                        </label>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setAuthScreen('forgot');
-                            setForgotIdentifier(loginUsername.trim());
-                            setForgotMessage('');
-                            setForgotPreviewUrl('');
-                            setPublicAuthError('');
-                            setLoginError('');
-                          }}
-                          className="text-[10.5px] font-bold text-brand-orange transition-colors hover:text-orange-700"
-                        >
-                          Forgot password?
-                        </button>
-                      </div>
-                      <div className="relative">
-                        <input
-                          id="account-login-password"
-                          type={showLoginPassword ? 'text' : 'password'}
-                          value={loginPassword}
-                          onChange={(e) => {
-                            setLoginPassword(e.target.value);
-                            if (loginError) setLoginError('');
-                          }}
-                          placeholder="Enter password"
-                          autoComplete="current-password"
-                          disabled={loggingIn}
-                          className="h-12 w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 pr-12 text-[13px] font-semibold text-slate-900 outline-none transition-all placeholder:font-medium placeholder:text-slate-400 hover:border-slate-300 focus:border-brand-orange focus:bg-white focus:ring-4 focus:ring-orange-100/70 disabled:cursor-not-allowed disabled:opacity-60"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowLoginPassword((value) => !value)}
-                          disabled={loggingIn}
-                          aria-label={showLoginPassword ? 'Hide password' : 'Show password'}
-                          title={showLoginPassword ? 'Hide password' : 'Show password'}
-                          className="absolute inset-y-0 right-0 flex w-12 items-center justify-center text-slate-400 transition-colors hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-orange disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {showLoginPassword ? <EyeOff size={17} /> : <Eye size={17} />}
-                        </button>
-                      </div>
-                    </div>
-
-                    {loginError && (
-                      <div role="alert" className="flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-3 text-rose-700">
-                        <AlertCircle size={16} className="mt-0.5 shrink-0" />
-                        <p className="text-[11px] font-semibold leading-5">{loginError}</p>
-                      </div>
+                  <div className="flex flex-col-reverse gap-2.5 pt-1 sm:flex-row sm:justify-end">
+                    {isAuthenticated && (
+                      <button type="button" onClick={closeLoginModal} disabled={loggingIn} className="h-11 rounded-xl border border-slate-200 bg-white px-5 text-[12px] font-bold text-slate-600 hover:bg-slate-50 sm:min-w-[110px]">Cancel</button>
                     )}
-
-                    <div className="flex items-start gap-2.5 rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-3">
-                      <ShieldCheck size={16} className="mt-0.5 shrink-0 text-slate-500" />
-                      <div>
-                        <p className="text-[11px] font-bold text-slate-600">Individual account access</p>
-                        <p className="mt-0.5 text-[10.5px] font-medium leading-4 text-slate-400">
-                          Finding changes are linked to the signed-in employee for traceability. Administrators receive additional system controls based on their role.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col-reverse gap-2.5 pt-1 sm:flex-row sm:justify-end">
-                      {isAuthenticated && (
-                        <button
-                          type="button"
-                          onClick={closeLoginModal}
-                          disabled={loggingIn}
-                          className="h-11 rounded-xl border border-slate-200 bg-white px-5 text-[12px] font-bold text-slate-600 transition-all hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 focus:outline-none focus-visible:ring-4 focus-visible:ring-slate-100 disabled:cursor-not-allowed disabled:opacity-50 sm:min-w-[110px]"
-                        >
-                          Cancel
-                        </button>
-                      )}
-                      <button
-                        type="submit"
-                        disabled={loggingIn || !loginUsername.trim() || !loginPassword}
-                        className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-brand-orange px-5 text-[12px] font-black text-white shadow-[0_8px_20px_rgba(241,93,34,0.22)] transition-all hover:brightness-105 focus:outline-none focus-visible:ring-4 focus-visible:ring-orange-100 active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none sm:min-w-[132px]"
-                      >
-                        {loggingIn ? (
-                          <>
-                            <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/35 border-t-white" />
-                            Signing in
-                          </>
-                        ) : (
-                          <>
-                            Sign In
-                            <ArrowRight size={15} />
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  </form>
-                )}
-
-                {authScreen === 'forgot' && (
-                  <div>
-                    {forgotMessage ? (
-                      <div className="space-y-4">
-                        <div className="flex items-start gap-2.5 rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-3 text-emerald-800">
-                          <CheckCircle2 size={16} className="mt-0.5 shrink-0" />
-                          <div>
-                            <p className="text-[12px] font-bold">Check your email</p>
-                            <p className="mt-0.5 text-[11px] font-medium leading-5 text-emerald-700">{forgotMessage}</p>
-                            {forgotPreviewUrl && (
-                              <a href={forgotPreviewUrl} target="_blank" rel="noreferrer" className="mt-1.5 inline-flex items-center gap-1 text-[10px] font-black underline underline-offset-2">
-                                Open local development reset link <ArrowRight size={11} />
-                              </a>
-                            )}
-                          </div>
-                        </div>
-                        <button type="button" onClick={returnToLogin} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 text-[12px] font-black text-white hover:bg-slate-800">
-                          Back to sign in
-                        </button>
-                      </div>
-                    ) : (
-                      <form onSubmit={handleForgotPasswordRequest} className="space-y-5">
-                        <div>
-                          <label htmlFor="forgot-identifier" className="mb-2 block text-[12px] font-bold text-slate-700">Email or username</label>
-                          <input
-                            id="forgot-identifier"
-                            type="text"
-                            value={forgotIdentifier}
-                            onChange={(e) => { setForgotIdentifier(e.target.value); setPublicAuthError(''); }}
-                            placeholder="name@company.com or username"
-                            autoComplete="username"
-                            autoFocus
-                            className="h-12 w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 text-[13px] font-semibold text-slate-900 outline-none transition-all focus:border-brand-orange focus:bg-white focus:ring-4 focus:ring-orange-100/70"
-                          />
-                        </div>
-
-                        {publicAuthError && (
-                          <div className="flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-3 text-rose-700">
-                            <AlertCircle size={16} className="mt-0.5 shrink-0" />
-                            <p className="text-[11px] font-semibold leading-5">{publicAuthError}</p>
-                          </div>
-                        )}
-
-                        <div className="flex flex-col-reverse gap-2.5 sm:flex-row sm:justify-between">
-                          <button type="button" onClick={returnToLogin} className="h-11 rounded-xl border border-slate-200 bg-white px-5 text-[12px] font-bold text-slate-600 hover:bg-slate-50">
-                            Back
-                          </button>
-                          <button type="submit" disabled={publicAuthLoading || !forgotIdentifier.trim()} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 text-[12px] font-black text-white hover:bg-slate-800 disabled:opacity-50">
-                            {publicAuthLoading ? <RefreshCw size={14} className="animate-spin" /> : <Send size={14} />}
-                            Send reset link
-                          </button>
-                        </div>
-                      </form>
-                    )}
+                    <button
+                      type="submit"
+                      disabled={loggingIn || (loginMode === 'user' ? !selectedEmployeeId || loginPin.length !== 6 : !loginUsername.trim() || !loginPassword)}
+                      className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-brand-orange px-5 text-[12px] font-black text-white shadow-[0_8px_20px_rgba(241,93,34,0.22)] transition-all hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none sm:min-w-[132px]"
+                    >
+                      {loggingIn ? <><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/35 border-t-white" /> Signing in</> : <>Continue <ArrowRight size={15} /></>}
+                    </button>
                   </div>
-                )}
-
-                {(authScreen === 'invite' || authScreen === 'reset') && (
-                  <div>
-                    {publicAuthLoading && !oneTimeAccount && !publicAuthError ? (
-                      <div className="flex flex-col items-center justify-center py-8 text-center">
-                        <RefreshCw size={22} className="animate-spin text-brand-orange" />
-                        <p className="mt-3 text-xs font-bold text-slate-600">Validating secure link...</p>
-                      </div>
-                    ) : publicAuthSuccess ? (
-                      <div className="space-y-4">
-                        <div className="flex items-start gap-2.5 rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-3 text-emerald-800">
-                          <CheckCircle2 size={17} className="mt-0.5 shrink-0" />
-                          <div>
-                            <p className="text-[12px] font-bold">{authScreen === 'invite' ? 'Account activated' : 'Password updated'}</p>
-                            <p className="mt-0.5 text-[11px] font-medium leading-5 text-emerald-700">{publicAuthSuccess}</p>
-                          </div>
-                        </div>
-                        <button type="button" onClick={returnToLogin} className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-brand-orange px-5 text-[12px] font-black text-white shadow-sm hover:brightness-105">
-                          Continue to sign in <ArrowRight size={15} />
-                        </button>
-                      </div>
-                    ) : publicAuthError && !oneTimeAccount ? (
-                      <div className="space-y-4">
-                        <div className="flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-3 text-rose-700">
-                          <AlertCircle size={17} className="mt-0.5 shrink-0" />
-                          <div>
-                            <p className="text-[12px] font-bold">Secure link unavailable</p>
-                            <p className="mt-0.5 text-[11px] font-medium leading-5">{publicAuthError}</p>
-                          </div>
-                        </div>
-                        <button type="button" onClick={returnToLogin} className="h-11 w-full rounded-xl border border-slate-200 bg-white px-5 text-[12px] font-bold text-slate-700 hover:bg-slate-50">
-                          Back to sign in
-                        </button>
-                      </div>
-                    ) : oneTimeAccount ? (
-                      <form onSubmit={handleCompleteOneTimePassword} className="space-y-5">
-                        <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-3">
-                          <div className="flex items-center gap-3">
-                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-900 text-[11px] font-black text-white">
-                              {(oneTimeAccount.fullName || oneTimeAccount.username || '?').charAt(0).toUpperCase()}
-                            </div>
-                            <div className="min-w-0">
-                              <p className="truncate text-[12px] font-black text-slate-800">{oneTimeAccount.fullName}</p>
-                              <p className="truncate text-[10px] font-medium text-slate-400">{oneTimeAccount.email || oneTimeAccount.username}</p>
-                            </div>
-                            {authScreen === 'invite' && oneTimeAccount.role && (
-                              <span className="ml-auto rounded-full border border-slate-200 bg-white px-2 py-1 text-[8px] font-black uppercase tracking-wider text-slate-500">
-                                {oneTimeAccount.role}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-
-                        <div>
-                          <label htmlFor="new-account-password" className="mb-2 block text-[12px] font-bold text-slate-700">New password</label>
-                          <div className="relative">
-                            <input
-                              id="new-account-password"
-                              type={showNewAccountPassword ? 'text' : 'password'}
-                              value={newAccountPassword}
-                              onChange={(e) => { setNewAccountPassword(e.target.value); setPublicAuthError(''); }}
-                              placeholder="At least 10 characters"
-                              autoComplete="new-password"
-                              className="h-12 w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 pr-12 text-[13px] font-semibold text-slate-900 outline-none transition-all focus:border-brand-orange focus:bg-white focus:ring-4 focus:ring-orange-100/70"
-                            />
-                            <button type="button" onClick={() => setShowNewAccountPassword(value => !value)} className="absolute inset-y-0 right-0 flex w-12 items-center justify-center text-slate-400 hover:text-slate-700">
-                              {showNewAccountPassword ? <EyeOff size={17} /> : <Eye size={17} />}
-                            </button>
-                          </div>
-                        </div>
-
-                        <div>
-                          <label htmlFor="confirm-account-password" className="mb-2 block text-[12px] font-bold text-slate-700">Confirm password</label>
-                          <input
-                            id="confirm-account-password"
-                            type={showNewAccountPassword ? 'text' : 'password'}
-                            value={confirmAccountPassword}
-                            onChange={(e) => { setConfirmAccountPassword(e.target.value); setPublicAuthError(''); }}
-                            placeholder="Repeat new password"
-                            autoComplete="new-password"
-                            className="h-12 w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 text-[13px] font-semibold text-slate-900 outline-none transition-all focus:border-brand-orange focus:bg-white focus:ring-4 focus:ring-orange-100/70"
-                          />
-                        </div>
-
-                        {publicAuthError && (
-                          <div className="flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-3 text-rose-700">
-                            <AlertCircle size={16} className="mt-0.5 shrink-0" />
-                            <p className="text-[11px] font-semibold leading-5">{publicAuthError}</p>
-                          </div>
-                        )}
-
-                        <div className="flex items-start gap-2.5 rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-3">
-                          <ShieldCheck size={15} className="mt-0.5 shrink-0 text-slate-500" />
-                          <p className="text-[10.5px] font-medium leading-4 text-slate-400">
-                            Use at least 10 characters. Your password is stored only as a secure bcrypt hash; administrators cannot view it.
-                          </p>
-                        </div>
-
-                        <button
-                          type="submit"
-                          disabled={publicAuthLoading || newAccountPassword.length < 10 || confirmAccountPassword.length < 10}
-                          className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-brand-orange px-5 text-[12px] font-black text-white shadow-sm hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {publicAuthLoading ? <RefreshCw size={14} className="animate-spin" /> : <KeyRound size={14} />}
-                          {authScreen === 'invite' ? 'Activate account' : 'Update password'}
-                        </button>
-                      </form>
-                    ) : null}
-                  </div>
-                )}
+                </form>
               </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showCredentialChangeModal && currentUser && authToken && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[105] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[3px]"
+          >
+            <motion.div initial={{ opacity: 0, y: 12, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 12, scale: 0.98 }} className="w-full max-w-[430px] rounded-2xl border border-slate-200 bg-white shadow-2xl">
+              <div className="border-b border-slate-100 px-7 py-6">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-600"><ShieldCheck size={18} /></div>
+                  <div>
+                    <h3 className="text-lg font-black text-slate-900">Secure your account</h3>
+                    <p className="mt-1 text-[11px] font-medium leading-5 text-slate-500">
+                      {currentUser.role === 'user'
+                        ? 'Replace the temporary PIN given by your administrator with your own 6-digit PIN.'
+                        : 'Replace the temporary administrator password before using protected system controls.'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <form onSubmit={handleCredentialChange} className="space-y-4 px-7 py-6">
+                <div>
+                  <label className="mb-1.5 block text-[11px] font-bold text-slate-700">{currentUser.role === 'user' ? 'New 6-digit PIN' : 'New password'}</label>
+                  <input
+                    type="password"
+                    inputMode={currentUser.role === 'user' ? 'numeric' : undefined}
+                    maxLength={currentUser.role === 'user' ? 6 : undefined}
+                    value={newCredential}
+                    onChange={(e) => setNewCredential(currentUser.role === 'user' ? e.target.value.replace(/\D/g, '').slice(0, 6) : e.target.value)}
+                    placeholder={currentUser.role === 'user' ? '••••••' : 'Minimum 10 characters'}
+                    autoFocus
+                    className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3.5 text-sm font-semibold text-slate-800 outline-none focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/10"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-[11px] font-bold text-slate-700">Confirm {currentUser.role === 'user' ? 'PIN' : 'password'}</label>
+                  <input
+                    type="password"
+                    inputMode={currentUser.role === 'user' ? 'numeric' : undefined}
+                    maxLength={currentUser.role === 'user' ? 6 : undefined}
+                    value={confirmCredential}
+                    onChange={(e) => setConfirmCredential(currentUser.role === 'user' ? e.target.value.replace(/\D/g, '').slice(0, 6) : e.target.value)}
+                    placeholder={currentUser.role === 'user' ? '••••••' : 'Repeat password'}
+                    className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3.5 text-sm font-semibold text-slate-800 outline-none focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/10"
+                  />
+                </div>
+                {credentialChangeError && <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-[11px] font-semibold text-rose-700">{credentialChangeError}</div>}
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-[10px] font-medium leading-4 text-slate-500">
+                  {currentUser.role === 'user' ? 'Use a PIN you can remember but others cannot easily guess. Avoid repeated digits such as 111111.' : 'Use at least 10 characters and do not reuse a personal password.'}
+                </div>
+                <button
+                  type="submit"
+                  disabled={changingCredential || !newCredential || !confirmCredential}
+                  className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-slate-900 text-[11px] font-black uppercase tracking-wider text-white hover:bg-slate-800 disabled:opacity-40"
+                >
+                  {changingCredential ? 'Updating...' : currentUser.role === 'user' ? 'Set my PIN' : 'Set new password'}
+                </button>
+              </form>
             </motion.div>
           </motion.div>
         )}
