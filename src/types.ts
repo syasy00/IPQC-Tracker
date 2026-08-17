@@ -39,4 +39,4 @@ export interface AuditRecord {
   deletedAt?: string | null;
 }
 
-export type ViewState = 'dashboard' | 'ipqc' | 'import' | 'checklist' | 'add-audit' | 'history' | 'settings';
+export type ViewState = 'dashboard' | 'ipqc' | 'import' | 'checklist' | 'add-audit' | 'history' | 'access-audit' | 'quality-config';

@@ -457,7 +457,7 @@ export default function App() {
     setSessionExpired(expired);
     setShowCredentialChangeModal(false);
     setShowLoginModal(true);
-    if (view === 'settings' || view === 'action-center' || view === 'ai-insights') setView('ipqc');
+    if (view === 'access-audit' || view === 'quality-config' || view === 'action-center' || view === 'ai-insights') setView('ipqc');
   };
 
   const authFetch = async (url: string, options: RequestInit = {}) => {
@@ -557,7 +557,6 @@ export default function App() {
   const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([]);
   const [auditLogLoading, setAuditLogLoading] = useState(false);
   const [auditLogError, setAuditLogError] = useState('');
-  const [adminSettingsTab, setAdminSettingsTab] = useState<'access-audit' | 'quality-config'>('access-audit');
   const [deletedRecords, setDeletedRecords] = useState<IPQCAuditRecord[]>([]);
   const [deletedRecordsLoading, setDeletedRecordsLoading] = useState(false);
 
@@ -1079,7 +1078,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (view === 'settings' && isAdmin && authToken) {
+    if (view === 'access-audit' && isAdmin && authToken) {
       fetchManagedUsers();
       fetchAuditLog();
       fetchDeletedRecords();
@@ -1807,7 +1806,8 @@ export default function App() {
     history: 'History',
     'action-center': 'Admin Action Center',
     'ai-insights': 'AI Insights',
-    settings: 'Admin Panel',
+    'access-audit': 'Access & Audit',
+    'quality-config': 'Quality Configuration',
   };
   const headerTitle = view === 'ipqc' && selectedRecord ? 'Finding Details' : (viewTitles[view] || 'IPQC Tracker');
   // Count active filter GROUPS, not individual checked values.
@@ -1895,7 +1895,7 @@ export default function App() {
 
           {sidebarOpen ? (
             <div className="px-3 pt-5 pb-2">
-              <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.22em]">System</span>
+              <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.22em]">Administration</span>
             </div>
           ) : (
             <div className="mx-3 my-4 h-px bg-white/[0.07]" aria-hidden="true" />
@@ -1923,13 +1923,24 @@ export default function App() {
             }}
           />
           <NavItem 
-            icon={isAdmin ? <Settings size={18} /> : <Lock size={18} />} 
-            label="Admin Settings" 
-            active={view === 'settings'} 
+            icon={isAdmin ? <ShieldCheck size={18} /> : <Lock size={18} />} 
+            label="Access & Audit" 
+            active={view === 'access-audit'} 
             collapsed={!sidebarOpen && window.innerWidth >= 768}
             disabled={!isAdmin}
             onClick={() => {
-              setView('settings');
+              setView('access-audit');
+              if (window.innerWidth < 768) setSidebarOpen(false);
+            }}
+          />
+          <NavItem 
+            icon={isAdmin ? <SlidersHorizontal size={18} /> : <Lock size={18} />} 
+            label="Quality Configuration" 
+            active={view === 'quality-config'} 
+            collapsed={!sidebarOpen && window.innerWidth >= 768}
+            disabled={!isAdmin}
+            onClick={() => {
+              setView('quality-config');
               if (window.innerWidth < 768) setSidebarOpen(false);
             }}
           />
@@ -3691,7 +3702,7 @@ export default function App() {
 
                   <button
                     type="button"
-                    onClick={() => setView('settings')}
+                    onClick={() => setView('quality-config')}
                     className="group rounded-xl border border-slate-200 bg-white p-4 text-left shadow-[0_1px_3px_rgba(15,23,42,0.04)] transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
                   >
                     <div className="flex items-start justify-between gap-3">
@@ -4105,9 +4116,9 @@ export default function App() {
             )}
 
 
-            {view === 'settings' && isAdmin && (
+            {(view === 'access-audit' || view === 'quality-config') && isAdmin && (
               <motion.div
-                key="settings"
+                key={view}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -8 }}
@@ -4118,147 +4129,144 @@ export default function App() {
                 <section className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-brand-orange mb-2">
-                      <Settings size={13} />
-                      System configuration
+                      {view === 'access-audit' ? <ShieldCheck size={13} /> : <SlidersHorizontal size={13} />}
+                      Administration
                     </div>
-                    <h2 className="text-xl md:text-2xl font-black tracking-tight text-slate-900">Admin Settings</h2>
+                    <h2 className="text-xl md:text-2xl font-black tracking-tight text-slate-900">
+                      {view === 'access-audit' ? 'Access & Audit' : 'Quality Configuration'}
+                    </h2>
                     <p className="mt-1.5 max-w-2xl text-xs md:text-sm leading-6 text-slate-500">
-                      Manage user access, auditor directories and Platform → MQE ownership rules. Protected changes are saved to the shared database automatically.
+                      {view === 'access-audit'
+                        ? 'Manage employee access, review accountable system activity and recover accidentally deleted findings.'
+                        : 'Manage the IPQC auditor directory and Platform → MQE ownership rules used across finding records.'}
                     </p>
                   </div>
 
                   <div className="flex items-center gap-2 shrink-0">
-                    <span
-                      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[10px] font-black uppercase tracking-widest transition-colors ${
-                        savingSettings
-                          ? 'border-amber-200 bg-amber-50 text-amber-700'
-                          : 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                      }`}
-                    >
-                      <span className={`h-1.5 w-1.5 rounded-full ${savingSettings ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`} />
-                      {savingSettings ? 'Saving changes' : 'Settings synced'}
-                    </span>
+                    {view === 'access-audit' ? (
+                      <span className="inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-[10px] font-black uppercase tracking-widest text-blue-700">
+                        <ShieldCheck size={12} />
+                        Protected access
+                      </span>
+                    ) : (
+                      <span
+                        className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[10px] font-black uppercase tracking-widest transition-colors ${
+                          savingSettings
+                            ? 'border-amber-200 bg-amber-50 text-amber-700'
+                            : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                        }`}
+                      >
+                        <span className={`h-1.5 w-1.5 rounded-full ${savingSettings ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`} />
+                        {savingSettings ? 'Saving changes' : 'Settings synced'}
+                      </span>
+                    )}
                   </div>
                 </section>
 
-                {/* Compact system overview */}
-                <section className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
-                  <div className="rounded-xl border border-slate-200 bg-white px-4 py-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">Users</p>
-                        <p className="mt-1 text-xl font-black tabular-nums text-slate-900">{managedUsers.length}</p>
-                      </div>
-                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
-                        <User size={17} />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl border border-slate-200 bg-white px-4 py-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">Auditors</p>
-                        <p className="mt-1 text-xl font-black tabular-nums text-slate-900">{auditorsList.length}</p>
-                      </div>
-                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
-                        <Users size={17} />
+                {/* Page-specific overview */}
+                {view === 'access-audit' ? (
+                  <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">Active users</p>
+                          <p className="mt-1 text-xl font-black tabular-nums text-slate-900">{managedUsers.filter(user => user.isActive).length}</p>
+                        </div>
+                        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+                          <Users size={17} />
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  <div className="rounded-xl border border-slate-200 bg-white px-4 py-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">Platforms</p>
-                        <p className="mt-1 text-xl font-black tabular-nums text-slate-900">{platformsList.length}</p>
-                      </div>
-                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
-                        <Layers size={17} />
+                    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">Administrators</p>
+                          <p className="mt-1 text-xl font-black tabular-nums text-slate-900">{managedUsers.filter(user => user.role === 'admin' && user.isActive).length}</p>
+                        </div>
+                        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+                          <ShieldCheck size={17} />
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  <div className="rounded-xl border border-slate-200 bg-white px-4 py-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">Assigned</p>
-                        <p className="mt-1 text-xl font-black tabular-nums text-slate-900">
-                          {platformsList.filter(platform => Boolean(mqeMappings[platform]?.trim())).length}
-                        </p>
-                      </div>
-                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
-                        <CheckCircle2 size={17} />
+                    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">Recent events</p>
+                          <p className="mt-1 text-xl font-black tabular-nums text-slate-900">{displayAuditLog.length}</p>
+                        </div>
+                        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
+                          <Clock size={17} />
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  <div className="rounded-xl border border-slate-200 bg-white px-4 py-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">Unassigned</p>
-                        <p className="mt-1 text-xl font-black tabular-nums text-slate-900">
-                          {platformsList.filter(platform => !mqeMappings[platform]?.trim()).length}
-                        </p>
-                      </div>
-                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
-                        <AlertCircle size={17} />
+                    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">Recycle bin</p>
+                          <p className="mt-1 text-xl font-black tabular-nums text-slate-900">{deletedRecords.length}</p>
+                        </div>
+                        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
+                          <DatabaseBackup size={17} />
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </section>
+                  </section>
+                ) : (
+                  <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">Auditors</p>
+                          <p className="mt-1 text-xl font-black tabular-nums text-slate-900">{auditorsList.length}</p>
+                        </div>
+                        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
+                          <Users size={17} />
+                        </div>
+                      </div>
+                    </div>
 
-                {/* Settings workspace tabs */}
-                <section className="rounded-2xl border border-slate-200 bg-white p-1.5 shadow-[0_4px_18px_rgba(15,23,42,0.035)]">
-                  <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-                    <button
-                      type="button"
-                      onClick={() => setAdminSettingsTab('access-audit')}
-                      className={`flex min-h-[58px] items-center gap-3 rounded-xl px-4 text-left transition-all ${
-                        adminSettingsTab === 'access-audit'
-                          ? 'bg-slate-900 text-white shadow-sm'
-                          : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
-                      }`}
-                    >
-                      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${adminSettingsTab === 'access-audit' ? 'bg-white/10' : 'bg-blue-50 text-blue-600'}`}>
-                        <ShieldCheck size={17} />
+                    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">Platforms</p>
+                          <p className="mt-1 text-xl font-black tabular-nums text-slate-900">{platformsList.length}</p>
+                        </div>
+                        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+                          <Layers size={17} />
+                        </div>
                       </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-[11px] font-black uppercase tracking-[0.08em]">Access & Audit</p>
-                        <p className={`mt-0.5 text-[10px] font-medium ${adminSettingsTab === 'access-audit' ? 'text-slate-300' : 'text-slate-400'}`}>
-                          Accounts, security activity and deleted-record recovery
-                        </p>
-                      </div>
-                      {deletedRecords.length > 0 && (
-                        <span className={`rounded-full px-2 py-0.5 text-[9px] font-black ${adminSettingsTab === 'access-audit' ? 'bg-white/10 text-white' : 'bg-amber-50 text-amber-700'}`}>
-                          {deletedRecords.length} deleted
-                        </span>
-                      )}
-                    </button>
+                    </div>
 
-                    <button
-                      type="button"
-                      onClick={() => setAdminSettingsTab('quality-config')}
-                      className={`flex min-h-[58px] items-center gap-3 rounded-xl px-4 text-left transition-all ${
-                        adminSettingsTab === 'quality-config'
-                          ? 'bg-slate-900 text-white shadow-sm'
-                          : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
-                      }`}
-                    >
-                      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${adminSettingsTab === 'quality-config' ? 'bg-white/10' : 'bg-orange-50 text-brand-orange'}`}>
-                        <SlidersHorizontal size={17} />
+                    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">Assigned MQE</p>
+                          <p className="mt-1 text-xl font-black tabular-nums text-slate-900">{platformsList.filter(platform => Boolean(mqeMappings[platform]?.trim())).length}</p>
+                        </div>
+                        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+                          <CheckCircle2 size={17} />
+                        </div>
                       </div>
-                      <div className="min-w-0">
-                        <p className="text-[11px] font-black uppercase tracking-[0.08em]">Auditors & MQE</p>
-                        <p className={`mt-0.5 text-[10px] font-medium ${adminSettingsTab === 'quality-config' ? 'text-slate-300' : 'text-slate-400'}`}>
-                          Auditor directory and Platform → MQE ownership rules
-                        </p>
-                      </div>
-                    </button>
-                  </div>
-                </section>
+                    </div>
 
-                {adminSettingsTab === 'access-audit' && (
+                    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">Unassigned</p>
+                          <p className="mt-1 text-xl font-black tabular-nums text-slate-900">{platformsList.filter(platform => !mqeMappings[platform]?.trim()).length}</p>
+                        </div>
+                        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
+                          <AlertCircle size={17} />
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+                )}
+
+                {view === 'access-audit' && (
                   <>
                 {/* User access management */}
                 <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_8px_30px_rgba(15,23,42,0.04)]">
@@ -4633,7 +4641,7 @@ export default function App() {
                   </>
                 )}
 
-                {adminSettingsTab === 'quality-config' && (
+                {view === 'quality-config' && (
                   <>
                 {/* Main management area */}
                 <section className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
