@@ -22,7 +22,8 @@ const {
   ADMIN_USERNAME,
   ADMIN_PASSWORD_HASH,
   GEMINI_API_KEY,
-  GEMINI_MODEL = 'gemini-3.6-flash'
+  GEMINI_MODEL = 'gemini-3.6-flash',
+  ALLOW_DATABASE_RESET = 'false'
 } = process.env;
 
 if (!JWT_SECRET) {
@@ -195,9 +196,30 @@ const ensureAuditTrailSchema = async () => {
     await ensureAuditRecordColumn('updated_by', 'updated_by INT NULL');
     await ensureAuditRecordColumn('created_at', 'created_at DATETIME NULL');
     await ensureAuditRecordColumn('updated_at', 'updated_at DATETIME NULL');
+    await ensureAuditRecordColumn('deleted_by', 'deleted_by INT NULL');
+    await ensureAuditRecordColumn('deleted_at', 'deleted_at DATETIME NULL');
   } else {
     console.warn('audit_records table was not found; traceability columns will be added after the table exists.');
   }
+
+  await queryDb(`
+    CREATE TABLE IF NOT EXISTS record_versions (
+      id BIGINT NOT NULL AUTO_INCREMENT,
+      record_id INT NOT NULL,
+      version_no INT NOT NULL,
+      change_type VARCHAR(30) NOT NULL,
+      snapshot JSON NOT NULL,
+      changed_fields JSON NULL,
+      actor_user_id INT NULL,
+      actor_name VARCHAR(150) NOT NULL,
+      actor_role VARCHAR(20) NOT NULL DEFAULT 'system',
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_record_version (record_id, version_no),
+      INDEX idx_record_versions_record (record_id, version_no),
+      INDEX idx_record_versions_created_at (created_at)
+    )
+  `);
 
   await queryDb(`
     CREATE TABLE IF NOT EXISTS audit_log (
@@ -242,6 +264,21 @@ const logAuditEvent = async (req, {
   try {
     await auditTrailReady;
     const actor = req.user || {};
+
+    // Some browsers/proxies can retry a successful login request during a reconnect.
+    // Collapse identical sign-in events created only a few seconds apart so the
+    // operational audit trail remains readable without hiding business changes.
+    if (String(action) === 'USER_SIGNED_IN' && actor.id) {
+      const recent = await queryDb(
+        `SELECT id FROM audit_log
+         WHERE actor_user_id = ? AND action = 'USER_SIGNED_IN'
+           AND created_at >= DATE_SUB(NOW(), INTERVAL 5 SECOND)
+         ORDER BY id DESC LIMIT 1`,
+        [actor.id]
+      );
+      if (recent.length > 0) return;
+    }
+
     await queryDb(
       `INSERT INTO audit_log
         (actor_user_id, actor_username, actor_name, actor_role,
@@ -281,15 +318,103 @@ const selectRecordById = async (id) => {
       ar.icar_status AS icarStatus, ar.icar_num AS icarNum, ar.mqe_engineer AS mqeEngineer,
       ar.created_by AS createdByUserId, ar.updated_by AS updatedByUserId,
       ar.created_at AS createdAt, ar.updated_at AS updatedAt,
+      ar.deleted_by AS deletedByUserId, ar.deleted_at AS deletedAt,
       creator.full_name AS createdByName, creator.username AS createdByUsername,
-      editor.full_name AS updatedByName, editor.username AS updatedByUsername
+      editor.full_name AS updatedByName, editor.username AS updatedByUsername,
+      deleter.full_name AS deletedByName, deleter.username AS deletedByUsername
     FROM audit_records ar
     LEFT JOIN users creator ON creator.id = ar.created_by
     LEFT JOIN users editor ON editor.id = ar.updated_by
+    LEFT JOIN users deleter ON deleter.id = ar.deleted_by
     WHERE ar.id = ?
     LIMIT 1
   `, [id]);
   return rows[0] || null;
+};
+
+const recordSnapshot = (record) => {
+  if (!record) return {};
+  const {
+    id, no, auditDate, ww, shift, auditors, personOnJob, department, platform,
+    areaStation, groupFinding, category, detailsFindings, picture, remark, status,
+    icarStatus, icarNum, mqeEngineer, createdByUserId, createdByName,
+    createdByUsername, createdAt, updatedByUserId, updatedByName,
+    updatedByUsername, updatedAt, deletedByUserId, deletedByName,
+    deletedByUsername, deletedAt,
+  } = record;
+  // Do not duplicate large base64 evidence blobs into every JSON version. File
+  // paths/references are retained; inline evidence remains on the live record.
+  const versionPicture = typeof picture === 'string' && picture.startsWith('data:') ? null : picture;
+  return {
+    id, no, auditDate, ww, shift, auditors, personOnJob, department, platform,
+    areaStation, groupFinding, category, detailsFindings, picture: versionPicture, remark, status,
+    icarStatus, icarNum, mqeEngineer, createdByUserId, createdByName,
+    createdByUsername, createdAt, updatedByUserId, updatedByName,
+    updatedByUsername, updatedAt, deletedByUserId, deletedByName,
+    deletedByUsername, deletedAt,
+  };
+};
+
+const nextRecordVersionNumber = async (recordId) => {
+  const rows = await queryDb(
+    'SELECT COALESCE(MAX(version_no), 0) AS maxVersion FROM record_versions WHERE record_id = ?',
+    [recordId]
+  );
+  return Number(rows[0]?.maxVersion || 0) + 1;
+};
+
+const writeRecordVersion = async (req, record, changeType, changedFields = [], actorOverride = null) => {
+  if (!record?.id) return null;
+  const versionNo = await nextRecordVersionNumber(record.id);
+  const actor = actorOverride || req?.user || {};
+  await queryDb(
+    `INSERT INTO record_versions
+      (record_id, version_no, change_type, snapshot, changed_fields,
+       actor_user_id, actor_name, actor_role)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      record.id,
+      versionNo,
+      String(changeType),
+      JSON.stringify(recordSnapshot(record)),
+      changedFields?.length ? JSON.stringify(changedFields) : null,
+      actor.id || null,
+      String(actor.fullName || actor.username || 'System migration'),
+      String(actor.role || 'system'),
+    ]
+  );
+  return versionNo;
+};
+
+const ensureBaselineVersion = async (record) => {
+  if (!record?.id) return;
+  const rows = await queryDb('SELECT COUNT(*) AS total FROM record_versions WHERE record_id = ?', [record.id]);
+  if (Number(rows[0]?.total || 0) > 0) return;
+  await writeRecordVersion(null, record, 'baseline', [], {
+    id: null,
+    fullName: 'System migration',
+    username: 'system',
+    role: 'system',
+  });
+};
+
+const applySnapshotToRecord = async (recordId, snapshot, actorUserId) => {
+  await queryDb(
+    `UPDATE audit_records SET
+      no = ?, audit_date = ?, ww = ?, shift = ?, auditor_name = ?, pic_finding = ?, department = ?,
+      platform = ?, area_station = ?, group_finding = ?, category = ?, finding_details = ?,
+      picture = COALESCE(?, picture), remark = ?, status = ?, icar_status = ?, icar_num = ?, mqe_engineer = ?,
+      updated_by = ?, updated_at = NOW(), deleted_by = NULL, deleted_at = NULL
+     WHERE id = ?`,
+    [
+      snapshot.no ?? null, snapshot.auditDate || null, snapshot.ww || null, snapshot.shift || '',
+      snapshot.auditors || '', snapshot.personOnJob || '', snapshot.department || '',
+      snapshot.platform || '', snapshot.areaStation || '', snapshot.groupFinding || '',
+      snapshot.category || '', snapshot.detailsFindings || '', snapshot.picture || null,
+      snapshot.remark || '', snapshot.status || 'Open', snapshot.icarStatus || 'Locked',
+      snapshot.icarNum || 'N/A', snapshot.mqeEngineer || '', actorUserId, recordId,
+    ]
+  );
 };
 
 const extractBearerToken = (req) => {
@@ -1102,8 +1227,13 @@ const upload = multer({ storage: storage });
 // you're done testing - it has no place in a production build.
 // ==========================================
 app.delete('/api/reset-database', authenticateUser, requireAdmin, async (req, res) => {
+  if (String(ALLOW_DATABASE_RESET).toLowerCase() !== 'true') {
+    return res.status(404).json({ error: 'Database reset is disabled' });
+  }
   try {
+    await auditTrailReady;
     await queryDb('TRUNCATE TABLE audit_records');
+    await queryDb('TRUNCATE TABLE record_versions');
     await logAuditEvent(req, {
       action: 'DATABASE_RESET',
       entityType: 'system',
@@ -1130,11 +1260,15 @@ app.get('/api/records', authenticateUser, async (req, res) => {
         ar.icar_status AS icarStatus, ar.icar_num AS icarNum, ar.mqe_engineer AS mqeEngineer,
         ar.created_by AS createdByUserId, ar.updated_by AS updatedByUserId,
         ar.created_at AS createdAt, ar.updated_at AS updatedAt,
+        ar.deleted_by AS deletedByUserId, ar.deleted_at AS deletedAt,
         creator.full_name AS createdByName, creator.username AS createdByUsername,
-        editor.full_name AS updatedByName, editor.username AS updatedByUsername
+        editor.full_name AS updatedByName, editor.username AS updatedByUsername,
+        deleter.full_name AS deletedByName, deleter.username AS deletedByUsername
       FROM audit_records ar
       LEFT JOIN users creator ON creator.id = ar.created_by
       LEFT JOIN users editor ON editor.id = ar.updated_by
+      LEFT JOIN users deleter ON deleter.id = ar.deleted_by
+      WHERE ar.deleted_at IS NULL
       ORDER BY ar.id ASC
     `);
     res.status(200).json(results);
@@ -1171,6 +1305,7 @@ app.post('/api/ai-insights', authenticateUser, requireAdmin, async (req, res) =>
   }
 
   try {
+    await auditTrailReady;
     const rows = await queryDb(`
       SELECT
         id,
@@ -1190,6 +1325,7 @@ app.post('/api/ai-insights', authenticateUser, requireAdmin, async (req, res) =>
         icar_num AS icarNum,
         mqe_engineer AS mqeEngineer
       FROM audit_records
+      WHERE deleted_at IS NULL
       ORDER BY audit_date ASC, id ASC
     `);
 
@@ -1495,6 +1631,7 @@ app.post('/api/records', authenticateUser, upload.single('picture'), async (req,
     const created = await selectRecordById(result.insertId);
     const source = String(req.headers['x-audit-source'] || '').trim().toLowerCase();
     const action = source === 'excel-import' ? 'FINDING_IMPORTED' : 'FINDING_CREATED';
+    await writeRecordVersion(req, created, 'created');
     await logAuditEvent(req, {
       action,
       entityType: 'finding',
@@ -1535,6 +1672,10 @@ app.put('/api/records/:id', authenticateUser, upload.single('picture'), async (r
     if (!before) {
       return res.status(404).json({ error: 'Record not found' });
     }
+    if (before.deletedAt) {
+      return res.status(409).json({ error: 'This record is in the recycle bin. Restore it before editing.' });
+    }
+    await ensureBaselineVersion(before);
 
     await queryDb(
       `UPDATE audit_records SET
@@ -1560,6 +1701,8 @@ app.put('/api/records/:id', authenticateUser, upload.single('picture'), async (r
       'icarStatus', 'mqeEngineer'];
     const changedFields = trackedKeys.filter((key) => String(before?.[key] ?? '') !== String(updated?.[key] ?? ''));
 
+    await writeRecordVersion(req, updated, action === 'FINDING_MQE_RECALCULATED' ? 'mqe_recalculated' : 'updated', changedFields);
+
     await logAuditEvent(req, {
       action,
       entityType: 'finding',
@@ -1579,33 +1722,166 @@ app.put('/api/records/:id', authenticateUser, upload.single('picture'), async (r
   }
 });
 
-// API: Delete a Record (DELETE)
+// API: Delete a Record (SOFT DELETE / RECYCLE BIN)
 app.delete('/api/records/:id', authenticateUser, async (req, res) => {
   const { id } = req.params;
   try {
     await auditTrailReady;
     const before = await selectRecordById(id);
-    if (!before) {
-      return res.status(404).json({ error: 'Record not found' });
-    }
+    if (!before) return res.status(404).json({ error: 'Record not found' });
+    if (before.deletedAt) return res.status(409).json({ error: 'Record is already in the recycle bin' });
 
-    await queryDb('DELETE FROM audit_records WHERE id = ?', [id]);
+    await ensureBaselineVersion(before);
+    await queryDb(
+      'UPDATE audit_records SET deleted_by = ?, deleted_at = NOW(), updated_by = ?, updated_at = NOW() WHERE id = ?',
+      [req.user.id, req.user.id, id]
+    );
+    const deleted = await selectRecordById(id);
+    await writeRecordVersion(req, deleted, 'deleted');
     await logAuditEvent(req, {
       action: 'FINDING_DELETED',
       entityType: 'finding',
       entityId: id,
-      description: `Deleted Finding ${formatRecordNumber(before, id)}`,
+      description: `Moved Finding ${formatRecordNumber(before, id)} to recycle bin`,
       metadata: {
         platform: before.platform || '',
         category: before.category || '',
         detailsFindings: before.detailsFindings || '',
         status: before.status || '',
+        recoverable: true,
       },
     });
-    res.status(200).json({ message: 'Deleted successfully' });
+    res.status(200).json({ message: 'Record moved to recycle bin', recoverable: true });
   } catch (err) {
     console.error('Delete record error:', err);
     res.status(500).json({ error: 'Failed to delete record' });
+  }
+});
+
+// Admin recycle bin. Records remain recoverable until an explicit retention policy
+// is introduced; normal users never see them in the active records table.
+app.get('/api/deleted-records', authenticateUser, requireAdmin, async (req, res) => {
+  try {
+    await auditTrailReady;
+    const rows = await queryDb(`
+      SELECT
+        ar.id, ar.no, DATE_FORMAT(ar.audit_date, '%Y-%m-%d') AS auditDate, ar.ww, ar.shift,
+        ar.auditor_name AS auditors, ar.pic_finding AS personOnJob, ar.department,
+        ar.platform, ar.area_station AS areaStation, ar.group_finding AS groupFinding,
+        ar.category, ar.finding_details AS detailsFindings, ar.picture, ar.remark, ar.status,
+        ar.icar_status AS icarStatus, ar.icar_num AS icarNum, ar.mqe_engineer AS mqeEngineer,
+        ar.created_by AS createdByUserId, ar.updated_by AS updatedByUserId,
+        ar.created_at AS createdAt, ar.updated_at AS updatedAt,
+        ar.deleted_by AS deletedByUserId, ar.deleted_at AS deletedAt,
+        creator.full_name AS createdByName, editor.full_name AS updatedByName,
+        deleter.full_name AS deletedByName, deleter.username AS deletedByUsername
+      FROM audit_records ar
+      LEFT JOIN users creator ON creator.id = ar.created_by
+      LEFT JOIN users editor ON editor.id = ar.updated_by
+      LEFT JOIN users deleter ON deleter.id = ar.deleted_by
+      WHERE ar.deleted_at IS NOT NULL
+      ORDER BY ar.deleted_at DESC, ar.id DESC
+      LIMIT 200
+    `);
+    res.status(200).json(rows);
+  } catch (err) {
+    console.error('Recycle bin error:', err);
+    res.status(500).json({ error: 'Failed to load deleted records' });
+  }
+});
+
+app.post('/api/records/:id/restore', authenticateUser, requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  try {
+    await auditTrailReady;
+    const before = await selectRecordById(id);
+    if (!before) return res.status(404).json({ error: 'Record not found' });
+    if (!before.deletedAt) return res.status(409).json({ error: 'Record is not deleted' });
+
+    await ensureBaselineVersion(before);
+    await queryDb(
+      `UPDATE audit_records
+       SET deleted_by = NULL, deleted_at = NULL, updated_by = ?, updated_at = NOW()
+       WHERE id = ?`,
+      [req.user.id, id]
+    );
+    const restored = await selectRecordById(id);
+    await writeRecordVersion(req, restored, 'restored');
+    await logAuditEvent(req, {
+      action: 'FINDING_RESTORED',
+      entityType: 'finding',
+      entityId: id,
+      description: `Restored Finding ${formatRecordNumber(restored, id)} from recycle bin`,
+      metadata: { restoredFromRecycleBin: true },
+    });
+    res.status(200).json(restored);
+  } catch (err) {
+    console.error('Restore record error:', err);
+    res.status(500).json({ error: 'Failed to restore record' });
+  }
+});
+
+app.get('/api/records/:id/versions', authenticateUser, async (req, res) => {
+  try {
+    await auditTrailReady;
+    const rows = await queryDb(
+      `SELECT id, record_id AS recordId, version_no AS versionNo,
+              change_type AS changeType, snapshot, changed_fields AS changedFields,
+              actor_user_id AS actorUserId, actor_name AS actorName,
+              actor_role AS actorRole, created_at AS createdAt
+       FROM record_versions
+       WHERE record_id = ?
+       ORDER BY version_no DESC
+       LIMIT 100`,
+      [req.params.id]
+    );
+    res.status(200).json(rows.map((row) => ({
+      ...row,
+      snapshot: typeof row.snapshot === 'string' ? JSON.parse(row.snapshot) : row.snapshot,
+      changedFields: typeof row.changedFields === 'string'
+        ? JSON.parse(row.changedFields || '[]')
+        : (row.changedFields || []),
+    })));
+  } catch (err) {
+    console.error('Record versions error:', err);
+    res.status(500).json({ error: 'Failed to load record versions' });
+  }
+});
+
+app.post('/api/records/:id/versions/:versionNo/restore', authenticateUser, requireAdmin, async (req, res) => {
+  const recordId = Number(req.params.id);
+  const versionNo = Number(req.params.versionNo);
+  if (!Number.isInteger(recordId) || !Number.isInteger(versionNo)) {
+    return res.status(400).json({ error: 'Invalid record/version number' });
+  }
+
+  try {
+    await auditTrailReady;
+    const current = await selectRecordById(recordId);
+    if (!current) return res.status(404).json({ error: 'Record not found' });
+    await ensureBaselineVersion(current);
+
+    const rows = await queryDb(
+      'SELECT snapshot FROM record_versions WHERE record_id = ? AND version_no = ? LIMIT 1',
+      [recordId, versionNo]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'Version not found' });
+    const snapshot = typeof rows[0].snapshot === 'string' ? JSON.parse(rows[0].snapshot) : rows[0].snapshot;
+
+    await applySnapshotToRecord(recordId, snapshot, req.user.id);
+    const restored = await selectRecordById(recordId);
+    await writeRecordVersion(req, restored, 'version_restored', ['restoredFromVersion']);
+    await logAuditEvent(req, {
+      action: 'FINDING_VERSION_RESTORED',
+      entityType: 'finding',
+      entityId: recordId,
+      description: `Restored Finding ${formatRecordNumber(restored, recordId)} from version ${versionNo}`,
+      metadata: { restoredVersion: versionNo },
+    });
+    res.status(200).json(restored);
+  } catch (err) {
+    console.error('Restore version error:', err);
+    res.status(500).json({ error: 'Failed to restore record version' });
   }
 });
 

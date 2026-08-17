@@ -37,7 +37,12 @@ import {
   Eye,
   EyeOff,
   ShieldCheck,
-  ArrowRight
+  ArrowRight,
+  History,
+  RotateCcw,
+  DatabaseBackup,
+  SlidersHorizontal,
+  ArchiveRestore
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -69,6 +74,23 @@ type IPQCAuditRecord = Omit<AuditRecord, 'status'> & {
   updatedByName?: string | null;
   updatedByUsername?: string | null;
   updatedAt?: string | null;
+  deletedByUserId?: number | null;
+  deletedByName?: string | null;
+  deletedByUsername?: string | null;
+  deletedAt?: string | null;
+};
+
+type RecordVersion = {
+  id: number;
+  recordId: number;
+  versionNo: number;
+  changeType: string;
+  snapshot: Partial<IPQCAuditRecord>;
+  changedFields?: string[];
+  actorUserId?: number | null;
+  actorName: string;
+  actorRole: string;
+  createdAt: string;
 };
 
 type AuditLogEntry = {
@@ -236,7 +258,9 @@ const auditActionLabel = (action: string): string => {
     FINDING_IMPORTED: 'Imported finding',
     FINDING_UPDATED: 'Updated finding',
     FINDING_MQE_RECALCULATED: 'Recalculated MQE',
-    FINDING_DELETED: 'Deleted finding',
+    FINDING_DELETED: 'Moved to recycle bin',
+    FINDING_RESTORED: 'Restored finding',
+    FINDING_VERSION_RESTORED: 'Restored record version',
     USER_CREATED: 'Created user',
     USER_UPDATED: 'Updated user',
     USER_ACTIVATED: 'Activated user',
@@ -252,6 +276,19 @@ const auditActionLabel = (action: string): string => {
     DATABASE_RESET: 'Reset database',
   };
   return labels[action] || action.replaceAll('_', ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase());
+};
+
+const versionChangeLabel = (changeType: string): string => {
+  const labels: Record<string, string> = {
+    created: 'Created',
+    baseline: 'Baseline',
+    updated: 'Updated',
+    mqe_recalculated: 'MQE recalculated',
+    deleted: 'Moved to recycle bin',
+    restored: 'Restored',
+    version_restored: 'Version restored',
+  };
+  return labels[changeType] || changeType.replaceAll('_', ' ').replace(/^\w/, (c) => c.toUpperCase());
 };
 
 const DEPARTMENTS = [
@@ -424,12 +461,19 @@ export default function App() {
   };
 
   const authFetch = async (url: string, options: RequestInit = {}) => {
+    // Capture the token used by THIS request. A slow 401 response from an old
+    // session must never erase a newer token that the user just received after
+    // signing in again (the previous implementation could cause a login loop).
+    const requestToken = authToken;
     const headers: Record<string, string> = {
       ...(options.headers as Record<string, string> | undefined),
-      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+      ...(requestToken ? { Authorization: `Bearer ${requestToken}` } : {}),
     };
     const response = await fetch(url, { ...options, headers });
-    if (response.status === 401) clearAuthSession(true);
+    if (response.status === 401) {
+      const latestStoredToken = localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+      if (!requestToken || latestStoredToken === requestToken) clearAuthSession(true);
+    }
     if (response.status === 428) setShowCredentialChangeModal(true);
     return response;
   };
@@ -513,6 +557,25 @@ export default function App() {
   const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([]);
   const [auditLogLoading, setAuditLogLoading] = useState(false);
   const [auditLogError, setAuditLogError] = useState('');
+  const [adminSettingsTab, setAdminSettingsTab] = useState<'access-audit' | 'quality-config'>('access-audit');
+  const [deletedRecords, setDeletedRecords] = useState<IPQCAuditRecord[]>([]);
+  const [deletedRecordsLoading, setDeletedRecordsLoading] = useState(false);
+
+  // Old builds could create duplicate sign-in audit rows during an immediate
+  // session-verification retry. Keep the database history intact, but collapse
+  // identical sign-ins within five seconds in the UI. The backend also prevents
+  // new duplicates from being written.
+  const displayAuditLog = useMemo(() => {
+    const lastSeen = new Map<string, number>();
+    return auditLog.filter((entry) => {
+      if (entry.action !== 'USER_SIGNED_IN') return true;
+      const key = `${entry.actorUserId ?? entry.actorUsername}|${entry.action}|${entry.entityId ?? ''}|${entry.description}`;
+      const at = new Date(entry.createdAt).getTime();
+      const previous = lastSeen.get(key);
+      lastSeen.set(key, at);
+      return previous === undefined || Math.abs(previous - at) > 5000;
+    });
+  }, [auditLog]);
 
   const fetchAuditLog = async () => {
     if (!isAdmin || !authToken) return;
@@ -573,8 +636,9 @@ export default function App() {
     fetchSettings();
   }, [authToken]);
 
-  // Restore/verify a saved session against the database. Because the backend
-  // re-checks is_active and role, account changes take effect immediately.
+  // Restore/verify a saved session against the database. Only a real auth
+  // rejection (401/403) is treated as an ended session. A transient 5xx/network
+  // problem must not erase a valid token and trap floor users in a login loop.
   useEffect(() => {
     if (!authToken) {
       setCurrentUser(null);
@@ -583,22 +647,48 @@ export default function App() {
     }
 
     let cancelled = false;
-    fetch(`${API_BASE_URL}/api/verify`, { headers: { Authorization: `Bearer ${authToken}` } })
-      .then(async response => {
-        if (!response.ok) throw new Error('invalid-session');
-        const data = await response.json();
+    const verifySession = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/verify`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+        const data = await response.json().catch(() => ({}));
         if (cancelled) return;
-        if (!data.user) throw new Error('invalid-session');
+
+        if (response.status === 401 || response.status === 403) {
+          clearAuthSession(true);
+          return;
+        }
+
+        if (!response.ok) {
+          console.error('Session verification failed:', response.status, data);
+          setSessionExpired(false);
+          setLoginError(data.error || 'The server could not verify your session. Please try again.');
+          setShowLoginModal(true);
+          return;
+        }
+
+        if (!data.user) {
+          clearAuthSession(true);
+          return;
+        }
+
         setCurrentUser(data.user);
         localStorage.setItem(CURRENT_USER_STORAGE_KEY, JSON.stringify(data.user));
         setSessionExpired(false);
+        setLoginError('');
         setShowLoginModal(false);
         setShowCredentialChangeModal(Boolean(data.user.mustChangeCredential));
-      })
-      .catch(() => {
-        if (!cancelled) clearAuthSession(true);
-      });
+      } catch (error) {
+        if (cancelled) return;
+        console.error('Session verification error:', error);
+        setSessionExpired(false);
+        setLoginError('The server is temporarily unavailable. Your saved session has not been deleted.');
+        setShowLoginModal(true);
+      }
+    };
 
+    verifySession();
     return () => { cancelled = true; };
   }, [authToken]);
 
@@ -730,6 +820,7 @@ export default function App() {
       return;
     }
 
+    setSessionExpired(false);
     setLoginError('');
     setLoggingIn(true);
 
@@ -972,10 +1063,26 @@ export default function App() {
     }
   };
 
+  const fetchDeletedRecords = async () => {
+    if (!isAdmin || !authToken) return;
+    setDeletedRecordsLoading(true);
+    try {
+      const response = await authFetch(`${API_BASE_URL}/api/deleted-records`);
+      const data = await response.json().catch(() => ([]));
+      if (!response.ok) throw new Error(data.error || 'Failed to load recycle bin.');
+      setDeletedRecords(Array.isArray(data) ? data.map(normalizeRecord) : []);
+    } catch (err) {
+      console.error('Recycle bin error:', err);
+    } finally {
+      setDeletedRecordsLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (view === 'settings' && isAdmin && authToken) {
       fetchManagedUsers();
       fetchAuditLog();
+      fetchDeletedRecords();
     }
   }, [view, isAdmin, authToken]);
 
@@ -1329,13 +1436,17 @@ export default function App() {
   const [selectedRecord, setSelectedRecord] = useState<IPQCAuditRecord | null>(null);
   const [selectedRecordHistory, setSelectedRecordHistory] = useState<AuditLogEntry[]>([]);
   const [recordHistoryLoading, setRecordHistoryLoading] = useState(false);
+  const [recordVersions, setRecordVersions] = useState<RecordVersion[]>([]);
+  const [recordVersionsLoading, setRecordVersionsLoading] = useState(false);
   const [openRowAction, setOpenRowAction] = useState<string | number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!selectedRecord?.id || !authToken) {
       setSelectedRecordHistory([]);
+      setRecordVersions([]);
       setRecordHistoryLoading(false);
+      setRecordVersionsLoading(false);
       return;
     }
 
@@ -1345,9 +1456,7 @@ export default function App() {
       try {
         const response = await authFetch(`${API_BASE_URL}/api/records/${selectedRecord.id}/history`);
         const data = await response.json().catch(() => ([]));
-        if (!cancelled && response.ok) {
-          setSelectedRecordHistory(Array.isArray(data) ? data : []);
-        }
+        if (!cancelled && response.ok) setSelectedRecordHistory(Array.isArray(data) ? data : []);
       } catch {
         if (!cancelled) setSelectedRecordHistory([]);
       } finally {
@@ -1355,7 +1464,21 @@ export default function App() {
       }
     };
 
+    const loadVersions = async () => {
+      setRecordVersionsLoading(true);
+      try {
+        const response = await authFetch(`${API_BASE_URL}/api/records/${selectedRecord.id}/versions`);
+        const data = await response.json().catch(() => ([]));
+        if (!cancelled && response.ok) setRecordVersions(Array.isArray(data) ? data : []);
+      } catch {
+        if (!cancelled) setRecordVersions([]);
+      } finally {
+        if (!cancelled) setRecordVersionsLoading(false);
+      }
+    };
+
     loadHistory();
+    loadVersions();
     return () => { cancelled = true; };
   }, [selectedRecord?.id, authToken]);
 
@@ -1468,18 +1591,56 @@ export default function App() {
   };
 
   const handleDeleteRecord = async (id: string) => {
-    if (confirm('Are you sure you want to delete this audit record? This action will remain visible in the audit trail.')) {
+    const actor = currentUser?.fullName || currentUser?.username || 'Current user';
+    if (confirm(`Move this finding to the recycle bin?\n\nRecorded as: ${actor}\n\nThe record can be restored by an administrator and its version history will be retained.`)) {
       try {
         const response = await authFetch(`${API_BASE_URL}/api/records/${id}`, { method: 'DELETE' });
         if (!response.ok) {
           const data = await response.json().catch(() => ({}));
-          alert(data.error || 'Failed to delete record.');
+          alert(data.error || 'Failed to move record to recycle bin.');
           return;
         }
-        setRecords(records.filter(r => String(r.id) !== String(id)));
+        setRecords(prev => prev.filter(r => String(r.id) !== String(id)));
+        if (isAdmin) fetchDeletedRecords();
       } catch (err) {
-        alert('Failed to delete record.');
+        alert('Failed to move record to recycle bin.');
       }
+    }
+  };
+
+  const handleRestoreDeletedRecord = async (record: IPQCAuditRecord) => {
+    if (!isAdmin || !record.id) return;
+    if (!confirm(`Restore Finding #${record.no ?? record.id} from the recycle bin?`)) return;
+    try {
+      const response = await authFetch(`${API_BASE_URL}/api/records/${record.id}/restore`, { method: 'POST' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Failed to restore record.');
+      const restored = normalizeRecord(data);
+      setRecords(prev => [...prev.filter(item => String(item.id) !== String(restored.id)), restored]
+        .sort((a, b) => Number(a.id) - Number(b.id)));
+      setDeletedRecords(prev => prev.filter(item => String(item.id) !== String(record.id)));
+      fetchAuditLog();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to restore record.');
+    }
+  };
+
+  const handleRestoreRecordVersion = async (version: RecordVersion) => {
+    if (!isAdmin || !selectedRecord?.id) return;
+    if (!confirm(`Restore Finding #${selectedRecord.no ?? selectedRecord.id} to version ${version.versionNo}?\n\nThe current state will remain in version history.`)) return;
+    try {
+      const response = await authFetch(`${API_BASE_URL}/api/records/${selectedRecord.id}/versions/${version.versionNo}/restore`, { method: 'POST' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Failed to restore version.');
+      const restored = normalizeRecord(data);
+      setSelectedRecord(restored);
+      setRecords(prev => prev.map(item => String(item.id) === String(restored.id) ? restored : item));
+      const versionsResponse = await authFetch(`${API_BASE_URL}/api/records/${restored.id}/versions`);
+      const versionsData = await versionsResponse.json().catch(() => ([]));
+      if (versionsResponse.ok) setRecordVersions(Array.isArray(versionsData) ? versionsData : []);
+      fetchAuditLog();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to restore version.');
     }
   };
 
@@ -2450,6 +2611,53 @@ export default function App() {
                                   <p className="text-[10px] leading-4 text-slate-400">
                                     No authenticated activity is available for this legacy record yet.
                                   </p>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="mt-4 rounded-lg border border-slate-200 bg-white p-3.5">
+                              <div className="flex items-center justify-between gap-3">
+                                <div>
+                                  <p className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Version history</p>
+                                  <p className="mt-0.5 text-[10px] text-slate-500">Recover earlier states after an accidental edit</p>
+                                </div>
+                                <History size={14} className="text-slate-400" />
+                              </div>
+
+                              <div className="mt-3 space-y-2">
+                                {recordVersionsLoading ? (
+                                  <p className="text-[10px] font-medium text-slate-400">Loading versions…</p>
+                                ) : recordVersions.length > 0 ? (
+                                  recordVersions.slice(0, 6).map((version, index) => (
+                                    <div key={version.id} className="rounded-lg border border-slate-100 bg-slate-50/70 px-3 py-2.5">
+                                      <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                          <div className="flex flex-wrap items-center gap-1.5">
+                                            <span className="rounded-md bg-white px-1.5 py-0.5 font-mono text-[8px] font-black text-slate-600 ring-1 ring-slate-200">v{version.versionNo}</span>
+                                            <span className="text-[9px] font-black text-slate-700">{versionChangeLabel(version.changeType)}</span>
+                                            {index === 0 && <span className="text-[8px] font-black uppercase tracking-wider text-emerald-600">Current</span>}
+                                          </div>
+                                          <p className="mt-1 text-[9px] font-medium text-slate-400">{version.actorName} · {formatTraceDateTime(version.createdAt)}</p>
+                                          {version.changedFields && version.changedFields.length > 0 && (
+                                            <p className="mt-1 truncate text-[8.5px] text-slate-400" title={version.changedFields.join(', ')}>
+                                              Changed: {version.changedFields.join(', ')}
+                                            </p>
+                                          )}
+                                        </div>
+                                        {isAdmin && index !== 0 && version.changeType !== 'deleted' && (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleRestoreRecordVersion(version)}
+                                            className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-[8px] font-black uppercase tracking-wider text-slate-600 hover:border-slate-300 hover:text-slate-900"
+                                          >
+                                            <RotateCcw size={10} /> Restore
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  ))
+                                ) : (
+                                  <p className="text-[10px] leading-4 text-slate-400">Version history starts automatically with the next create or edit. Legacy records receive a baseline before their first versioned change.</p>
                                 )}
                               </div>
                             </div>
@@ -4000,6 +4208,58 @@ export default function App() {
                   </div>
                 </section>
 
+                {/* Settings workspace tabs */}
+                <section className="rounded-2xl border border-slate-200 bg-white p-1.5 shadow-[0_4px_18px_rgba(15,23,42,0.035)]">
+                  <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() => setAdminSettingsTab('access-audit')}
+                      className={`flex min-h-[58px] items-center gap-3 rounded-xl px-4 text-left transition-all ${
+                        adminSettingsTab === 'access-audit'
+                          ? 'bg-slate-900 text-white shadow-sm'
+                          : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
+                      }`}
+                    >
+                      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${adminSettingsTab === 'access-audit' ? 'bg-white/10' : 'bg-blue-50 text-blue-600'}`}>
+                        <ShieldCheck size={17} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-black uppercase tracking-[0.08em]">Access & Audit</p>
+                        <p className={`mt-0.5 text-[10px] font-medium ${adminSettingsTab === 'access-audit' ? 'text-slate-300' : 'text-slate-400'}`}>
+                          Accounts, security activity and deleted-record recovery
+                        </p>
+                      </div>
+                      {deletedRecords.length > 0 && (
+                        <span className={`rounded-full px-2 py-0.5 text-[9px] font-black ${adminSettingsTab === 'access-audit' ? 'bg-white/10 text-white' : 'bg-amber-50 text-amber-700'}`}>
+                          {deletedRecords.length} deleted
+                        </span>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setAdminSettingsTab('quality-config')}
+                      className={`flex min-h-[58px] items-center gap-3 rounded-xl px-4 text-left transition-all ${
+                        adminSettingsTab === 'quality-config'
+                          ? 'bg-slate-900 text-white shadow-sm'
+                          : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
+                      }`}
+                    >
+                      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${adminSettingsTab === 'quality-config' ? 'bg-white/10' : 'bg-orange-50 text-brand-orange'}`}>
+                        <SlidersHorizontal size={17} />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-black uppercase tracking-[0.08em]">Auditors & MQE</p>
+                        <p className={`mt-0.5 text-[10px] font-medium ${adminSettingsTab === 'quality-config' ? 'text-slate-300' : 'text-slate-400'}`}>
+                          Auditor directory and Platform → MQE ownership rules
+                        </p>
+                      </div>
+                    </button>
+                  </div>
+                </section>
+
+                {adminSettingsTab === 'access-audit' && (
+                  <>
                 {/* User access management */}
                 <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_8px_30px_rgba(15,23,42,0.04)]">
                   <div className="border-b border-slate-100 px-5 py-4 md:px-6">
@@ -4215,7 +4475,7 @@ export default function App() {
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[9px] font-black uppercase tracking-wider text-slate-500">
-                        Latest {auditLog.length}
+                        Latest {displayAuditLog.length}
                       </span>
                       <button
                         type="button"
@@ -4236,9 +4496,9 @@ export default function App() {
                   )}
 
                   <div className="max-h-[430px] overflow-auto custom-scrollbar">
-                    {auditLogLoading && auditLog.length === 0 ? (
+                    {auditLogLoading && displayAuditLog.length === 0 ? (
                       <div className="px-6 py-12 text-center text-xs font-semibold text-slate-400">Loading audit trail...</div>
-                    ) : auditLog.length === 0 ? (
+                    ) : displayAuditLog.length === 0 ? (
                       <div className="px-6 py-12 text-center">
                         <Clock size={22} className="mx-auto text-slate-300" />
                         <p className="mt-2 text-xs font-black text-slate-700">No tracked changes yet</p>
@@ -4246,7 +4506,7 @@ export default function App() {
                       </div>
                     ) : (
                       <div className="divide-y divide-slate-100">
-                        {auditLog.map((entry) => (
+                        {displayAuditLog.map((entry) => (
                           <div key={entry.id} className="grid gap-3 px-5 py-3.5 transition-colors hover:bg-slate-50/60 md:grid-cols-[150px_180px_minmax(0,1fr)_120px] md:items-center md:px-6">
                             <div className="min-w-0">
                               <p className="text-[10px] font-bold text-slate-600">{formatTraceDateTime(entry.createdAt)}</p>
@@ -4298,6 +4558,83 @@ export default function App() {
                   </div>
                 </section>
 
+                {/* Recycle bin / accidental deletion recovery */}
+                <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_8px_30px_rgba(15,23,42,0.04)]">
+                  <div className="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 md:flex-row md:items-center md:justify-between md:px-6">
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
+                        <ArchiveRestore size={17} />
+                      </div>
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-sm font-black text-slate-900">Record Recovery</h3>
+                          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-emerald-700">Soft delete enabled</span>
+                        </div>
+                        <p className="mt-0.5 text-[10px] font-medium leading-4 text-slate-400">
+                          Deleted findings are removed from daily records but retained here with their audit trail and version history.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={fetchDeletedRecords}
+                      disabled={deletedRecordsLoading}
+                      className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 text-[10px] font-black uppercase tracking-wider text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      <RotateCcw size={13} className={deletedRecordsLoading ? 'animate-spin' : ''} />
+                      Refresh
+                    </button>
+                  </div>
+
+                  <div className="max-h-[360px] overflow-auto custom-scrollbar">
+                    {deletedRecordsLoading && deletedRecords.length === 0 ? (
+                      <div className="px-6 py-10 text-center text-xs font-semibold text-slate-400">Loading recycle bin...</div>
+                    ) : deletedRecords.length === 0 ? (
+                      <div className="px-6 py-10 text-center">
+                        <DatabaseBackup size={22} className="mx-auto text-slate-300" />
+                        <p className="mt-2 text-xs font-black text-slate-700">Recycle bin is empty</p>
+                        <p className="mt-1 text-[10px] text-slate-400">Deleted findings will remain recoverable here instead of being permanently removed.</p>
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-slate-100">
+                        {deletedRecords.map((record) => (
+                          <div key={record.id} className="grid gap-3 px-5 py-3.5 hover:bg-slate-50/60 md:grid-cols-[90px_minmax(0,1fr)_180px_130px] md:items-center md:px-6">
+                            <div>
+                              <p className="text-[9px] font-black uppercase tracking-wider text-slate-400">Finding</p>
+                              <p className="mt-0.5 font-mono text-xs font-black text-slate-800">#{record.no ?? record.id}</p>
+                            </div>
+                            <div className="min-w-0">
+                              <p className="truncate text-[11px] font-black text-slate-800">{record.detailsFindings || 'Finding record'}</p>
+                              <p className="mt-0.5 truncate text-[9px] font-medium text-slate-400">{record.platform || '—'} · {record.areaStation || '—'} · {record.category || '—'}</p>
+                            </div>
+                            <div>
+                              <p className="text-[9px] font-bold text-slate-500">Deleted by {record.deletedByName || record.deletedByUsername || 'Unknown user'}</p>
+                              <p className="mt-0.5 text-[9px] text-slate-400">{formatTraceDateTime(record.deletedAt)}</p>
+                            </div>
+                            <div className="md:text-right">
+                              <button
+                                type="button"
+                                onClick={() => handleRestoreDeletedRecord(record)}
+                                className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-[9px] font-black uppercase tracking-wider text-emerald-700 transition-colors hover:bg-emerald-100"
+                              >
+                                <RotateCcw size={12} /> Restore
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="border-t border-slate-100 bg-slate-50/60 px-5 py-3 text-[9px] font-medium leading-4 text-slate-400 md:px-6">
+                    No permanent-delete button is exposed in the application. This protects against accidental removal while preserving QMS traceability.
+                  </div>
+                </section>
+                  </>
+                )}
+
+                {adminSettingsTab === 'quality-config' && (
+                  <>
                 {/* Main management area */}
                 <section className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
                   {/* Auditors */}
@@ -4607,6 +4944,8 @@ export default function App() {
                     </button>
                   </div>
                 </section>
+                  </>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
