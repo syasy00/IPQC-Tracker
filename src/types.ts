@@ -22,7 +22,7 @@ export interface AuditRecord {
   icarStatus?: 'Locked' | 'Submitted';
   mqeEngineer?: string;
 
-
+ 
   createdByUserId?: number | null;
   createdByName?: string | null;
   createdByUsername?: string | null;

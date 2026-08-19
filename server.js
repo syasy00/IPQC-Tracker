@@ -23,7 +23,9 @@ const {
   ADMIN_PASSWORD_HASH,
   GEMINI_API_KEY,
   GEMINI_MODEL = 'gemini-3.6-flash',
-  ALLOW_DATABASE_RESET = 'false'
+  ALLOW_DATABASE_RESET = 'false',
+  USER_SESSION_EXPIRES_IN = '24h',
+  ADMIN_SESSION_EXPIRES_IN = '8h'
 } = process.env;
 
 if (!JWT_SECRET) {
@@ -476,6 +478,7 @@ const authenticateUser = async (req, res, next) => {
     }
 
     req.user = toPublicUser(row);
+    req.authRow = row;
 
     // Temporary PIN/password must be replaced before normal system use.
     const setupRoute = req.path === '/api/change-credential' || req.path === '/api/verify';
@@ -506,16 +509,18 @@ const requireAdmin = (req, res, next) => {
 };
 
 const issueSession = (row) => {
+  const isAdminAccount = row.role === 'admin';
+  const expiresIn = isAdminAccount ? ADMIN_SESSION_EXPIRES_IN : USER_SESSION_EXPIRES_IN;
   const token = jwt.sign(
     {
       userId: Number(row.id),
-      role: row.role === 'admin' ? 'admin' : 'user',
+      role: isAdminAccount ? 'admin' : 'user',
       sessionVersion: Number(row.session_version || 0),
     },
     JWT_SECRET,
-    { expiresIn: '8h' }
+    { expiresIn }
   );
-  return { token, expiresIn: '8h' };
+  return { token, expiresIn };
 };
 
 // Safe employee selector used on the standard-user sign-in screen.
@@ -633,6 +638,13 @@ app.post('/api/login', async (req, res) => {
 
 app.get('/api/verify', authenticateUser, (req, res) => {
   res.status(200).json({ valid: true, user: req.user });
+});
+
+// Quiet rolling renewal for standard floor sessions. Do not log each refresh,
+// otherwise a long-running workstation would flood the operational audit trail.
+app.post('/api/session/refresh', authenticateUser, (req, res) => {
+  if (!req.authRow) return res.status(401).json({ error: 'Session is no longer valid' });
+  res.status(200).json({ ...issueSession(req.authRow), user: req.user });
 });
 
 // First-use/self-service credential replacement. Standard users choose their own

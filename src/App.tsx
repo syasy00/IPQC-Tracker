@@ -415,6 +415,9 @@ const WWS = Array.from({length: 52}, (_, i) => (i + 1).toString());
 
 export default function App() {
   const [view, setView] = useState<AppView>('ipqc');
+  // The center content area is its own scroll container. Each top-level page
+  // should open from the top instead of inheriting the previous page's scroll.
+  const mainScrollRef = useRef<HTMLElement | null>(null);
   const [records, setRecords] = useState<IPQCAuditRecord[]>([]); 
   const [powerBiUrl, setPowerBiUrl] = useState<string>(''); 
   const [dashboardMode, setDashboardMode] = useState<'system' | 'powerbi'>('system');
@@ -422,6 +425,10 @@ export default function App() {
   // The JWT is server-issued; the role is read from the database-backed user record.
   const [authToken, setAuthToken] = useState<string | null>(() => localStorage.getItem(AUTH_TOKEN_STORAGE_KEY));
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(() => readStoredCurrentUser());
+  // Keep the latest rolling token in a ref so background requests cannot erase
+  // a newer session with a late response from an older token.
+  const authTokenRef = useRef<string | null>(authToken);
+  const lastSessionRefreshAtRef = useRef(0);
   const isAuthenticated = Boolean(authToken && currentUser);
   const isAdmin = currentUser?.role === 'admin';
 
@@ -452,6 +459,7 @@ export default function App() {
     // Remove legacy single-admin keys from older builds.
     localStorage.removeItem('ipqc_admin_token');
     localStorage.removeItem('ipqc_admin_username');
+    authTokenRef.current = null;
     setAuthToken(null);
     setCurrentUser(null);
     setSessionExpired(expired);
@@ -464,7 +472,7 @@ export default function App() {
     // Capture the token used by THIS request. A slow 401 response from an old
     // session must never erase a newer token that the user just received after
     // signing in again (the previous implementation could cause a login loop).
-    const requestToken = authToken;
+    const requestToken = authTokenRef.current;
     const headers: Record<string, string> = {
       ...(options.headers as Record<string, string> | undefined),
       ...(requestToken ? { Authorization: `Bearer ${requestToken}` } : {}),
@@ -491,6 +499,16 @@ export default function App() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Sidebar destinations behave like separate pages. When the admin/user moves
+  // to another destination, always start at the top of the content area.
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      mainScrollRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [view]);
+
 
   // Standard-user sign in uses a simple approved employee selector + 6-digit PIN.
   // The public endpoint returns only active standard-user display information.
@@ -528,6 +546,8 @@ export default function App() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
   const [aiResult, setAiResult] = useState<AIInsightResult | null>(null);
+  const aiResponseRef = useRef<HTMLElement | null>(null);
+  const shouldScrollToAiResponseRef = useRef(false);
 
   // Settings State for CRUD Operations
   const [auditorsList, setAuditorsList] = useState(INITIAL_AUDITORS);
@@ -635,9 +655,9 @@ export default function App() {
     fetchSettings();
   }, [authToken]);
 
-  // Restore/verify a saved session against the database. Only a real auth
-  // rejection (401/403) is treated as an ended session. A transient 5xx/network
-  // problem must not erase a valid token and trap floor users in a login loop.
+  // Restore/verify a saved session against the database. Only a real 401
+  // means the identity session ended. Temporary network/server errors must not
+  // wipe a floor user's valid token or display a misleading expiry message.
   useEffect(() => {
     if (!authToken) {
       setCurrentUser(null);
@@ -646,23 +666,29 @@ export default function App() {
     }
 
     let cancelled = false;
+    const tokenBeingVerified = authTokenRef.current || authToken;
+
     const verifySession = async () => {
       try {
         const response = await fetch(`${API_BASE_URL}/api/verify`, {
-          headers: { Authorization: `Bearer ${authToken}` },
+          headers: { Authorization: `Bearer ${tokenBeingVerified}` },
         });
         const data = await response.json().catch(() => ({}));
         if (cancelled) return;
 
-        if (response.status === 401 || response.status === 403) {
-          clearAuthSession(true);
+        if (response.status === 401) {
+          const latestStoredToken = localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+          // Ignore a late 401 from an older token after a rolling refresh/login.
+          if (!latestStoredToken || latestStoredToken === tokenBeingVerified) {
+            clearAuthSession(true);
+          }
           return;
         }
 
         if (!response.ok) {
           console.error('Session verification failed:', response.status, data);
           setSessionExpired(false);
-          setLoginError(data.error || 'The server could not verify your session. Please try again.');
+          setLoginError(data.error || 'The server could not verify your session right now. Please retry.');
           setShowLoginModal(true);
           return;
         }
@@ -682,7 +708,7 @@ export default function App() {
         if (cancelled) return;
         console.error('Session verification error:', error);
         setSessionExpired(false);
-        setLoginError('The server is temporarily unavailable. Your saved session has not been deleted.');
+        setLoginError('The server is temporarily unavailable. Your saved session is still kept.');
         setShowLoginModal(true);
       }
     };
@@ -690,6 +716,79 @@ export default function App() {
     verifySession();
     return () => { cancelled = true; };
   }, [authToken]);
+
+  // Floor-user rolling session. Standard users receive a full-working-day token
+  // and the app quietly renews it while the workstation remains in use. Admins
+  // retain the shorter protected-session policy.
+  useEffect(() => {
+    if (!isAuthenticated || currentUser?.role !== 'user' || currentUser.mustChangeCredential) return;
+
+    let cancelled = false;
+    const MIN_REFRESH_GAP_MS = 60 * 60 * 1000;
+    const PERIODIC_CHECK_MS = 2 * 60 * 60 * 1000;
+
+    const refreshFloorSession = async (force = false) => {
+      const now = Date.now();
+      if (!force && now - lastSessionRefreshAtRef.current < MIN_REFRESH_GAP_MS) return;
+
+      const requestToken = authTokenRef.current;
+      if (!requestToken) return;
+
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/session/refresh`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${requestToken}` },
+        });
+        const data = await response.json().catch(() => ({}));
+        if (cancelled) return;
+
+        if (response.status === 401) {
+          const latestStoredToken = localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+          if (!latestStoredToken || latestStoredToken === requestToken) clearAuthSession(true);
+          return;
+        }
+
+        // A failed refresh is non-fatal. Keep the current token and retry later.
+        if (!response.ok || !data.token) {
+          console.warn('Session refresh skipped:', response.status, data);
+          return;
+        }
+
+        authTokenRef.current = data.token;
+        localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, data.token);
+        lastSessionRefreshAtRef.current = Date.now();
+
+        if (data.user) {
+          setCurrentUser(data.user);
+          localStorage.setItem(CURRENT_USER_STORAGE_KEY, JSON.stringify(data.user));
+        }
+      } catch (error) {
+        console.warn('Session refresh unavailable; keeping the current session.', error);
+      }
+    };
+
+    // On a restored browser tab the token may already be several hours old.
+    refreshFloorSession();
+
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === 'visible') refreshFloorSession();
+    }, PERIODIC_CHECK_MS);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refreshFloorSession();
+    };
+    const handleOnline = () => refreshFloorSession();
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('online', handleOnline);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('online', handleOnline);
+    };
+  }, [isAuthenticated, currentUser?.id, currentUser?.role, currentUser?.mustChangeCredential]);
 
 
   const analyticsData = useMemo(() => {
@@ -838,6 +937,8 @@ export default function App() {
         localStorage.setItem(CURRENT_USER_STORAGE_KEY, JSON.stringify(data.user));
         localStorage.removeItem('ipqc_admin_token');
         localStorage.removeItem('ipqc_admin_username');
+        authTokenRef.current = data.token;
+        lastSessionRefreshAtRef.current = Date.now();
         setAuthToken(data.token);
         setCurrentUser(data.user);
         setShowLoginModal(false);
@@ -862,7 +963,7 @@ export default function App() {
 
   const handleCredentialChange = async (e: FormEvent) => {
     e.preventDefault();
-    if (!authToken || !currentUser || changingCredential) return;
+    if (!authTokenRef.current || !currentUser || changingCredential) return;
 
     const isUserPin = currentUser.role === 'user';
     if (isUserPin && !/^\d{6}$/.test(newCredential)) {
@@ -885,7 +986,7 @@ export default function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${authToken}`,
+          Authorization: `Bearer ${authTokenRef.current}`,
         },
         body: JSON.stringify(isUserPin ? { pin: newCredential } : { password: newCredential }),
       });
@@ -896,6 +997,8 @@ export default function App() {
 
       localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, data.token);
       localStorage.setItem(CURRENT_USER_STORAGE_KEY, JSON.stringify(data.user));
+      authTokenRef.current = data.token;
+      lastSessionRefreshAtRef.current = Date.now();
       setAuthToken(data.token);
       setCurrentUser(data.user);
       setNewCredential('');
@@ -923,6 +1026,7 @@ export default function App() {
     localStorage.removeItem(CURRENT_USER_STORAGE_KEY);
     localStorage.removeItem('ipqc_admin_token');
     localStorage.removeItem('ipqc_admin_username');
+    authTokenRef.current = null;
     setAuthToken(null);
     setCurrentUser(null);
     setSessionExpired(false);
@@ -938,8 +1042,10 @@ export default function App() {
     const question = (questionOverride ?? aiQuestion).trim();
     if (!question || aiLoading) return;
 
+    shouldScrollToAiResponseRef.current = true;
     setAiLoading(true);
     setAiError('');
+    setAiResult(null);
     setAiLastQuestion(question);
     setAiQuestion('');
 
@@ -970,6 +1076,26 @@ export default function App() {
       setAiLoading(false);
     }
   };
+
+  // After a question is submitted, show the progress area, then move the user
+  // directly to the completed answer so there is no ambiguity about whether the
+  // request is still running or finished.
+  useEffect(() => {
+    if (!shouldScrollToAiResponseRef.current || !aiLoading) return;
+    const frame = window.requestAnimationFrame(() => {
+      aiResponseRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [aiLoading]);
+
+  useEffect(() => {
+    if (!shouldScrollToAiResponseRef.current || aiLoading || (!aiResult && !aiError)) return;
+    const timer = window.setTimeout(() => {
+      aiResponseRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      shouldScrollToAiResponseRef.current = false;
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [aiLoading, aiResult, aiError]);
 
   const getMqeForPlatform = (platform: string) => {
     return mqeMappings[platform as keyof typeof mqeMappings] || 'Unassigned';
@@ -2025,7 +2151,7 @@ export default function App() {
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto p-5 md:p-6 min-h-0 bg-[#f6f8fb] flex flex-col">
+        <main ref={mainScrollRef} className="flex-1 overflow-y-auto p-5 md:p-6 min-h-0 bg-[#f6f8fb] flex flex-col">
           <AnimatePresence mode="wait">
             {view === 'dashboard' && (
               <motion.div 
@@ -3988,8 +4114,20 @@ export default function App() {
                       </div>
                     </section>
 
+                    {aiLoading && (
+                      <section ref={aiResponseRef} className="rounded-xl border border-orange-200 bg-orange-50/70 p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+                        <div className="flex items-center gap-3">
+                          <span className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-orange-200 border-t-brand-orange" />
+                          <div>
+                            <p className="text-xs font-black text-slate-800">Analyzing current IPQC data…</p>
+                            <p className="mt-1 text-[10px] leading-5 text-slate-500">Your answer will appear here automatically when the analysis is complete.</p>
+                          </div>
+                        </div>
+                      </section>
+                    )}
+
                     {aiError && (
-                      <section className="rounded-xl border border-rose-200 bg-rose-50 p-4">
+                      <section ref={aiResponseRef} className="scroll-mt-4 rounded-xl border border-rose-200 bg-rose-50 p-4">
                         <div className="flex items-start gap-3">
                           <AlertCircle size={16} className="mt-0.5 shrink-0 text-rose-600" />
                           <div>
@@ -4001,7 +4139,7 @@ export default function App() {
                     )}
 
                     {aiResult ? (
-                      <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
+                      <section ref={aiResponseRef} className="scroll-mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
                         <div className="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-start sm:justify-between">
                           <div>
                             <p className="text-[9px] font-black uppercase tracking-[0.14em] text-brand-orange">AI response</p>
