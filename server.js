@@ -24,7 +24,7 @@ const {
   GEMINI_API_KEY,
   GEMINI_MODEL = 'gemini-3.6-flash',
   ALLOW_DATABASE_RESET = 'false',
-  USER_SESSION_EXPIRES_IN = '24h',
+  USER_SESSION_EXPIRES_IN = '7d',
   ADMIN_SESSION_EXPIRES_IN = '8h'
 } = process.env;
 

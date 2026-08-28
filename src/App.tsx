@@ -300,44 +300,84 @@ const DEPARTMENTS = [
   'PE Team'
 ];
 
-const CATEGORIES = [
-  'Compliance_6S',
-  'Calibration_PM',
-  'Documentation_And_Process_Adherence',
-  'ESD_Control',
-  'Material_Control_And_Chemical_Management',
-  'Safety_Concern',
-  'Tooling_Labeling',
-  'Training_Certification'
-];
+const FINDING_DETAILS_BY_CATEGORY: Record<string, string[]> = {
+  '6S': [
+    'Mix material inside the material bin',
+    'Dustbin located at non-kanban area',
+    'Unnecessary item/material found on the workstation',
+    'Improper storage of Tool/Equipment',
+    'Mixed chemicals stored in the same bin',
+    'No Workstation / Tester Identification',
+    'No label Identification on Equipment / Tools',
+    'Material Scrap Bin without cover',
+    'Dust on workstation/rack/ect',
+    'Trolly not properly inside kanban',
+    'Improper storage of Kit / Bulk Material',
+  ],
+  'Calibration': [
+    'Calibration Overdue ESD Monitor',
+    'Calibration Overdue Manual Torque',
+    'Equipment without Calibration Label',
+    'Calibration Overdue Tools / Equipment',
+    'Calibration Overdue Torque Drive',
+    'Calibration Overdue Solder Iron',
+  ],
+  'PM': [
+    'Equipment without Preventive Equipment Label',
+    'Preventive Maintenance Overdue',
+  ],
+  'Procedural non-compliance': [
+    'Setup check list not updated',
+    'Operating the process without OMS/WI displayed',
+    'Not following OMS / WI',
+    'No Set-Up Checklist displayed',
+  ],
+  'Docs/WI': [
+    'Use Obsolete Visual Standard',
+    "OMS doesn't match current practice",
+    'Incomplete OMS',
+  ],
+  'ESD': [
+    'Ionizer turn off',
+    'No Insulative Mat',
+    'Ionizer is not available at the workstation',
+    'ESD mat was not grounded',
+    'No ESD grounding points',
+    'ESD Monitoring not function',
+    'Ionizer Calibration Date Expired',
+  ],
+  'Expired Material': [
+    'Chemical / Material Overdue',
+  ],
+  'Safety Concern': [
+    'Improper sitting position',
+    'Water leaking from the tester/machine',
+    'Material Handling & Storage',
+    'Cable wire damage',
+  ],
+  'Identification': [
+    'IPA without Expiry Date Label',
+    'IPA Label Damage , Torn, Smear',
+    'Material without Expiring Label',
+    'Torque number is smear / missing /damage / torn off',
+    'Missing Label Expiry Date',
+    'Calibration Label damage, Torn on Tools / Equipment',
+  ],
+  'Training/Competency': [
+    'Assembler operating without certification',
+    'Assembler improper used of jigs / Fixture at Workstation',
+  ],
+  'Handling': [
+    'Operators handling parts without required gloves or finger cots.',
+    'Material handled without ESD protection.',
+    'Product transferred without using the designated tray/trolley',
+    'Components / Unit placed directly on the floor.',
+    'Product exposed to contamination during handling.',
+    'WIP transported without proper identification',
+  ],
+};
 
-const FINDING_DETAILS = [
-  'Visual Standard Expired',
-  'Assembly process conducted without glove usage',
-  'Cable wire damage',
-  'Calibration Label damage, Torn on Tools / Equipment',
-  'Calibration Overdue ESD Monitor',
-  'Calibration Overdue Torque Drive',
-  'Chemical / Material Overdue',
-  'Dust on workstation/rack/ect',
-  'Dustbin located at non-kanban area',
-  'Equipment without Calibration / PM Label',
-  'ESD Monitoring not function',
-  'Improper storage of Kit / Bulk Material',
-  'Improper storage of Tool/Equipment',
-  'Ionizer turn off',
-  'IPA without Expiry Date Label',
-  'Missing Label Expiry Date',
-  'Mix material inside the material bin',
-  'No ESD grounding points',
-  'No Insulative Mat',
-  'No Set-Up Checklist displayed',
-  'Not Wear Safety Glass',
-  'Preventive Maintenance Overdue',
-  'Setup check list not updated',
-  'Torque number is smear',
-  'Unnecessary item/material found on the workstation'
-];
+const CATEGORIES = Object.keys(FINDING_DETAILS_BY_CATEGORY);
 
 const PLATFORMS = [
   'Apex',
@@ -365,6 +405,19 @@ const PLATFORMS = [
 ];
 
 const CATEGORY_GROUP_MAPPING: Record<string, string> = {
+  '6S': 'Method',
+  'Calibration': 'Machine',
+  'PM': 'Machine',
+  'Procedural non-compliance': 'Method',
+  'Docs/WI': 'Method',
+  'ESD': 'Machine',
+  'Expired Material': 'Material',
+  'Safety Concern': 'Man',
+  'Identification': 'Material',
+  'Training/Competency': 'Man',
+  'Handling': 'Man',
+
+  // Legacy values are kept so older records can still be edited without data loss.
   Compliance_6S: 'Method',
   Calibration_PM: 'Machine',
   Documentation_And_Process_Adherence: 'Method',
@@ -372,7 +425,7 @@ const CATEGORY_GROUP_MAPPING: Record<string, string> = {
   Material_Control_And_Chemical_Management: 'Material',
   Safety_Concern: 'Man',
   Tooling_Labeling: 'Material',
-  Training_Certification: 'Man'
+  Training_Certification: 'Man',
 };
 
 const INITIAL_PLATFORM_MQE_MAPPING: Record<string, string> = {
@@ -445,7 +498,6 @@ export default function App() {
   const [loginError, setLoginError] = useState('');
   const [loggingIn, setLoggingIn] = useState(false);
   const [showLoginPassword, setShowLoginPassword] = useState(false);
-  const [sessionExpired, setSessionExpired] = useState(false);
 
   const [showCredentialChangeModal, setShowCredentialChangeModal] = useState(false);
   const [newCredential, setNewCredential] = useState('');
@@ -453,7 +505,7 @@ export default function App() {
   const [credentialChangeError, setCredentialChangeError] = useState('');
   const [changingCredential, setChangingCredential] = useState(false);
 
-  const clearAuthSession = (expired = false) => {
+  const clearAuthSession = (_expired = false) => {
     localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
     localStorage.removeItem(CURRENT_USER_STORAGE_KEY);
     // Remove legacy single-admin keys from older builds.
@@ -462,7 +514,6 @@ export default function App() {
     authTokenRef.current = null;
     setAuthToken(null);
     setCurrentUser(null);
-    setSessionExpired(expired);
     setShowCredentialChangeModal(false);
     setShowLoginModal(true);
     if (view === 'access-audit' || view === 'quality-config' || view === 'action-center' || view === 'ai-insights') setView('ipqc');
@@ -480,7 +531,7 @@ export default function App() {
     const response = await fetch(url, { ...options, headers });
     if (response.status === 401) {
       const latestStoredToken = localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
-      if (!requestToken || latestStoredToken === requestToken) clearAuthSession(true);
+      if (!requestToken || latestStoredToken === requestToken) clearAuthSession(false);
     }
     if (response.status === 428) setShowCredentialChangeModal(true);
     return response;
@@ -614,6 +665,13 @@ export default function App() {
 
   const [analyticsDimension, setAnalyticsDimension] = useState<'platform' | 'category' | 'mqe' | 'auditor'>('platform');
 
+  const categoryFilterOptions = useMemo(() => {
+    const existing = records
+      .map(record => String(record.category || '').trim())
+      .filter(Boolean);
+    return Array.from(new Set([...CATEGORIES, ...existing]));
+  }, [records]);
+
   useEffect(() => {
     if (!authToken) {
       setRecords([]);
@@ -680,36 +738,31 @@ export default function App() {
           const latestStoredToken = localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
           // Ignore a late 401 from an older token after a rolling refresh/login.
           if (!latestStoredToken || latestStoredToken === tokenBeingVerified) {
-            clearAuthSession(true);
+            clearAuthSession(false);
           }
           return;
         }
 
         if (!response.ok) {
           console.error('Session verification failed:', response.status, data);
-          setSessionExpired(false);
-          setLoginError(data.error || 'The server could not verify your session right now. Please retry.');
-          setShowLoginModal(true);
+          // Do not interrupt an identified floor user for a temporary server/database error.
           return;
         }
 
         if (!data.user) {
-          clearAuthSession(true);
+          clearAuthSession(false);
           return;
         }
 
         setCurrentUser(data.user);
         localStorage.setItem(CURRENT_USER_STORAGE_KEY, JSON.stringify(data.user));
-        setSessionExpired(false);
         setLoginError('');
         setShowLoginModal(false);
         setShowCredentialChangeModal(Boolean(data.user.mustChangeCredential));
       } catch (error) {
         if (cancelled) return;
         console.error('Session verification error:', error);
-        setSessionExpired(false);
-        setLoginError('The server is temporarily unavailable. Your saved session is still kept.');
-        setShowLoginModal(true);
+        // Keep the current screen during short network interruptions.
       }
     };
 
@@ -717,7 +770,7 @@ export default function App() {
     return () => { cancelled = true; };
   }, [authToken]);
 
-  // Floor-user rolling session. Standard users receive a full-working-day token
+  // Floor-user rolling session. Standard users receive a long-lived token
   // and the app quietly renews it while the workstation remains in use. Admins
   // retain the shorter protected-session policy.
   useEffect(() => {
@@ -744,7 +797,7 @@ export default function App() {
 
         if (response.status === 401) {
           const latestStoredToken = localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
-          if (!latestStoredToken || latestStoredToken === requestToken) clearAuthSession(true);
+          if (!latestStoredToken || latestStoredToken === requestToken) clearAuthSession(false);
           return;
         }
 
@@ -918,7 +971,6 @@ export default function App() {
       return;
     }
 
-    setSessionExpired(false);
     setLoginError('');
     setLoggingIn(true);
 
@@ -942,7 +994,6 @@ export default function App() {
         setAuthToken(data.token);
         setCurrentUser(data.user);
         setShowLoginModal(false);
-        setSessionExpired(false);
         setLoginError('');
         setLoginPin('');
         setLoginPassword('');
@@ -1015,7 +1066,6 @@ export default function App() {
     if (loggingIn || !isAuthenticated) return;
     setShowLoginModal(false);
     setLoginError('');
-    setSessionExpired(false);
     setLoginPin('');
     setLoginPassword('');
     setShowLoginPassword(false);
@@ -1029,7 +1079,6 @@ export default function App() {
     authTokenRef.current = null;
     setAuthToken(null);
     setCurrentUser(null);
-    setSessionExpired(false);
     setShowCredentialChangeModal(false);
     setSelectedEmployeeId('');
     setLoginPin('');
@@ -1437,6 +1486,18 @@ export default function App() {
 
   const [newAudit, setNewAudit] = useState<Partial<IPQCAuditRecord>>(() => createEmptyAudit());
 
+  const categoryOptionsForForm = useMemo(() => {
+    const current = String(newAudit.category || '').trim();
+    return current && !CATEGORIES.includes(current) ? [current, ...CATEGORIES] : CATEGORIES;
+  }, [newAudit.category]);
+
+  const findingDetailOptionsForForm = useMemo(() => {
+    const category = String(newAudit.category || '').trim();
+    const currentDetail = String(newAudit.detailsFindings || '').trim();
+    const mapped = FINDING_DETAILS_BY_CATEGORY[category] || [];
+    return currentDetail && !mapped.includes(currentDetail) ? [currentDetail, ...mapped] : mapped;
+  }, [newAudit.category, newAudit.detailsFindings]);
+
   // Keep the stored WW when an existing record is opened. Recalculate WW only
   // when the user deliberately changes the audit date, so View and Edit never
   // show different work weeks for the same saved record.
@@ -1452,7 +1513,8 @@ export default function App() {
     setNewAudit(prev => ({
       ...prev,
       category: cat,
-      groupFinding: CATEGORY_GROUP_MAPPING[cat] || ''
+      groupFinding: CATEGORY_GROUP_MAPPING[cat] || '',
+      detailsFindings: '',
     }));
   };
 
@@ -1870,9 +1932,10 @@ export default function App() {
           department: row.department || DEPARTMENTS[0],
           platform: row.platform || PLATFORMS[0],
           areaStation: row.areaStation || '',
-          groupFinding: row.groupFinding || CATEGORY_GROUP_MAPPING[CATEGORIES[0]],
-          category: row.category || CATEGORIES[0],
-          detailsFindings: row.detailsFindings || FINDING_DETAILS[0],
+          groupFinding: row.groupFinding || (row.category ? CATEGORY_GROUP_MAPPING[row.category] || '' : ''),
+          category: row.category || '',
+          detailsFindings: row.detailsFindings || '',
+
           remark: row.remark || '',
           status: importedStatus || 'Open',
           icarNum: row.icarNum || 'N/A',
@@ -3032,7 +3095,7 @@ export default function App() {
                           <MultiSelectFilter
                             label="Category"
                             allLabel="All Categories"
-                            options={CATEGORIES}
+                            options={categoryFilterOptions}
                             values={filterCategory}
                             onChange={setFilterCategory}
                           />
@@ -3448,7 +3511,7 @@ export default function App() {
                             required
                             value={newAudit.category || ''}
                             onChange={handleCategoryChange}
-                            options={CATEGORIES}
+                            options={categoryOptionsForForm}
                             placeholder="Select category"
                           />
                           <AutoField label="Group finding" value={newAudit.groupFinding} />
@@ -3457,12 +3520,13 @@ export default function App() {
                             required
                             value={newAudit.detailsFindings || ''}
                             onChange={(v: string) => setNewAudit({ ...newAudit, detailsFindings: v })}
-                            options={FINDING_DETAILS}
-                            placeholder="Select finding detail"
+                            options={findingDetailOptionsForForm}
+                            placeholder={newAudit.category ? 'Select finding detail' : 'Select category first'}
+                            disabled={!newAudit.category}
                           />
                         </div>
 
-                        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                        <div className="mt-4 max-w-md">
                           <FormSelect
                             label="Finding status"
                             required
@@ -3470,14 +3534,7 @@ export default function App() {
                             onChange={(v: string) => setNewAudit({ ...newAudit, status: v })}
                             options={['Open', 'Closed']}
                             placeholder="Select finding status"
-                            helper={editingId ? 'Set Closed only when the finding has been resolved.' : 'New findings default to Open.'}
                           />
-                          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-3">
-                            <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">Lifecycle rule</p>
-                            <p className="mt-1 text-[11px] leading-5 text-slate-500">
-                              Finding status tracks resolution (<span className="font-semibold text-slate-700">Open / Closed</span>). ICAR status is managed separately from the ICAR number.
-                            </p>
-                          </div>
                         </div>
 
                         <div className="mt-4">
@@ -3541,12 +3598,7 @@ export default function App() {
                         <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
                           <div className="space-y-4 lg:col-span-5">
                             <div>
-                              <div className="mb-1.5 flex items-center justify-between gap-3">
-                                <label className="text-[11px] font-semibold text-slate-700">ICAR number</label>
-                                <span className="inline-flex items-center gap-1 text-[10px] text-slate-400">
-                                  <Info size={10} /> Keep N/A if not submitted
-                                </span>
-                              </div>
+                              <label className="mb-1.5 block text-[11px] font-semibold text-slate-700">ICAR number</label>
                               <input
                                 type="text"
                                 value={newAudit.icarNum || 'N/A'}
@@ -3566,13 +3618,9 @@ export default function App() {
                                   {newAudit.icarStatus === 'Submitted' ? <Unlock size={14} /> : <Lock size={14} />}
                                   {newAudit.icarStatus || 'Locked'}
                                 </span>
-                                <span className="text-[9px] font-bold uppercase tracking-wide opacity-60">Auto</span>
                               </div>
                             </div>
 
-                            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-[10px] leading-5 text-slate-500">
-                              Entering a valid ICAR number automatically changes the ICAR status to <span className="font-semibold text-slate-700">Submitted</span>.
-                            </div>
                           </div>
 
                           <div className="lg:col-span-7">
@@ -3722,9 +3770,6 @@ export default function App() {
                         >
                           Cancel
                         </button>
-                        <p className="mt-3 border-t border-slate-100 pt-3 text-center text-[10px] leading-4 text-slate-400">
-                          {editingId ? 'Changes will update the existing IPQC record.' : 'The finding will be added to the IPQC records table.'}
-                        </p>
                       </div>
                     </aside>
                   </form>
@@ -4023,9 +4068,6 @@ export default function App() {
                       Admin intelligence
                     </div>
                     <h2 className="text-xl font-black tracking-tight text-slate-900 md:text-2xl">AI Insights</h2>
-                    <p className="mt-1 max-w-2xl text-[11px] leading-5 text-slate-500">
-                      Ask operational questions in plain language. The assistant receives a read-only aggregated IPQC snapshot and cannot change audit records.
-                    </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[10px] font-bold text-emerald-700">
@@ -4118,10 +4160,7 @@ export default function App() {
                       <section ref={aiResponseRef} className="rounded-xl border border-orange-200 bg-orange-50/70 p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
                         <div className="flex items-center gap-3">
                           <span className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-orange-200 border-t-brand-orange" />
-                          <div>
-                            <p className="text-xs font-black text-slate-800">Analyzing current IPQC data…</p>
-                            <p className="mt-1 text-[10px] leading-5 text-slate-500">Your answer will appear here automatically when the analysis is complete.</p>
-                          </div>
+                          <p className="text-xs font-black text-slate-800">Analyzing current IPQC data…</p>
                         </div>
                       </section>
                     )}
@@ -4172,15 +4211,8 @@ export default function App() {
                             <p className="whitespace-pre-wrap text-[12px] font-medium leading-6 text-slate-700">{aiResult.answer}</p>
                           </div>
 
-                          <div className="mt-5 flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
-                            <div>
-                              {aiResult.caveat ? (
-                                <p className="text-[9px] leading-4 text-slate-400">{aiResult.caveat}</p>
-                              ) : (
-                                <p className="text-[9px] leading-4 text-slate-400">Verify important decisions against the source records.</p>
-                              )}
-                            </div>
-                            {aiResult.filters && Object.values(aiResult.filters).some(Boolean) && (
+                          {aiResult.filters && Object.values(aiResult.filters).some(Boolean) && (
+                            <div className="mt-5 border-t border-slate-100 pt-4 text-right">
                               <button
                                 type="button"
                                 onClick={() => openRecordPreset(aiResult.filters)}
@@ -4189,17 +4221,14 @@ export default function App() {
                                 <Layers size={13} />
                                 View matching records
                               </button>
-                            )}
-                          </div>
+                            </div>
+                          )}
                         </div>
                       </section>
                     ) : !aiLoading && !aiError ? (
-                      <section className="rounded-xl border border-dashed border-slate-300 bg-white/60 px-5 py-10 text-center">
-                        <Sparkles size={24} className="mx-auto text-slate-300" />
-                        <p className="mt-3 text-xs font-black text-slate-700">Ready for an operational question</p>
-                        <p className="mx-auto mt-1 max-w-md text-[10px] leading-5 text-slate-400">
-                          Start with one of the suggested questions above. Results are based on the current database snapshot.
-                        </p>
+                      <section className="rounded-xl border border-dashed border-slate-300 bg-white/60 px-5 py-8 text-center">
+                        <Sparkles size={22} className="mx-auto text-slate-300" />
+                        <p className="mt-2 text-xs font-black text-slate-700">Ask a question to begin</p>
                       </section>
                     ) : null}
                   </div>
@@ -4227,27 +4256,6 @@ export default function App() {
                       </div>
                     </section>
 
-                    <section className="rounded-xl border border-slate-200 bg-slate-900 p-4 text-white shadow-sm">
-                      <div className="flex items-center gap-2">
-                        <Lock size={13} className="text-emerald-400" />
-                        <p className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-300">Safety boundary</p>
-                      </div>
-                      <p className="mt-3 text-[11px] font-bold leading-5 text-white">Analysis only. No database writes.</p>
-                      <p className="mt-1 text-[9px] leading-4 text-slate-400">
-                        The AI route is authenticated and receives summarized operational data. It has no update, delete or close-finding tool.
-                      </p>
-                    </section>
-
-                    <section className="rounded-xl border border-slate-200 bg-white p-4">
-                      <p className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Useful prompts</p>
-                      <div className="mt-3 space-y-2 text-[10px] leading-5 text-slate-500">
-                        <p>• Compare platforms or work weeks.</p>
-                        <p>• Find unresolved ICAR follow-up.</p>
-                        <p>• Identify recurring categories.</p>
-                        <p>• Review MQE workload concentration.</p>
-                        <p>• Summarize management priorities.</p>
-                      </div>
-                    </section>
                   </aside>
                 </div>
               </motion.div>
@@ -5343,24 +5351,11 @@ export default function App() {
                   </div>
                   <div className="min-w-0 pt-0.5">
                     <h3 id="account-login-title" className="text-[21px] font-black tracking-[-0.02em] text-slate-900">IPQC Tracker</h3>
-                    <p className="mt-1 text-[12px] font-medium leading-5 text-slate-500">
-                      Floor users use a simple Employee ID + PIN. Administrators use their protected account credentials.
-                    </p>
                   </div>
                 </div>
               </div>
 
               <div className="px-7 py-6 sm:px-8">
-                {sessionExpired && (
-                  <div className="mb-5 flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-amber-800">
-                    <Clock size={16} className="mt-0.5 shrink-0" />
-                    <div>
-                      <p className="text-[12px] font-bold">Session ended</p>
-                      <p className="mt-0.5 text-[11px] font-medium leading-4 text-amber-700">Identify yourself again to continue.</p>
-                    </div>
-                  </div>
-                )}
-
                 <div className="mb-5 grid grid-cols-2 rounded-xl bg-slate-100 p-1">
                   <button
                     type="button"
@@ -5461,16 +5456,6 @@ export default function App() {
                       <p className="text-[11px] font-semibold leading-5">{loginError}</p>
                     </div>
                   )}
-
-                  <div className="flex items-start gap-2.5 rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 py-3">
-                    <ShieldCheck size={16} className="mt-0.5 shrink-0 text-slate-500" />
-                    <div>
-                      <p className="text-[11px] font-bold text-slate-600">Simple for the floor, accountable for QMS</p>
-                      <p className="mt-0.5 text-[10.5px] font-medium leading-4 text-slate-400">
-                        Your verified identity is attached automatically to created, edited and deleted findings. Never share your PIN.
-                      </p>
-                    </div>
-                  </div>
 
                   <div className="flex flex-col-reverse gap-2.5 pt-1 sm:flex-row sm:justify-end">
                     {isAuthenticated && (
@@ -5913,12 +5898,7 @@ function FormSection({ icon, title, description, children }: { icon: any, title:
 function AutoField({ label, value, accent = 'slate' }: { label: string, value?: string, accent?: 'slate' | 'orange' }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="flex items-center gap-2">
-        <label className="text-[11px] font-semibold text-slate-700">{label}</label>
-        <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold text-slate-500">
-          <Sparkles size={8} /> Auto
-        </span>
-      </div>
+      <label className="text-[11px] font-semibold text-slate-700">{label}</label>
       <div className={`flex h-11 w-full items-center truncate rounded-lg border border-slate-200 bg-slate-50 px-3.5 text-sm font-semibold ${
         accent === 'orange' ? 'text-brand-orange' : 'text-slate-600'
       }`}>
@@ -5972,7 +5952,7 @@ function RecordDetailField({ label, value, accent, mono }: { label: string, valu
   );
 }
 
-function FormSelect({ label, value, onChange, options, required, helper, placeholder }: any) {
+function FormSelect({ label, value, onChange, options, required, helper, placeholder, disabled = false }: any) {
   return (
     <div className="flex flex-col gap-1.5">
       <label className="text-[11px] font-semibold text-slate-700">
@@ -5983,7 +5963,8 @@ function FormSelect({ label, value, onChange, options, required, helper, placeho
           value={value}
           onChange={(e) => onChange(e.target.value)}
           required={required}
-          className="h-11 w-full appearance-none rounded-lg border border-slate-300 bg-white px-3.5 pr-9 text-sm font-medium text-slate-800 outline-none transition-all focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/10"
+          disabled={disabled}
+          className="h-11 w-full appearance-none rounded-lg border border-slate-300 bg-white px-3.5 pr-9 text-sm font-medium text-slate-800 outline-none transition-all focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/10 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
         >
           {placeholder && <option value="" disabled={required}>{placeholder}</option>}
           {options.map((opt: any) => <option key={opt} value={opt}>{opt}</option>)}
