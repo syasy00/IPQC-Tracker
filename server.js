@@ -428,6 +428,15 @@ const isSixDigitPin = (value) => /^\d{6}$/.test(String(value || ''));
 const isValidEmployeeId = (value) => /^[A-Za-z0-9._-]{2,50}$/.test(String(value || '').trim());
 const isValidUsername = (value) => /^[A-Za-z0-9._-]{3,100}$/.test(String(value || '').trim());
 
+const normalizeIcarInput = (value) => {
+  const trimmed = String(value ?? '').trim();
+  const hasIcarNumber = trimmed !== '' && trimmed.toUpperCase() !== 'N/A';
+  return {
+    icarNum: hasIcarNumber ? trimmed : 'N/A',
+    icarStatus: hasIcarNumber ? 'Submitted' : 'Locked',
+  };
+};
+
 // PINs are intentionally simple for floor use, so login attempts are rate-limited.
 // In a multi-instance deployment, move this bucket to Redis/shared storage.
 const authRateBuckets = new Map();
@@ -1617,6 +1626,7 @@ app.post('/api/records', authenticateUser, upload.single('picture'), async (req,
 
   const picture = req.file ? `/uploads/${req.file.filename}` : (req.body.picture || null);
   const rowNo = no !== undefined && no !== null && no !== '' ? no : null;
+  const normalizedIcar = normalizeIcarInput(icarNum);
 
   try {
     await auditTrailReady;
@@ -1630,7 +1640,7 @@ app.post('/api/records', authenticateUser, upload.single('picture'), async (req,
       [
         rowNo, auditDate, ww, shift, auditors, personOnJob, department,
         platform, areaStation, groupFinding, category, detailsFindings,
-        picture, remark, status || 'Open', icarStatus || 'Locked', icarNum || 'N/A', mqeEngineer,
+        picture, remark, status || 'Open', normalizedIcar.icarStatus, normalizedIcar.icarNum, mqeEngineer,
         req.user.id,
       ]
     );
@@ -1677,6 +1687,7 @@ app.put('/api/records/:id', authenticateUser, upload.single('picture'), async (r
   } = req.body;
 
   const picture = req.file ? `/uploads/${req.file.filename}` : req.body.picture;
+  const normalizedIcar = normalizeIcarInput(icarNum);
 
   try {
     await auditTrailReady;
@@ -1699,7 +1710,7 @@ app.put('/api/records/:id', authenticateUser, upload.single('picture'), async (r
       [
         no, auditDate, ww, shift, auditors, personOnJob, department,
         platform, areaStation, groupFinding, category, detailsFindings,
-        picture, remark, status || 'Open', icarStatus || 'Locked', icarNum || 'N/A', mqeEngineer,
+        picture, remark, status || 'Open', normalizedIcar.icarStatus, normalizedIcar.icarNum, mqeEngineer,
         req.user.id, id,
       ]
     );

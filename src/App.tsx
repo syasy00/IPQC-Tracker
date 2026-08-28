@@ -1528,11 +1528,11 @@ export default function App() {
 
   const handleIcarNumChange = (num: string) => {
     const trimmed = num.trim();
-    const isSubmitted = trimmed !== '' && trimmed !== 'N/A';
+    const hasIcarNumber = trimmed !== '' && trimmed.toUpperCase() !== 'N/A';
     setNewAudit(prev => ({
       ...prev,
       icarNum: num,
-      icarStatus: isSubmitted ? 'Submitted' : 'Locked'
+      icarStatus: hasIcarNumber ? 'Submitted' : 'Locked'
     }));
   };
 
@@ -1699,6 +1699,9 @@ export default function App() {
   const handleAddAudit = async (e: FormEvent) => {
     e.preventDefault();
 
+    const enteredIcarNumber = String(newAudit.icarNum ?? '').trim();
+    const hasIcarNumber = enteredIcarNumber !== '' && enteredIcarNumber.toUpperCase() !== 'N/A';
+
     const payload = {
       ...newAudit,
       groupFinding: CATEGORY_GROUP_MAPPING[newAudit.category || ''] || '',
@@ -1706,7 +1709,8 @@ export default function App() {
       // silently changing a stored historical WW when an existing record is edited.
       ww: newAudit.ww || (newAudit.auditDate ? calculateWW(newAudit.auditDate) : ''),
       status: normalizeFindingStatus(newAudit.status) || 'Open',
-      icarStatus: (newAudit.icarNum && newAudit.icarNum !== 'N/A') ? 'Submitted' : 'Locked'
+      icarNum: hasIcarNumber ? enteredIcarNumber : 'N/A',
+      icarStatus: hasIcarNumber ? 'Submitted' : 'Locked'
     };
 
     try {
@@ -3601,9 +3605,10 @@ export default function App() {
                               <label className="mb-1.5 block text-[11px] font-semibold text-slate-700">ICAR number</label>
                               <input
                                 type="text"
-                                value={newAudit.icarNum || 'N/A'}
+                                value={newAudit.icarNum ?? ''}
                                 onChange={(e) => handleIcarNumChange(e.target.value)}
-                                className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3.5 text-sm font-semibold text-slate-800 outline-none transition-all focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/10"
+                                placeholder="Enter ICAR number"
+                                className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3.5 text-sm font-semibold text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/10"
                               />
                             </div>
 
