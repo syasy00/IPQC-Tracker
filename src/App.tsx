@@ -42,7 +42,9 @@ import {
   RotateCcw,
   DatabaseBackup,
   SlidersHorizontal,
-  ArchiveRestore
+  ArchiveRestore,
+  Smartphone,
+  Copy
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -147,6 +149,8 @@ type CurrentUser = {
   isActive?: boolean;
   mustChangeCredential?: boolean;
   credentialReady?: boolean;
+  mfaEnabled?: boolean;
+  mfaEnrolledAt?: string | null;
   lastLoginAt?: string | null;
 };
 
@@ -269,6 +273,11 @@ const auditActionLabel = (action: string): string => {
     USER_CREDENTIAL_RESET: 'Reset credential',
     USER_PIN_CHANGED: 'Changed PIN',
     ADMIN_PASSWORD_CHANGED: 'Changed admin password',
+    ADMIN_MFA_ENROLLED: 'Enabled admin MFA',
+    ADMIN_MFA_RESET: 'Reset admin MFA',
+    ADMIN_MFA_FAILED: 'Failed MFA check',
+    ADMIN_LOGIN_FAILED: 'Failed admin sign-in',
+    ADMIN_ACCOUNT_LOCKED: 'Admin account locked',
     USER_SIGNED_IN: 'Signed in',
     AUDITOR_LIST_UPDATED: 'Updated auditor list',
     MQE_MAPPING_UPDATED: 'Updated MQE mapping',
@@ -498,6 +507,19 @@ export default function App() {
   const [loginError, setLoginError] = useState('');
   const [loggingIn, setLoggingIn] = useState(false);
   const [showLoginPassword, setShowLoginPassword] = useState(false);
+  const [adminMfaStage, setAdminMfaStage] = useState<'credentials' | 'setup' | 'verify'>('credentials');
+  const [mfaChallengeToken, setMfaChallengeToken] = useState('');
+  const [mfaCode, setMfaCode] = useState('');
+  const [mfaSetupKey, setMfaSetupKey] = useState('');
+  const [mfaAccountLabel, setMfaAccountLabel] = useState('');
+
+  const resetAdminMfaFlow = () => {
+    setAdminMfaStage('credentials');
+    setMfaChallengeToken('');
+    setMfaCode('');
+    setMfaSetupKey('');
+    setMfaAccountLabel('');
+  };
 
   const [showCredentialChangeModal, setShowCredentialChangeModal] = useState(false);
   const [newCredential, setNewCredential] = useState('');
@@ -515,6 +537,7 @@ export default function App() {
     setAuthToken(null);
     setCurrentUser(null);
     setShowCredentialChangeModal(false);
+    resetAdminMfaFlow();
     setShowLoginModal(true);
     if (view === 'access-audit' || view === 'quality-config' || view === 'action-center' || view === 'ai-insights') setView('ipqc');
   };
@@ -589,7 +612,6 @@ export default function App() {
   const [importDragActive, setImportDragActive] = useState(false);
   const [importFileError, setImportFileError] = useState('');
   const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
-  const [exportingExcel, setExportingExcel] = useState(false);
 
   // Admin-only AI Insights state. The assistant is deliberately read-only:
   // it can analyze and recommend, but never writes to the audit database.
@@ -959,6 +981,25 @@ export default function App() {
     return [...source].sort((a, b) => b.value - a.value);
   }, [analyticsData, analyticsDimension]);
 
+  const completeLoginSession = (data: any) => {
+    localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, data.token);
+    localStorage.setItem(CURRENT_USER_STORAGE_KEY, JSON.stringify(data.user));
+    localStorage.removeItem('ipqc_admin_token');
+    localStorage.removeItem('ipqc_admin_username');
+    authTokenRef.current = data.token;
+    lastSessionRefreshAtRef.current = Date.now();
+    setAuthToken(data.token);
+    setCurrentUser(data.user);
+    setShowLoginModal(false);
+    setLoginError('');
+    setLoginPin('');
+    setLoginPassword('');
+    setLoginUsername('');
+    setShowLoginPassword(false);
+    resetAdminMfaFlow();
+    setShowCredentialChangeModal(Boolean(data.user.mustChangeCredential));
+  };
+
   const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
 
@@ -985,22 +1026,20 @@ export default function App() {
       });
 
       const data = await response.json().catch(() => ({}));
-      if (response.ok && data.token && data.user) {
-        localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, data.token);
-        localStorage.setItem(CURRENT_USER_STORAGE_KEY, JSON.stringify(data.user));
-        localStorage.removeItem('ipqc_admin_token');
-        localStorage.removeItem('ipqc_admin_username');
-        authTokenRef.current = data.token;
-        lastSessionRefreshAtRef.current = Date.now();
-        setAuthToken(data.token);
-        setCurrentUser(data.user);
-        setShowLoginModal(false);
-        setLoginError('');
-        setLoginPin('');
+
+      if (response.ok && loginMode === 'admin' && (data.mfaSetupRequired || data.mfaRequired) && data.challengeToken) {
+        setMfaChallengeToken(String(data.challengeToken));
+        setMfaAccountLabel(String(data.accountLabel || loginUsername.trim()));
+        setMfaSetupKey(String(data.setupKey || ''));
+        setMfaCode('');
+        setAdminMfaStage(data.mfaSetupRequired ? 'setup' : 'verify');
         setLoginPassword('');
-        setLoginUsername('');
         setShowLoginPassword(false);
-        setShowCredentialChangeModal(Boolean(data.user.mustChangeCredential));
+        return;
+      }
+
+      if (response.ok && data.token && data.user) {
+        completeLoginSession(data);
       } else {
         setLoginError(data.error || (loginMode === 'user'
           ? 'Invalid employee or PIN. Please try again.'
@@ -1008,6 +1047,36 @@ export default function App() {
       }
     } catch (err) {
       setLoginError('Could not reach the server. Check your connection and try again.');
+    } finally {
+      setLoggingIn(false);
+    }
+  };
+
+  const handleAdminMfaSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (loginMode !== 'admin' || adminMfaStage === 'credentials' || !mfaChallengeToken) return;
+    if (!/^\d{6}$/.test(mfaCode)) {
+      setLoginError('Enter the 6-digit code from your authenticator app.');
+      return;
+    }
+
+    setLoginError('');
+    setLoggingIn(true);
+    try {
+      const endpoint = adminMfaStage === 'setup' ? '/api/login/mfa/setup' : '/api/login/mfa/verify';
+      const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challengeToken: mfaChallengeToken, code: mfaCode }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.token || !data.user) {
+        throw new Error(data.error || 'Authenticator verification failed.');
+      }
+      completeLoginSession(data);
+    } catch (err) {
+      setLoginError(err instanceof Error ? err.message : 'Authenticator verification failed.');
+      setMfaCode('');
     } finally {
       setLoggingIn(false);
     }
@@ -1022,8 +1091,8 @@ export default function App() {
       setCredentialChangeError('Choose a 6-digit PIN.');
       return;
     }
-    if (!isUserPin && newCredential.length < 10) {
-      setCredentialChangeError('Administrator password must be at least 10 characters.');
+    if (!isUserPin && newCredential.length < 12) {
+      setCredentialChangeError('Administrator password must be at least 12 characters.');
       return;
     }
     if (newCredential !== confirmCredential) {
@@ -1070,6 +1139,7 @@ export default function App() {
     setLoginPin('');
     setLoginPassword('');
     setShowLoginPassword(false);
+    resetAdminMfaFlow();
   };
 
   const logout = () => {
@@ -1083,6 +1153,7 @@ export default function App() {
     setShowCredentialChangeModal(false);
     setSelectedEmployeeId('');
     setLoginPin('');
+    resetAdminMfaFlow();
     setShowLoginModal(true);
     setProfileMenuOpen(false);
     setView('ipqc');
@@ -1323,7 +1394,7 @@ export default function App() {
     e.preventDefault();
     const target = managedUsers.find(user => user.id === resetCredentialUserId);
     if (!target || usersSaving) return;
-    const valid = target.role === 'user' ? /^\d{6}$/.test(resetCredentialValue) : resetCredentialValue.length >= 10;
+    const valid = target.role === 'user' ? /^\d{6}$/.test(resetCredentialValue) : resetCredentialValue.length >= 12;
     if (!valid) return;
 
     setUsersSaving(true);
@@ -1342,6 +1413,25 @@ export default function App() {
       fetchAuditLog();
     } catch (err) {
       setUserManagementError(err instanceof Error ? err.message : 'Failed to reset credential.');
+    } finally {
+      setUsersSaving(false);
+    }
+  };
+
+  const handleResetAdminMfa = async (user: ManagedUser) => {
+    if (usersSaving || user.role !== 'admin' || currentUser?.id === user.id) return;
+    if (!confirm(`Reset authenticator MFA for ${user.fullName}?\n\nTheir current sessions will be revoked and they must enrol their authenticator again at next sign-in.`)) return;
+
+    setUsersSaving(true);
+    setUserManagementError('');
+    try {
+      const response = await authFetch(`${API_BASE_URL}/api/users/${user.id}/reset-mfa`, { method: 'POST' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Failed to reset administrator MFA.');
+      fetchManagedUsers();
+      fetchAuditLog();
+    } catch (err) {
+      setUserManagementError(err instanceof Error ? err.message : 'Failed to reset administrator MFA.');
     } finally {
       setUsersSaving(false);
     }
@@ -1985,27 +2075,6 @@ export default function App() {
       setImportFileError(err instanceof Error ? err.message : 'The workbook could not be processed. Check its format and try again.');
     } finally {
       setImporting(false);
-    }
-  };
-
-  const handleExcelExport = async () => {
-    if (exportingExcel) return;
-
-    setExportingExcel(true);
-    try {
-      const result = await exportToExcel(records);
-
-      if (result.failedImages > 0) {
-        alert(
-          `Excel exported successfully with ${result.embeddedImages} embedded photo${result.embeddedImages === 1 ? '' : 's'}. ` +
-          `${result.failedImages} photo${result.failedImages === 1 ? '' : 's'} could not be loaded into the workbook.`
-        );
-      }
-    } catch (err) {
-      console.error('Excel export error:', err);
-      alert(err instanceof Error ? err.message : 'The Excel workbook could not be exported.');
-    } finally {
-      setExportingExcel(false);
     }
   };
 
@@ -2976,12 +3045,11 @@ export default function App() {
                       </button>
                       <button
                         type="button"
-                        onClick={handleExcelExport}
-                        disabled={exportingExcel}
-                        className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-[10px] font-black uppercase tracking-[0.12em] text-slate-600 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-all hover:border-slate-300 hover:bg-slate-50 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-55"
+                        onClick={() => exportToExcel(records)}
+                        className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-[10px] font-black uppercase tracking-[0.12em] text-slate-600 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-all hover:border-slate-300 hover:bg-slate-50 hover:text-slate-800"
                       >
-                        <Download size={14} className={`text-emerald-600 ${exportingExcel ? 'animate-pulse' : ''}`} />
-                        {exportingExcel ? 'Exporting...' : 'Export'}
+                        <Download size={14} className="text-emerald-600" />
+                        Export
                       </button>
                       <button
                         type="button"
@@ -4453,7 +4521,7 @@ export default function App() {
                         <div>
                           <h3 className="text-sm font-black text-slate-900">User Access Management</h3>
                           <p className="mt-0.5 max-w-2xl text-[10px] font-medium leading-4 text-slate-400">
-                            Standard users sign in with Employee ID + a simple 6-digit PIN. Administrators use a username + strong password. Temporary credentials must be changed on first sign-in.
+                            Standard users use Employee ID + PIN. Administrators use an individual username, strong password and authenticator MFA. Temporary credentials must be changed on first sign-in.
                           </p>
                         </div>
                       </div>
@@ -4474,7 +4542,7 @@ export default function App() {
                     {showCreateUser && (
                       <form onSubmit={handleCreateUser} className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
                         <div className="mb-3 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-[10px] font-semibold leading-4 text-blue-700">
-                          For floor users, create a temporary 6-digit PIN and give it directly to the employee. They will be forced to choose their own PIN on first sign-in. No email or SMTP is required.
+                          Create a temporary PIN for standard users or a temporary password for administrators. New administrators enrol an authenticator app at first sign-in.
                         </div>
                         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                           <FormInput label="Full name" required value={newUserDraft.fullName} onChange={(v: string) => setNewUserDraft(prev => ({ ...prev, fullName: v }))} placeholder="Employee full name" />
@@ -4500,7 +4568,7 @@ export default function App() {
                                   ...prev,
                                   credential: newUserDraft.role === 'user' ? e.target.value.replace(/\D/g, '').slice(0, 6) : e.target.value,
                                 }))}
-                                placeholder={newUserDraft.role === 'user' ? '6 digits' : 'Minimum 10 characters'}
+                                placeholder={newUserDraft.role === 'user' ? '6 digits' : 'Minimum 12 characters'}
                                 className="h-11 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3.5 text-sm font-medium text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/10"
                               />
                               {newUserDraft.role === 'user' && (
@@ -4517,7 +4585,7 @@ export default function App() {
                             disabled={usersSaving || !newUserDraft.fullName.trim() || (
                               newUserDraft.role === 'user'
                                 ? !newUserDraft.employeeId.trim() || !/^\d{6}$/.test(newUserDraft.credential)
-                                : !newUserDraft.username.trim() || newUserDraft.credential.length < 10
+                                : !newUserDraft.username.trim() || newUserDraft.credential.length < 12
                             )}
                             className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 text-[10px] font-black uppercase tracking-wider text-white transition-all hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
                           >
@@ -4594,14 +4662,31 @@ export default function App() {
                               </div>
                             </td>
                             <td className="px-5 py-3.5 text-right md:px-6">
-                              <button
-                                type="button"
-                                disabled={usersSaving || currentUser?.id === user.id}
-                                onClick={() => { setResetCredentialUserId(user.id); setResetCredentialValue(''); setUserManagementError(''); }}
-                                className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[9px] font-black uppercase tracking-wider text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
-                              >
-                                <Lock size={12} /> {user.role === 'user' ? 'Reset PIN' : 'Reset password'}
-                              </button>
+                              <div className="flex flex-wrap items-center justify-end gap-1.5">
+                                {user.role === 'admin' && (
+                                  <span className={`inline-flex h-7 items-center rounded-lg border px-2 text-[8px] font-black uppercase tracking-wider ${user.mfaEnabled ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
+                                    {user.mfaEnabled ? 'MFA enabled' : 'MFA pending'}
+                                  </span>
+                                )}
+                                <button
+                                  type="button"
+                                  disabled={usersSaving || currentUser?.id === user.id}
+                                  onClick={() => { setResetCredentialUserId(user.id); setResetCredentialValue(''); setUserManagementError(''); }}
+                                  className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[9px] font-black uppercase tracking-wider text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+                                >
+                                  <Lock size={12} /> {user.role === 'user' ? 'Reset PIN' : 'Reset password'}
+                                </button>
+                                {user.role === 'admin' && user.mfaEnabled && currentUser?.id !== user.id && (
+                                  <button
+                                    type="button"
+                                    disabled={usersSaving}
+                                    onClick={() => handleResetAdminMfa(user)}
+                                    className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[9px] font-black uppercase tracking-wider text-amber-600 transition-colors hover:bg-amber-50 hover:text-amber-700 disabled:opacity-40"
+                                  >
+                                    <Smartphone size={12} /> Reset MFA
+                                  </button>
+                                )}
+                              </div>
                             </td>
                           </tr>
                         ))}
@@ -4613,7 +4698,7 @@ export default function App() {
                     const target = managedUsers.find(user => user.id === resetCredentialUserId);
                     if (!target) return null;
                     const isPin = target.role === 'user';
-                    const valid = isPin ? /^\d{6}$/.test(resetCredentialValue) : resetCredentialValue.length >= 10;
+                    const valid = isPin ? /^\d{6}$/.test(resetCredentialValue) : resetCredentialValue.length >= 12;
                     return (
                       <form onSubmit={handleResetUserCredential} className="flex flex-col gap-3 border-t border-slate-100 bg-slate-50/70 px-5 py-4 md:flex-row md:items-end md:px-6">
                         <div className="flex-1">
@@ -4626,7 +4711,7 @@ export default function App() {
                             maxLength={isPin ? 6 : undefined}
                             value={resetCredentialValue}
                             onChange={(e) => setResetCredentialValue(isPin ? e.target.value.replace(/\D/g, '').slice(0, 6) : e.target.value)}
-                            placeholder={isPin ? '6 digits' : 'Minimum 10 characters'}
+                            placeholder={isPin ? '6 digits' : 'Minimum 12 characters'}
                             autoComplete="new-password"
                             className="h-10 w-full max-w-md rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 outline-none focus:border-brand-orange focus:ring-4 focus:ring-orange-100/60"
                           />
@@ -5387,21 +5472,21 @@ export default function App() {
                 <div className="mb-5 grid grid-cols-2 rounded-xl bg-slate-100 p-1">
                   <button
                     type="button"
-                    onClick={() => { setLoginMode('user'); setLoginError(''); }}
+                    onClick={() => { setLoginMode('user'); resetAdminMfaFlow(); setLoginError(''); }}
                     className={`h-10 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${loginMode === 'user' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                   >
                     Employee
                   </button>
                   <button
                     type="button"
-                    onClick={() => { setLoginMode('admin'); setLoginError(''); }}
+                    onClick={() => { setLoginMode('admin'); resetAdminMfaFlow(); setLoginError(''); }}
                     className={`h-10 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${loginMode === 'admin' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                   >
                     Administrator
                   </button>
                 </div>
 
-                <form onSubmit={handleLogin} className="space-y-5">
+                <form onSubmit={loginMode === 'admin' && adminMfaStage !== 'credentials' ? handleAdminMfaSubmit : handleLogin} className="space-y-5">
                   {loginMode === 'user' ? (
                     <>
                       <div>
@@ -5441,7 +5526,7 @@ export default function App() {
                         />
                       </div>
                     </>
-                  ) : (
+                  ) : adminMfaStage === 'credentials' ? (
                     <>
                       <div>
                         <label htmlFor="account-login-username" className="mb-2 block text-[12px] font-bold text-slate-700">Administrator username</label>
@@ -5476,6 +5561,69 @@ export default function App() {
                         </div>
                       </div>
                     </>
+                  ) : adminMfaStage === 'setup' ? (
+                    <>
+                      <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3.5">
+                        <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-brand-orange shadow-sm"><Smartphone size={16} /></div>
+                        <div className="min-w-0">
+                          <p className="text-[12px] font-black text-slate-800">Set up authenticator</p>
+                          <p className="mt-1 text-[10px] leading-4 text-slate-500">Add a new account in your authenticator app using this setup key.</p>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="mb-2 block text-[12px] font-bold text-slate-700">Setup key</label>
+                        <div className="flex gap-2">
+                          <div className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 font-mono text-[12px] font-black tracking-[0.12em] text-slate-800 break-all">{mfaSetupKey}</div>
+                          <button
+                            type="button"
+                            onClick={() => navigator.clipboard?.writeText(mfaSetupKey)}
+                            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+                            title="Copy setup key"
+                          ><Copy size={15} /></button>
+                        </div>
+                        <p className="mt-1.5 text-[9px] font-medium text-slate-400">Account: IPQC Tracker · {mfaAccountLabel}</p>
+                      </div>
+                      <div>
+                        <label htmlFor="admin-mfa-code" className="mb-2 block text-[12px] font-bold text-slate-700">6-digit authenticator code</label>
+                        <input
+                          id="admin-mfa-code"
+                          type="text"
+                          inputMode="numeric"
+                          maxLength={6}
+                          value={mfaCode}
+                          onChange={(e) => { setMfaCode(e.target.value.replace(/\D/g, '').slice(0, 6)); if (loginError) setLoginError(''); }}
+                          placeholder="000000"
+                          autoFocus
+                          disabled={loggingIn}
+                          className="h-12 w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 text-center font-mono text-lg font-black tracking-[0.3em] text-slate-900 outline-none transition-all focus:border-brand-orange focus:bg-white focus:ring-4 focus:ring-orange-100/70 disabled:opacity-60"
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3.5">
+                        <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-brand-orange shadow-sm"><Smartphone size={16} /></div>
+                        <div className="min-w-0">
+                          <p className="text-[12px] font-black text-slate-800">Two-step verification</p>
+                          <p className="mt-1 text-[10px] leading-4 text-slate-500">Enter the current code from your authenticator app for {mfaAccountLabel}.</p>
+                        </div>
+                      </div>
+                      <div>
+                        <label htmlFor="admin-mfa-code" className="mb-2 block text-[12px] font-bold text-slate-700">Authenticator code</label>
+                        <input
+                          id="admin-mfa-code"
+                          type="text"
+                          inputMode="numeric"
+                          maxLength={6}
+                          value={mfaCode}
+                          onChange={(e) => { setMfaCode(e.target.value.replace(/\D/g, '').slice(0, 6)); if (loginError) setLoginError(''); }}
+                          placeholder="000000"
+                          autoFocus
+                          disabled={loggingIn}
+                          className="h-12 w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3.5 text-center font-mono text-lg font-black tracking-[0.3em] text-slate-900 outline-none transition-all focus:border-brand-orange focus:bg-white focus:ring-4 focus:ring-orange-100/70 disabled:opacity-60"
+                        />
+                      </div>
+                    </>
                   )}
 
                   {loginError && (
@@ -5486,15 +5634,32 @@ export default function App() {
                   )}
 
                   <div className="flex flex-col-reverse gap-2.5 pt-1 sm:flex-row sm:justify-end">
-                    {isAuthenticated && (
+                    {loginMode === 'admin' && adminMfaStage !== 'credentials' ? (
+                      <button
+                        type="button"
+                        onClick={() => { resetAdminMfaFlow(); setLoginError(''); }}
+                        disabled={loggingIn}
+                        className="h-11 rounded-xl border border-slate-200 bg-white px-5 text-[12px] font-bold text-slate-600 hover:bg-slate-50 sm:min-w-[110px]"
+                      >Back</button>
+                    ) : isAuthenticated ? (
                       <button type="button" onClick={closeLoginModal} disabled={loggingIn} className="h-11 rounded-xl border border-slate-200 bg-white px-5 text-[12px] font-bold text-slate-600 hover:bg-slate-50 sm:min-w-[110px]">Cancel</button>
-                    )}
+                    ) : null}
                     <button
                       type="submit"
-                      disabled={loggingIn || (loginMode === 'user' ? !selectedEmployeeId || loginPin.length !== 6 : !loginUsername.trim() || !loginPassword)}
+                      disabled={loggingIn || (loginMode === 'user'
+                        ? !selectedEmployeeId || loginPin.length !== 6
+                        : adminMfaStage === 'credentials'
+                          ? !loginUsername.trim() || !loginPassword
+                          : mfaCode.length !== 6)}
                       className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-brand-orange px-5 text-[12px] font-black text-white shadow-[0_8px_20px_rgba(241,93,34,0.22)] transition-all hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none sm:min-w-[132px]"
                     >
-                      {loggingIn ? <><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/35 border-t-white" /> Signing in</> : <>Continue <ArrowRight size={15} /></>}
+                      {loggingIn
+                        ? <><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/35 border-t-white" /> Verifying</>
+                        : loginMode === 'admin' && adminMfaStage === 'setup'
+                          ? <>Enable MFA <ArrowRight size={15} /></>
+                          : loginMode === 'admin' && adminMfaStage === 'verify'
+                            ? <>Verify <ArrowRight size={15} /></>
+                            : <>Continue <ArrowRight size={15} /></>}
                     </button>
                   </div>
                 </form>
@@ -5535,7 +5700,7 @@ export default function App() {
                     maxLength={currentUser.role === 'user' ? 6 : undefined}
                     value={newCredential}
                     onChange={(e) => setNewCredential(currentUser.role === 'user' ? e.target.value.replace(/\D/g, '').slice(0, 6) : e.target.value)}
-                    placeholder={currentUser.role === 'user' ? '••••••' : 'Minimum 10 characters'}
+                    placeholder={currentUser.role === 'user' ? '••••••' : 'Minimum 12 characters'}
                     autoFocus
                     className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3.5 text-sm font-semibold text-slate-800 outline-none focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/10"
                   />
@@ -5554,7 +5719,7 @@ export default function App() {
                 </div>
                 {credentialChangeError && <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-[11px] font-semibold text-rose-700">{credentialChangeError}</div>}
                 <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-[10px] font-medium leading-4 text-slate-500">
-                  {currentUser.role === 'user' ? 'Use a PIN you can remember but others cannot easily guess. Avoid repeated digits such as 111111.' : 'Use at least 10 characters and do not reuse a personal password.'}
+                  {currentUser.role === 'user' ? 'Use a PIN you can remember but others cannot easily guess. Avoid repeated digits such as 111111.' : 'Use at least 12 characters and do not reuse a personal password.'}
                 </div>
                 <button
                   type="submit"

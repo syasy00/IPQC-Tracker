@@ -7,6 +7,7 @@ import path from 'path';
 import fs from 'fs';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 
 dotenv.config();
 
@@ -25,7 +26,11 @@ const {
   GEMINI_MODEL = 'gemini-3.6-flash',
   ALLOW_DATABASE_RESET = 'false',
   USER_SESSION_EXPIRES_IN = '7d',
-  ADMIN_SESSION_EXPIRES_IN = '8h'
+  ADMIN_SESSION_EXPIRES_IN = '8h',
+  MFA_ENCRYPTION_KEY = '',
+  ADMIN_MFA_CHALLENGE_EXPIRES_IN = '5m',
+  ADMIN_MAX_LOGIN_ATTEMPTS = '5',
+  ADMIN_LOCKOUT_MINUTES = '15'
 } = process.env;
 
 if (!JWT_SECRET) {
@@ -83,6 +88,8 @@ const toPublicUser = (row) => ({
   credentialReady: row.role === 'admin'
     ? Boolean(row.password_hash ?? row.has_password)
     : Boolean(row.pin_hash ?? row.has_pin),
+  mfaEnabled: row.role === 'admin' ? Boolean(row.mfa_enabled) : false,
+  mfaEnrolledAt: row.role === 'admin' ? (row.mfa_enrolled_at || null) : null,
   lastLoginAt: row.last_login_at || null,
   createdAt: row.created_at || null,
   updatedAt: row.updated_at || null,
@@ -119,7 +126,13 @@ const ensureUsersTable = async () => {
       is_active BOOLEAN NOT NULL DEFAULT TRUE,
       must_change_credential BOOLEAN NOT NULL DEFAULT FALSE,
       session_version INT NOT NULL DEFAULT 0,
+      mfa_secret_enc TEXT NULL,
+      mfa_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      mfa_enrolled_at DATETIME NULL,
+      failed_login_attempts INT NOT NULL DEFAULT 0,
+      locked_until DATETIME NULL,
       last_login_at DATETIME NULL,
+      last_login_ip VARCHAR(45) NULL,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       PRIMARY KEY (id),
@@ -135,6 +148,12 @@ const ensureUsersTable = async () => {
   await ensureUsersColumn('pin_hash', 'pin_hash VARCHAR(255) NULL');
   await ensureUsersColumn('must_change_credential', 'must_change_credential BOOLEAN NOT NULL DEFAULT FALSE');
   await ensureUsersColumn('session_version', 'session_version INT NOT NULL DEFAULT 0');
+  await ensureUsersColumn('mfa_secret_enc', 'mfa_secret_enc TEXT NULL');
+  await ensureUsersColumn('mfa_enabled', 'mfa_enabled BOOLEAN NOT NULL DEFAULT FALSE');
+  await ensureUsersColumn('mfa_enrolled_at', 'mfa_enrolled_at DATETIME NULL');
+  await ensureUsersColumn('failed_login_attempts', 'failed_login_attempts INT NOT NULL DEFAULT 0');
+  await ensureUsersColumn('locked_until', 'locked_until DATETIME NULL');
+  await ensureUsersColumn('last_login_ip', 'last_login_ip VARCHAR(45) NULL');
   await queryDb('ALTER TABLE users MODIFY COLUMN password_hash VARCHAR(255) NULL');
 
   const indexes = await queryDb('SHOW INDEX FROM users');
@@ -437,6 +456,169 @@ const normalizeIcarInput = (value) => {
   };
 };
 
+
+// ==========================================
+// Administrator MFA (TOTP)
+// ==========================================
+// No email service is required. Administrators enrol a standard authenticator
+// app (Microsoft Authenticator, Google Authenticator, 1Password, etc.) using a
+// one-time setup key, then enter a rotating 6-digit TOTP code at sign-in.
+const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+const mfaKeyMaterial = String(MFA_ENCRYPTION_KEY || JWT_SECRET || '');
+if (!MFA_ENCRYPTION_KEY) {
+  console.warn('WARNING: MFA_ENCRYPTION_KEY is not configured. JWT_SECRET will be used as the MFA encryption key until a separate key is added.');
+}
+
+const getMfaEncryptionKey = () => crypto.createHash('sha256').update(mfaKeyMaterial).digest();
+
+const encryptMfaSecret = (plaintext) => {
+  if (!plaintext || !mfaKeyMaterial) throw new Error('MFA encryption is not configured');
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', getMfaEncryptionKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(String(plaintext), 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `v1:${iv.toString('base64')}:${tag.toString('base64')}:${encrypted.toString('base64')}`;
+};
+
+const decryptMfaSecret = (payload) => {
+  const text = String(payload || '');
+  const [version, ivB64, tagB64, dataB64] = text.split(':');
+  if (version !== 'v1' || !ivB64 || !tagB64 || !dataB64 || !mfaKeyMaterial) {
+    throw new Error('Invalid MFA secret payload');
+  }
+  const decipher = crypto.createDecipheriv('aes-256-gcm', getMfaEncryptionKey(), Buffer.from(ivB64, 'base64'));
+  decipher.setAuthTag(Buffer.from(tagB64, 'base64'));
+  return Buffer.concat([decipher.update(Buffer.from(dataB64, 'base64')), decipher.final()]).toString('utf8');
+};
+
+const base32Encode = (buffer) => {
+  let bits = '';
+  for (const byte of buffer) bits += byte.toString(2).padStart(8, '0');
+  let output = '';
+  for (let i = 0; i < bits.length; i += 5) {
+    const chunk = bits.slice(i, i + 5).padEnd(5, '0');
+    output += BASE32_ALPHABET[parseInt(chunk, 2)];
+  }
+  return output;
+};
+
+const base32Decode = (value) => {
+  const normalized = String(value || '').toUpperCase().replace(/[^A-Z2-7]/g, '');
+  let bits = '';
+  for (const char of normalized) {
+    const index = BASE32_ALPHABET.indexOf(char);
+    if (index < 0) throw new Error('Invalid base32 MFA secret');
+    bits += index.toString(2).padStart(5, '0');
+  }
+  const bytes = [];
+  for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2));
+  return Buffer.from(bytes);
+};
+
+const generateMfaSecret = () => base32Encode(crypto.randomBytes(20));
+
+const generateTotpCode = (secret, timestampMs = Date.now()) => {
+  const step = Math.floor(timestampMs / 1000 / 30);
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(step));
+  const digest = crypto.createHmac('sha1', base32Decode(secret)).update(counter).digest();
+  const offset = digest[digest.length - 1] & 0x0f;
+  const binary = ((digest[offset] & 0x7f) << 24)
+    | ((digest[offset + 1] & 0xff) << 16)
+    | ((digest[offset + 2] & 0xff) << 8)
+    | (digest[offset + 3] & 0xff);
+  return String(binary % 1000000).padStart(6, '0');
+};
+
+const verifyTotpCode = (secret, code) => {
+  const normalized = String(code || '').replace(/\D/g, '');
+  if (!/^\d{6}$/.test(normalized)) return false;
+  const received = Buffer.from(normalized);
+  for (const offset of [-1, 0, 1]) {
+    const expected = Buffer.from(generateTotpCode(secret, Date.now() + offset * 30000));
+    if (received.length === expected.length && crypto.timingSafeEqual(received, expected)) return true;
+  }
+  return false;
+};
+
+const createMfaChallenge = (row, stage) => jwt.sign(
+  {
+    purpose: 'admin-mfa',
+    stage,
+    userId: Number(row.id),
+    sessionVersion: Number(row.session_version || 0),
+  },
+  JWT_SECRET,
+  { expiresIn: ADMIN_MFA_CHALLENGE_EXPIRES_IN }
+);
+
+const loadMfaChallengeUser = async (challengeToken, expectedStage) => {
+  if (!challengeToken || !JWT_SECRET) return null;
+  const decoded = jwt.verify(challengeToken, JWT_SECRET);
+  if (decoded?.purpose !== 'admin-mfa' || decoded?.stage !== expectedStage) return null;
+  const rows = await queryDb(
+    `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role,
+            job_title, department, is_active, must_change_credential, session_version,
+            mfa_secret_enc, mfa_enabled, mfa_enrolled_at, failed_login_attempts,
+            locked_until, last_login_at, last_login_ip, created_at, updated_at
+     FROM users WHERE id = ? AND role = 'admin' LIMIT 1`,
+    [Number(decoded.userId)]
+  );
+  const row = rows[0];
+  if (!row || !row.is_active || Number(row.session_version || 0) !== Number(decoded.sessionVersion || 0)) return null;
+  return row;
+};
+
+const isAdminLocked = (row) => {
+  if (!row?.locked_until) return false;
+  return new Date(row.locked_until).getTime() > Date.now();
+};
+
+const recordAdminPasswordFailure = async (row) => {
+  if (!row?.id) return { locked: false };
+  const maxAttempts = Math.max(3, Number(ADMIN_MAX_LOGIN_ATTEMPTS) || 5);
+  const lockoutMinutes = Math.max(1, Number(ADMIN_LOCKOUT_MINUTES) || 15);
+  const nextFailures = Number(row.failed_login_attempts || 0) + 1;
+  if (nextFailures >= maxAttempts) {
+    const lockedUntil = new Date(Date.now() + lockoutMinutes * 60 * 1000);
+    await queryDb(
+      'UPDATE users SET failed_login_attempts = 0, locked_until = ? WHERE id = ?',
+      [lockedUntil, row.id]
+    );
+    return { locked: true, lockedUntil };
+  }
+  await queryDb('UPDATE users SET failed_login_attempts = ? WHERE id = ?', [nextFailures, row.id]);
+  return { locked: false };
+};
+
+const clearAdminLoginFailures = async (userId) => {
+  await queryDb('UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?', [userId]);
+};
+
+const logAdminSecurityEvent = async (req, row, action, description, metadata = null) => {
+  try {
+    await auditTrailReady;
+    await queryDb(
+      `INSERT INTO audit_log
+        (actor_user_id, actor_username, actor_name, actor_role,
+         action, entity_type, entity_id, description, metadata, ip_address)
+       VALUES (?, ?, ?, 'admin', ?, 'session', ?, ?, ?, ?)`,
+      [
+        row?.id || null,
+        String(row?.username || req.body?.username || 'unknown'),
+        String(row?.full_name || row?.username || 'Unknown administrator'),
+        String(action),
+        row?.id ? String(row.id) : null,
+        String(description).slice(0, 500),
+        metadata ? JSON.stringify(metadata) : null,
+        getRequestIp(req),
+      ]
+    );
+  } catch (err) {
+    console.error('Admin security audit write failed:', err);
+  }
+};
+
 // PINs are intentionally simple for floor use, so login attempts are rate-limited.
 // In a multi-instance deployment, move this bucket to Redis/shared storage.
 const authRateBuckets = new Map();
@@ -469,6 +651,7 @@ const authenticateUser = async (req, res, next) => {
     const decoded = jwt.verify(token, JWT_SECRET);
     const userId = Number(decoded.userId);
     const sessionVersion = Number(decoded.sessionVersion || 0);
+    const mfaVerified = decoded.mfaVerified === true;
     if (!Number.isInteger(userId) || userId <= 0) {
       return res.status(401).json({ error: 'Invalid or expired session, please sign in again' });
     }
@@ -476,7 +659,8 @@ const authenticateUser = async (req, res, next) => {
     const rows = await queryDb(
       `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role,
               job_title, department, is_active, must_change_credential, session_version,
-              last_login_at, created_at, updated_at
+              mfa_secret_enc, mfa_enabled, mfa_enrolled_at, failed_login_attempts,
+              locked_until, last_login_at, last_login_ip, created_at, updated_at
        FROM users WHERE id = ? LIMIT 1`,
       [userId]
     );
@@ -484,6 +668,9 @@ const authenticateUser = async (req, res, next) => {
     const row = rows[0];
     if (!row || !row.is_active || Number(row.session_version || 0) !== sessionVersion) {
       return res.status(401).json({ error: 'Account is inactive or the session is no longer valid' });
+    }
+    if (row.role === 'admin' && (!row.mfa_enabled || !mfaVerified)) {
+      return res.status(401).json({ error: 'Administrator sign-in requires MFA verification' });
     }
 
     req.user = toPublicUser(row);
@@ -525,6 +712,7 @@ const issueSession = (row) => {
       userId: Number(row.id),
       role: isAdminAccount ? 'admin' : 'user',
       sessionVersion: Number(row.session_version || 0),
+      mfaVerified: isAdminAccount,
     },
     JWT_SECRET,
     { expiresIn }
@@ -559,7 +747,7 @@ app.post('/api/login', async (req, res) => {
     ? String(req.body?.username || '').trim().toLowerCase()
     : String(req.body?.employeeId || '').trim().toLowerCase();
   const rateKey = `login:${getRequestIp(req) || 'unknown'}:${mode}:${rateIdentity || 'blank'}`;
-  const rate = allowAuthAttempt(rateKey);
+  const rate = allowAuthAttempt(rateKey, mode === 'admin' ? 5 : 6, mode === 'admin' ? 15 * 60 * 1000 : 10 * 60 * 1000);
   if (!rate.allowed) {
     res.set('Retry-After', String(rate.retryAfterSeconds));
     return res.status(429).json({ error: 'Too many sign-in attempts. Wait a few minutes and try again.' });
@@ -571,8 +759,6 @@ app.post('/api/login', async (req, res) => {
 
   try {
     await usersReady;
-    let rows = [];
-    let credentialMatches = false;
 
     if (mode === 'admin') {
       const username = String(req.body?.username || '').trim();
@@ -580,47 +766,96 @@ app.post('/api/login', async (req, res) => {
       if (!username || !password) {
         return res.status(400).json({ error: 'Administrator username and password are required' });
       }
-      rows = await queryDb(
+
+      const rows = await queryDb(
         `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role,
                 job_title, department, is_active, must_change_credential, session_version,
-                last_login_at, created_at, updated_at
+                mfa_secret_enc, mfa_enabled, mfa_enrolled_at, failed_login_attempts,
+                locked_until, last_login_at, last_login_ip, created_at, updated_at
          FROM users WHERE username = ? AND role = 'admin' LIMIT 1`,
         [username]
       );
-      const row = rows[0];
-      credentialMatches = Boolean(row?.password_hash) && await bcrypt.compare(password, row.password_hash);
-    } else {
-      const employeeId = String(req.body?.employeeId || '').trim();
-      const pin = String(req.body?.pin || '');
-      if (!employeeId || !pin) {
-        return res.status(400).json({ error: 'Select your employee identity and enter your PIN' });
-      }
-      if (!isSixDigitPin(pin)) {
-        return res.status(400).json({ error: 'PIN must be exactly 6 digits' });
-      }
-      rows = await queryDb(
-        `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role,
-                job_title, department, is_active, must_change_credential, session_version,
-                last_login_at, created_at, updated_at
-         FROM users WHERE employee_id = ? AND role = 'user' LIMIT 1`,
-        [employeeId]
-      );
-      const row = rows[0];
-      credentialMatches = Boolean(row?.pin_hash) && await bcrypt.compare(pin, row.pin_hash);
-    }
+      const user = rows[0];
 
-    const user = rows[0];
-    if (!user || !user.is_active || !credentialMatches) {
-      return res.status(401).json({
-        error: mode === 'admin' ? 'Invalid administrator credentials' : 'Invalid employee or PIN',
+      if (user && isAdminLocked(user)) {
+        await logAdminSecurityEvent(req, user, 'ADMIN_ACCOUNT_LOCKED', `${user.full_name || user.username} attempted sign-in while the administrator account was temporarily locked`);
+        return res.status(423).json({ error: 'Administrator account is temporarily locked. Try again later.' });
+      }
+
+      const credentialMatches = Boolean(user?.password_hash) && await bcrypt.compare(password, user.password_hash);
+      if (!user || !user.is_active || !credentialMatches) {
+        if (user?.is_active) {
+          const failure = await recordAdminPasswordFailure(user);
+          await logAdminSecurityEvent(
+            req,
+            user,
+            failure.locked ? 'ADMIN_ACCOUNT_LOCKED' : 'ADMIN_LOGIN_FAILED',
+            failure.locked
+              ? `${user.full_name || user.username} administrator account was temporarily locked after repeated failed password attempts`
+              : `Failed administrator password attempt for ${user.full_name || user.username}`,
+            { reason: 'password' }
+          );
+        }
+        return res.status(401).json({ error: 'Invalid administrator credentials' });
+      }
+
+      await clearAdminLoginFailures(user.id);
+
+      let setupSecret = null;
+      if (!user.mfa_enabled) {
+        setupSecret = user.mfa_secret_enc ? decryptMfaSecret(user.mfa_secret_enc) : generateMfaSecret();
+        if (!user.mfa_secret_enc) {
+          await queryDb('UPDATE users SET mfa_secret_enc = ? WHERE id = ?', [encryptMfaSecret(setupSecret), user.id]);
+        }
+        const label = `IPQC Tracker:${user.username}`;
+        const otpauthUrl = `otpauth://totp/${encodeURIComponent(label)}?secret=${encodeURIComponent(setupSecret)}&issuer=${encodeURIComponent('IPQC Tracker')}&digits=6&period=30`;
+        clearAuthAttempts(rateKey);
+        return res.status(200).json({
+          mfaSetupRequired: true,
+          challengeToken: createMfaChallenge(user, 'setup'),
+          setupKey: setupSecret,
+          otpauthUrl,
+          accountLabel: user.username,
+        });
+      }
+
+      clearAuthAttempts(rateKey);
+      return res.status(200).json({
+        mfaRequired: true,
+        challengeToken: createMfaChallenge(user, 'verify'),
+        accountLabel: user.username,
       });
     }
 
-    await queryDb('UPDATE users SET last_login_at = NOW() WHERE id = ?', [user.id]);
+    const employeeId = String(req.body?.employeeId || '').trim();
+    const pin = String(req.body?.pin || '');
+    if (!employeeId || !pin) {
+      return res.status(400).json({ error: 'Select your employee identity and enter your PIN' });
+    }
+    if (!isSixDigitPin(pin)) {
+      return res.status(400).json({ error: 'PIN must be exactly 6 digits' });
+    }
+
+    const rows = await queryDb(
+      `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role,
+              job_title, department, is_active, must_change_credential, session_version,
+              mfa_secret_enc, mfa_enabled, mfa_enrolled_at, failed_login_attempts,
+              locked_until, last_login_at, last_login_ip, created_at, updated_at
+       FROM users WHERE employee_id = ? AND role = 'user' LIMIT 1`,
+      [employeeId]
+    );
+    const user = rows[0];
+    const credentialMatches = Boolean(user?.pin_hash) && await bcrypt.compare(pin, user.pin_hash);
+    if (!user || !user.is_active || !credentialMatches) {
+      return res.status(401).json({ error: 'Invalid employee or PIN' });
+    }
+
+    await queryDb('UPDATE users SET last_login_at = NOW(), last_login_ip = ? WHERE id = ?', [getRequestIp(req), user.id]);
     const refreshedRows = await queryDb(
       `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role,
               job_title, department, is_active, must_change_credential, session_version,
-              last_login_at, created_at, updated_at
+              mfa_secret_enc, mfa_enabled, mfa_enrolled_at, failed_login_attempts,
+              locked_until, last_login_at, last_login_ip, created_at, updated_at
        FROM users WHERE id = ? LIMIT 1`,
       [user.id]
     );
@@ -642,6 +877,128 @@ app.post('/api/login', async (req, res) => {
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+app.post('/api/login/mfa/setup', async (req, res) => {
+  const challengeToken = String(req.body?.challengeToken || '');
+  const code = String(req.body?.code || '').replace(/\D/g, '');
+  if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: 'Enter the 6-digit authenticator code' });
+
+  try {
+    const user = await loadMfaChallengeUser(challengeToken, 'setup');
+    if (!user || user.mfa_enabled || !user.mfa_secret_enc) {
+      return res.status(401).json({ error: 'MFA setup session is no longer valid. Start administrator sign-in again.' });
+    }
+    const rateKey = `mfa-setup:${getRequestIp(req) || 'unknown'}:${user.id}`;
+    const rate = allowAuthAttempt(rateKey, 6, 10 * 60 * 1000);
+    if (!rate.allowed) {
+      res.set('Retry-After', String(rate.retryAfterSeconds));
+      return res.status(429).json({ error: 'Too many verification attempts. Wait a few minutes and try again.' });
+    }
+
+    const secret = decryptMfaSecret(user.mfa_secret_enc);
+    if (!verifyTotpCode(secret, code)) {
+      await logAdminSecurityEvent(req, user, 'ADMIN_MFA_FAILED', `Invalid authenticator code during MFA enrolment for ${user.full_name || user.username}`, { stage: 'setup' });
+      return res.status(401).json({ error: 'Invalid authenticator code. Check the code and try again.' });
+    }
+
+    await queryDb(
+      `UPDATE users
+       SET mfa_enabled = TRUE, mfa_enrolled_at = NOW(), failed_login_attempts = 0,
+           locked_until = NULL, last_login_at = NOW(), last_login_ip = ?
+       WHERE id = ?`,
+      [getRequestIp(req), user.id]
+    );
+    clearAuthAttempts(rateKey);
+
+    const refreshedRows = await queryDb(
+      `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role,
+              job_title, department, is_active, must_change_credential, session_version,
+              mfa_secret_enc, mfa_enabled, mfa_enrolled_at, failed_login_attempts,
+              locked_until, last_login_at, last_login_ip, created_at, updated_at
+       FROM users WHERE id = ? LIMIT 1`,
+      [user.id]
+    );
+    const refreshed = refreshedRows[0];
+    const publicUser = toPublicUser(refreshed);
+    req.user = publicUser;
+    await logAuditEvent(req, {
+      action: 'ADMIN_MFA_ENROLLED',
+      entityType: 'user',
+      entityId: publicUser.id,
+      description: `${publicUser.fullName} enabled authenticator MFA`,
+    });
+    await logAuditEvent(req, {
+      action: 'USER_SIGNED_IN',
+      entityType: 'session',
+      entityId: publicUser.id,
+      description: `${publicUser.fullName} signed in`,
+      metadata: { role: 'admin', mfa: true },
+    });
+    res.status(200).json({ ...issueSession(refreshed), user: publicUser });
+  } catch (err) {
+    if (err?.name === 'JsonWebTokenError' || err?.name === 'TokenExpiredError') {
+      return res.status(401).json({ error: 'MFA setup session expired. Start administrator sign-in again.' });
+    }
+    console.error('MFA setup error:', err);
+    res.status(500).json({ error: 'Could not complete MFA setup' });
+  }
+});
+
+app.post('/api/login/mfa/verify', async (req, res) => {
+  const challengeToken = String(req.body?.challengeToken || '');
+  const code = String(req.body?.code || '').replace(/\D/g, '');
+  if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: 'Enter the 6-digit authenticator code' });
+
+  try {
+    const user = await loadMfaChallengeUser(challengeToken, 'verify');
+    if (!user || !user.mfa_enabled || !user.mfa_secret_enc) {
+      return res.status(401).json({ error: 'MFA verification session is no longer valid. Start administrator sign-in again.' });
+    }
+    const rateKey = `mfa-verify:${getRequestIp(req) || 'unknown'}:${user.id}`;
+    const rate = allowAuthAttempt(rateKey, 6, 10 * 60 * 1000);
+    if (!rate.allowed) {
+      res.set('Retry-After', String(rate.retryAfterSeconds));
+      return res.status(429).json({ error: 'Too many verification attempts. Wait a few minutes and try again.' });
+    }
+
+    const secret = decryptMfaSecret(user.mfa_secret_enc);
+    if (!verifyTotpCode(secret, code)) {
+      await logAdminSecurityEvent(req, user, 'ADMIN_MFA_FAILED', `Invalid authenticator code for ${user.full_name || user.username}`, { stage: 'verify' });
+      return res.status(401).json({ error: 'Invalid authenticator code. Check the code and try again.' });
+    }
+
+    await queryDb(
+      'UPDATE users SET last_login_at = NOW(), last_login_ip = ?, failed_login_attempts = 0, locked_until = NULL WHERE id = ?',
+      [getRequestIp(req), user.id]
+    );
+    clearAuthAttempts(rateKey);
+    const refreshedRows = await queryDb(
+      `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role,
+              job_title, department, is_active, must_change_credential, session_version,
+              mfa_secret_enc, mfa_enabled, mfa_enrolled_at, failed_login_attempts,
+              locked_until, last_login_at, last_login_ip, created_at, updated_at
+       FROM users WHERE id = ? LIMIT 1`,
+      [user.id]
+    );
+    const refreshed = refreshedRows[0];
+    const publicUser = toPublicUser(refreshed);
+    req.user = publicUser;
+    await logAuditEvent(req, {
+      action: 'USER_SIGNED_IN',
+      entityType: 'session',
+      entityId: publicUser.id,
+      description: `${publicUser.fullName} signed in`,
+      metadata: { role: 'admin', mfa: true },
+    });
+    res.status(200).json({ ...issueSession(refreshed), user: publicUser });
+  } catch (err) {
+    if (err?.name === 'JsonWebTokenError' || err?.name === 'TokenExpiredError') {
+      return res.status(401).json({ error: 'MFA verification session expired. Start administrator sign-in again.' });
+    }
+    console.error('MFA verify error:', err);
+    res.status(500).json({ error: 'Could not verify MFA code' });
   }
 });
 
@@ -672,8 +1029,8 @@ app.post('/api/change-credential', authenticateUser, async (req, res) => {
 
     if (target.role === 'admin') {
       const password = String(req.body?.password || '');
-      if (password.length < 10) {
-        return res.status(400).json({ error: 'Administrator password must be at least 10 characters' });
+      if (password.length < 12) {
+        return res.status(400).json({ error: 'Administrator password must be at least 12 characters' });
       }
       const passwordHash = await bcrypt.hash(password, 12);
       await queryDb(
@@ -713,7 +1070,8 @@ app.post('/api/change-credential', authenticateUser, async (req, res) => {
     const refreshedRows = await queryDb(
       `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role,
               job_title, department, is_active, must_change_credential, session_version,
-              last_login_at, created_at, updated_at
+              mfa_secret_enc, mfa_enabled, mfa_enrolled_at, failed_login_attempts,
+              locked_until, last_login_at, last_login_ip, created_at, updated_at
        FROM users WHERE id = ? LIMIT 1`,
       [target.id]
     );
@@ -733,7 +1091,8 @@ app.get('/api/users', authenticateUser, requireAdmin, async (req, res) => {
     await usersReady;
     const rows = await queryDb(`
       SELECT id, username, employee_id, full_name, role, job_title, department,
-             is_active, must_change_credential, last_login_at, created_at, updated_at,
+             is_active, must_change_credential, mfa_enabled, mfa_enrolled_at,
+             last_login_at, created_at, updated_at,
              (password_hash IS NOT NULL) AS has_password,
              (pin_hash IS NOT NULL) AS has_pin
       FROM users
@@ -762,8 +1121,8 @@ app.post('/api/users', authenticateUser, requireAdmin, async (req, res) => {
       if (!isValidUsername(username)) {
         return res.status(400).json({ error: 'Administrator username must be 3-100 characters using letters, numbers, dot, underscore or hyphen' });
       }
-      if (password.length < 10) {
-        return res.status(400).json({ error: 'Temporary administrator password must be at least 10 characters' });
+      if (password.length < 12) {
+        return res.status(400).json({ error: 'Temporary administrator password must be at least 12 characters' });
       }
       const passwordHash = await bcrypt.hash(password, 12);
       result = await queryDb(
@@ -794,7 +1153,8 @@ app.post('/api/users', authenticateUser, requireAdmin, async (req, res) => {
 
     const rows = await queryDb(
       `SELECT id, username, employee_id, full_name, role, job_title, department,
-              is_active, must_change_credential, last_login_at, created_at, updated_at,
+              is_active, must_change_credential, mfa_enabled, mfa_enrolled_at,
+              last_login_at, created_at, updated_at,
               (password_hash IS NOT NULL) AS has_password,
               (pin_hash IS NOT NULL) AS has_pin
        FROM users WHERE id = ? LIMIT 1`,
@@ -888,7 +1248,8 @@ app.put('/api/users/:id', authenticateUser, requireAdmin, async (req, res) => {
 
     const rows = await queryDb(
       `SELECT id, username, employee_id, full_name, role, job_title, department,
-              is_active, must_change_credential, last_login_at, created_at, updated_at,
+              is_active, must_change_credential, mfa_enabled, mfa_enrolled_at,
+              last_login_at, created_at, updated_at,
               (password_hash IS NOT NULL) AS has_password,
               (pin_hash IS NOT NULL) AS has_pin
        FROM users WHERE id = ? LIMIT 1`,
@@ -942,8 +1303,8 @@ app.post('/api/users/:id/reset-credential', authenticateUser, requireAdmin, asyn
     if (!target) return res.status(404).json({ error: 'User not found' });
 
     if (target.role === 'admin') {
-      if (credential.length < 10) {
-        return res.status(400).json({ error: 'Temporary administrator password must be at least 10 characters' });
+      if (credential.length < 12) {
+        return res.status(400).json({ error: 'Temporary administrator password must be at least 12 characters' });
       }
       const passwordHash = await bcrypt.hash(credential, 12);
       await queryDb(
@@ -982,6 +1343,45 @@ app.post('/api/users/:id/reset-credential', authenticateUser, requireAdmin, asyn
   } catch (err) {
     console.error('Reset credential error:', err);
     res.status(500).json({ error: 'Failed to reset credential' });
+  }
+});
+
+
+app.post('/api/users/:id/reset-mfa', authenticateUser, requireAdmin, async (req, res) => {
+  const targetId = Number(req.params.id);
+  if (!Number.isInteger(targetId) || targetId <= 0) return res.status(400).json({ error: 'Invalid user id' });
+  if (targetId === Number(req.user.id)) {
+    return res.status(400).json({ error: 'Another administrator must reset MFA for your own account.' });
+  }
+
+  try {
+    const rows = await queryDb(
+      'SELECT id, username, full_name, role, is_active FROM users WHERE id = ? LIMIT 1',
+      [targetId]
+    );
+    const target = rows[0];
+    if (!target) return res.status(404).json({ error: 'User not found' });
+    if (target.role !== 'admin') return res.status(400).json({ error: 'MFA reset applies only to administrator accounts' });
+
+    await queryDb(
+      `UPDATE users
+       SET mfa_secret_enc = NULL, mfa_enabled = FALSE, mfa_enrolled_at = NULL,
+           session_version = session_version + 1
+       WHERE id = ?`,
+      [targetId]
+    );
+
+    await logAuditEvent(req, {
+      action: 'ADMIN_MFA_RESET',
+      entityType: 'user',
+      entityId: targetId,
+      description: `Reset authenticator MFA for ${target.full_name || target.username}`,
+      metadata: { targetRole: 'admin', sessionsRevoked: true },
+    });
+    res.status(200).json({ message: 'Administrator MFA reset. The account must enrol an authenticator again at next sign-in.' });
+  } catch (err) {
+    console.error('Reset MFA error:', err);
+    res.status(500).json({ error: 'Failed to reset administrator MFA' });
   }
 });
 
