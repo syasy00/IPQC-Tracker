@@ -803,10 +803,11 @@ app.post('/api/login', async (req, res) => {
 
       let setupSecret = null;
       if (!user.mfa_enabled) {
-        setupSecret = user.mfa_secret_enc ? decryptMfaSecret(user.mfa_secret_enc) : generateMfaSecret();
-        if (!user.mfa_secret_enc) {
-          await queryDb('UPDATE users SET mfa_secret_enc = ? WHERE id = ?', [encryptMfaSecret(setupSecret), user.id]);
-        }
+        // Generate a fresh enrolment secret every time the administrator returns
+        // through the password step before MFA is enabled. This invalidates any
+        // abandoned/exposed setup QR or manual key from an earlier attempt.
+        setupSecret = generateMfaSecret();
+        await queryDb('UPDATE users SET mfa_secret_enc = ? WHERE id = ?', [encryptMfaSecret(setupSecret), user.id]);
         const label = `IPQC Tracker:${user.username}`;
         const otpauthUrl = `otpauth://totp/${encodeURIComponent(label)}?secret=${encodeURIComponent(setupSecret)}&issuer=${encodeURIComponent('IPQC Tracker')}&digits=6&period=30`;
         clearAuthAttempts(rateKey);

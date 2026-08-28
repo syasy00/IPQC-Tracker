@@ -1,4 +1,5 @@
 import { useState, useMemo, FormEvent, useRef, ChangeEvent, useEffect, DragEvent } from 'react';
+import { QRCodeSVG } from 'qrcode.react';
 import { 
   LayoutDashboard, 
   ClipboardCheck, 
@@ -511,14 +512,18 @@ export default function App() {
   const [mfaChallengeToken, setMfaChallengeToken] = useState('');
   const [mfaCode, setMfaCode] = useState('');
   const [mfaSetupKey, setMfaSetupKey] = useState('');
+  const [mfaOtpAuthUrl, setMfaOtpAuthUrl] = useState('');
   const [mfaAccountLabel, setMfaAccountLabel] = useState('');
+  const [showMfaSetupKey, setShowMfaSetupKey] = useState(false);
 
   const resetAdminMfaFlow = () => {
     setAdminMfaStage('credentials');
     setMfaChallengeToken('');
     setMfaCode('');
     setMfaSetupKey('');
+    setMfaOtpAuthUrl('');
     setMfaAccountLabel('');
+    setShowMfaSetupKey(false);
   };
 
   const [showCredentialChangeModal, setShowCredentialChangeModal] = useState(false);
@@ -612,6 +617,7 @@ export default function App() {
   const [importDragActive, setImportDragActive] = useState(false);
   const [importFileError, setImportFileError] = useState('');
   const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
+  const [exportingExcel, setExportingExcel] = useState(false);
 
   // Admin-only AI Insights state. The assistant is deliberately read-only:
   // it can analyze and recommend, but never writes to the audit database.
@@ -1031,6 +1037,8 @@ export default function App() {
         setMfaChallengeToken(String(data.challengeToken));
         setMfaAccountLabel(String(data.accountLabel || loginUsername.trim()));
         setMfaSetupKey(String(data.setupKey || ''));
+        setMfaOtpAuthUrl(String(data.otpauthUrl || ''));
+        setShowMfaSetupKey(false);
         setMfaCode('');
         setAdminMfaStage(data.mfaSetupRequired ? 'setup' : 'verify');
         setLoginPassword('');
@@ -2078,6 +2086,27 @@ export default function App() {
     }
   };
 
+  const handleExcelExport = async () => {
+    if (exportingExcel) return;
+
+    setExportingExcel(true);
+    try {
+      const result = await exportToExcel(records);
+
+      if (result.failedImages > 0) {
+        alert(
+          `Excel exported successfully with ${result.embeddedImages} embedded photo${result.embeddedImages === 1 ? '' : 's'}. ` +
+          `${result.failedImages} photo${result.failedImages === 1 ? '' : 's'} could not be loaded into the workbook.`
+        );
+      }
+    } catch (err) {
+      console.error('Excel export error:', err);
+      alert(err instanceof Error ? err.message : 'The Excel workbook could not be exported.');
+    } finally {
+      setExportingExcel(false);
+    }
+  };
+
   // Header title changes with the active tab, replacing the old static
   // "IPQC TRACKER" label + the separate "IPQC Records Management" panel
   // that used to repeat the same info and eat vertical space.
@@ -3045,11 +3074,12 @@ export default function App() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => exportToExcel(records)}
-                        className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-[10px] font-black uppercase tracking-[0.12em] text-slate-600 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-all hover:border-slate-300 hover:bg-slate-50 hover:text-slate-800"
+                        onClick={handleExcelExport}
+                        disabled={exportingExcel}
+                        className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-[10px] font-black uppercase tracking-[0.12em] text-slate-600 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-all hover:border-slate-300 hover:bg-slate-50 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-55"
                       >
-                        <Download size={14} className="text-emerald-600" />
-                        Export
+                        <Download size={14} className={`text-emerald-600 ${exportingExcel ? 'animate-pulse' : ''}`} />
+                        {exportingExcel ? 'Exporting...' : 'Export'}
                       </button>
                       <button
                         type="button"
@@ -5567,22 +5597,54 @@ export default function App() {
                         <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-brand-orange shadow-sm"><Smartphone size={16} /></div>
                         <div className="min-w-0">
                           <p className="text-[12px] font-black text-slate-800">Set up authenticator</p>
-                          <p className="mt-1 text-[10px] leading-4 text-slate-500">Add a new account in your authenticator app using this setup key.</p>
+                          <p className="mt-1 text-[10px] leading-4 text-slate-500">Scan the QR code with your authenticator app, then enter the current 6-digit code.</p>
                         </div>
                       </div>
-                      <div>
-                        <label className="mb-2 block text-[12px] font-bold text-slate-700">Setup key</label>
-                        <div className="flex gap-2">
-                          <div className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 font-mono text-[12px] font-black tracking-[0.12em] text-slate-800 break-all">{mfaSetupKey}</div>
-                          <button
-                            type="button"
-                            onClick={() => navigator.clipboard?.writeText(mfaSetupKey)}
-                            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-800"
-                            title="Copy setup key"
-                          ><Copy size={15} /></button>
+
+                      <div className="flex flex-col items-center">
+                        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_8px_28px_rgba(15,23,42,0.06)]">
+                          {mfaOtpAuthUrl ? (
+                            <QRCodeSVG
+                              value={mfaOtpAuthUrl}
+                              size={188}
+                              level="M"
+                              bgColor="#FFFFFF"
+                              fgColor="#0F172A"
+                              title={`IPQC Tracker authenticator setup for ${mfaAccountLabel}`}
+                            />
+                          ) : (
+                            <div className="flex h-[188px] w-[188px] items-center justify-center rounded-xl bg-slate-50 text-center text-[10px] font-semibold leading-4 text-slate-400">
+                              QR code unavailable. Use the setup key below.
+                            </div>
+                          )}
                         </div>
-                        <p className="mt-1.5 text-[9px] font-medium text-slate-400">Account: IPQC Tracker · {mfaAccountLabel}</p>
+                        <p className="mt-2 text-[9px] font-semibold text-slate-400">IPQC Tracker · {mfaAccountLabel}</p>
                       </div>
+
+                      <div className="rounded-xl border border-slate-200 bg-white">
+                        <button
+                          type="button"
+                          onClick={() => setShowMfaSetupKey(value => !value)}
+                          className="flex w-full items-center justify-between gap-3 px-3.5 py-3 text-left"
+                        >
+                          <span className="text-[10px] font-bold text-slate-600">Can't scan the QR code?</span>
+                          <span className="text-[9px] font-black uppercase tracking-wider text-brand-orange">{showMfaSetupKey ? 'Hide key' : 'Show setup key'}</span>
+                        </button>
+                        {showMfaSetupKey && (
+                          <div className="border-t border-slate-100 p-3">
+                            <div className="flex gap-2">
+                              <div className="min-w-0 flex-1 rounded-lg bg-slate-50 px-3 py-2.5 font-mono text-[10px] font-black tracking-[0.1em] text-slate-700 break-all">{mfaSetupKey}</div>
+                              <button
+                                type="button"
+                                onClick={() => navigator.clipboard?.writeText(mfaSetupKey)}
+                                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+                                title="Copy setup key"
+                              ><Copy size={14} /></button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
                       <div>
                         <label htmlFor="admin-mfa-code" className="mb-2 block text-[12px] font-bold text-slate-700">6-digit authenticator code</label>
                         <input
