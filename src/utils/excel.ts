@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import * as ExcelJS from 'exceljs';
 import { AuditRecord } from '../types';
 
 // Excel category label -> internal app category value.
@@ -169,58 +170,287 @@ export const importFromExcel = (file: File): Promise<Partial<AuditRecord>[]> => 
   });
 };
 
-export const exportToExcel = (
+type PreparedExcelImage = {
+  base64: string;
+  extension: 'jpeg' | 'png' | 'gif';
+  width: number;
+  height: number;
+};
+
+export type ExcelExportResult = {
+  embeddedImages: number;
+  failedImages: number;
+};
+
+const blobToDataUrl = (blob: Blob): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('Unable to read evidence image.'));
+    reader.readAsDataURL(blob);
+  });
+
+const loadBlobAsImage = (blob: Blob): Promise<HTMLImageElement> =>
+  new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(blob);
+    const image = new Image();
+
+    image.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(image);
+    };
+
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('Unable to decode evidence image.'));
+    };
+
+    image.src = objectUrl;
+  });
+
+const convertUnsupportedImageToJpeg = async (
+  blob: Blob,
+  image: HTMLImageElement
+): Promise<PreparedExcelImage> => {
+  // WEBP is accepted by the web app but ExcelJS embeds jpeg/png/gif. Convert
+  // unsupported browser image formats to a high-quality JPEG before export.
+  const maxDimension = 1600;
+  const naturalWidth = Math.max(1, image.naturalWidth || image.width || 1);
+  const naturalHeight = Math.max(1, image.naturalHeight || image.height || 1);
+  const scale = Math.min(1, maxDimension / Math.max(naturalWidth, naturalHeight));
+  const width = Math.max(1, Math.round(naturalWidth * scale));
+  const height = Math.max(1, Math.round(naturalHeight * scale));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Unable to prepare evidence image for Excel.');
+
+  // Evidence pictures are photographic. A white backing avoids transparent
+  // pixels becoming black when converted to JPEG.
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, width, height);
+  context.drawImage(image, 0, 0, width, height);
+
+  return {
+    base64: canvas.toDataURL('image/jpeg', 0.9),
+    extension: 'jpeg',
+    width,
+    height,
+  };
+};
+
+const prepareImageForExcel = async (source: string): Promise<PreparedExcelImage> => {
+  const trimmed = clean(source);
+  if (!trimmed) throw new Error('Evidence image is empty.');
+
+  // Stored evidence is normally either a data URL or /uploads/... from the same
+  // web application. Relative paths are resolved against the current origin.
+  const resolvedSource = /^(data:|blob:|https?:)/i.test(trimmed)
+    ? trimmed
+    : new URL(trimmed, window.location.origin).toString();
+
+  const response = await fetch(resolvedSource);
+  if (!response.ok) {
+    throw new Error(`Unable to load evidence image (${response.status}).`);
+  }
+
+  const blob = await response.blob();
+  const image = await loadBlobAsImage(blob);
+  const width = Math.max(1, image.naturalWidth || image.width || 1);
+  const height = Math.max(1, image.naturalHeight || image.height || 1);
+  const mime = String(blob.type || '').toLowerCase();
+
+  if (mime.includes('png')) {
+    return {
+      base64: await blobToDataUrl(blob),
+      extension: 'png',
+      width,
+      height,
+    };
+  }
+
+  if (mime.includes('jpeg') || mime.includes('jpg')) {
+    return {
+      base64: await blobToDataUrl(blob),
+      extension: 'jpeg',
+      width,
+      height,
+    };
+  }
+
+  if (mime.includes('gif')) {
+    return {
+      base64: await blobToDataUrl(blob),
+      extension: 'gif',
+      width,
+      height,
+    };
+  }
+
+  // WEBP and any other browser-decodable format are converted for Excel.
+  return convertUnsupportedImageToJpeg(blob, image);
+};
+
+const fitImageInsideEvidenceCell = (width: number, height: number) => {
+  const maxWidth = 126;
+  const maxHeight = 88;
+  const scale = Math.min(maxWidth / Math.max(1, width), maxHeight / Math.max(1, height), 1);
+
+  return {
+    width: Math.max(24, Math.round(width * scale)),
+    height: Math.max(24, Math.round(height * scale)),
+  };
+};
+
+const downloadWorkbookBuffer = (buffer: any, filename: string) => {
+  const blob = new Blob(
+    [buffer as unknown as BlobPart],
+    { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
+  );
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+
+export const exportToExcel = async (
   data: AuditRecord[],
   filename: string = 'IPQC_Logs.xlsx'
-) => {
-  const rows = data.map((r) => ({
-    'No': r.no,
-    'Date': r.auditDate,
-    'WW': r.ww,
-    'Shift': r.shift,
-    'IPQC Auditor Name': r.auditors,
-    'PIC Finding': r.personOnJob,
-    'Department': r.department,
-    'Platform': r.platform,
-    'Area / Station #': r.areaStation,
-    'Group Finding': r.groupFinding,
-    'Category': CATEGORY_EXPORT_MAP[String(r.category || '')] || r.category,
-    'Finding Details': r.detailsFindings,
-    'Remark': r.remark,
+): Promise<ExcelExportResult> => {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'IPQC Tracker';
+  workbook.created = new Date();
+  workbook.modified = new Date();
 
-    // Keep both lifecycles in exported files so they can be re-imported safely.
-    'Status': normalizeFindingStatus((r as any).status) || '',
-    'ICAR Status': r.icarStatus || 'Locked',
-    'ICAR#': r.icarNum || 'N/A',
-    'MQE Engineer': r.mqeEngineer || '',
-  }));
+  const worksheet = workbook.addWorksheet('Audit Logs', {
+    views: [{ state: 'frozen', ySplit: 1 }],
+  });
 
-  const worksheet = XLSX.utils.json_to_sheet(rows);
-
-  // Make the exported workbook easier to inspect in Excel.
-  worksheet['!cols'] = [
-    { wch: 8 },   // No
-    { wch: 13 },  // Date
-    { wch: 8 },   // WW
-    { wch: 8 },   // Shift
-    { wch: 22 },  // Auditor
-    { wch: 22 },  // PIC
-    { wch: 20 },  // Department
-    { wch: 22 },  // Platform
-    { wch: 22 },  // Area
-    { wch: 18 },  // Group Finding
-    { wch: 34 },  // Category
-    { wch: 45 },  // Finding Details
-    { wch: 40 },  // Remark
-    { wch: 12 },  // Status
-    { wch: 14 },  // ICAR Status
-    { wch: 18 },  // ICAR#
-    { wch: 22 },  // MQE
+  worksheet.columns = [
+    { header: 'No', key: 'no', width: 8 },
+    { header: 'Date', key: 'auditDate', width: 13 },
+    { header: 'WW', key: 'ww', width: 8 },
+    { header: 'Shift', key: 'shift', width: 8 },
+    { header: 'IPQC Auditor Name', key: 'auditors', width: 22 },
+    { header: 'PIC Finding', key: 'personOnJob', width: 22 },
+    { header: 'Department', key: 'department', width: 20 },
+    { header: 'Platform', key: 'platform', width: 22 },
+    { header: 'Area / Station #', key: 'areaStation', width: 22 },
+    { header: 'Group Finding', key: 'groupFinding', width: 18 },
+    { header: 'Category', key: 'category', width: 34 },
+    { header: 'Finding Details', key: 'detailsFindings', width: 45 },
+    { header: 'Evidence Photo', key: 'evidencePhoto', width: 20 },
+    { header: 'Remark', key: 'remark', width: 40 },
+    { header: 'Status', key: 'status', width: 12 },
+    { header: 'ICAR Status', key: 'icarStatus', width: 14 },
+    { header: 'ICAR#', key: 'icarNum', width: 18 },
+    { header: 'MQE Engineer', key: 'mqeEngineer', width: 22 },
   ];
 
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, 'Audit Logs');
-  XLSX.writeFile(workbook, filename);
+  const headerRow = worksheet.getRow(1);
+  headerRow.height = 24;
+  headerRow.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+    cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    cell.border = {
+      top: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+      left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+      bottom: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+      right: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+    };
+  });
+
+  worksheet.autoFilter = { from: 'A1', to: 'R1' };
+
+  let embeddedImages = 0;
+  let failedImages = 0;
+  const evidenceColumnIndexZeroBased = 12; // Column M.
+
+  for (const record of data) {
+    const row = worksheet.addRow({
+      no: record.no ?? '',
+      auditDate: record.auditDate || '',
+      ww: record.ww || '',
+      shift: record.shift || '',
+      auditors: record.auditors || '',
+      personOnJob: record.personOnJob || '',
+      department: record.department || '',
+      platform: record.platform || '',
+      areaStation: record.areaStation || '',
+      groupFinding: record.groupFinding || '',
+      category: CATEGORY_EXPORT_MAP[String(record.category || '')] || record.category || '',
+      detailsFindings: record.detailsFindings || '',
+      evidencePhoto: '',
+      remark: record.remark || '',
+      status: normalizeFindingStatus((record as any).status) || '',
+      icarStatus: record.icarStatus || 'Locked',
+      icarNum: record.icarNum || 'N/A',
+      mqeEngineer: record.mqeEngineer || '',
+    });
+
+    row.height = record.picture ? 76 : 22;
+    row.eachCell({ includeEmpty: true }, (cell) => {
+      cell.alignment = { vertical: 'middle', wrapText: true };
+      cell.font = { size: 9, color: { argb: 'FF1E293B' } };
+      cell.border = {
+        top: { style: 'hair', color: { argb: 'FFE2E8F0' } },
+        left: { style: 'hair', color: { argb: 'FFE2E8F0' } },
+        bottom: { style: 'hair', color: { argb: 'FFE2E8F0' } },
+        right: { style: 'hair', color: { argb: 'FFE2E8F0' } },
+      };
+    });
+
+    if (!record.picture) continue;
+
+    try {
+      const prepared = await prepareImageForExcel(record.picture);
+      const imageId = workbook.addImage({
+        base64: prepared.base64,
+        extension: prepared.extension,
+      });
+      const fitted = fitImageInsideEvidenceCell(prepared.width, prepared.height);
+
+      worksheet.addImage(imageId, {
+        tl: {
+          col: evidenceColumnIndexZeroBased + 0.08,
+          row: row.number - 1 + 0.08,
+        },
+        ext: {
+          width: fitted.width,
+          height: fitted.height,
+        },
+        editAs: 'oneCell',
+      });
+
+      embeddedImages += 1;
+    } catch (error) {
+      failedImages += 1;
+      const evidenceCell = row.getCell('evidencePhoto');
+      evidenceCell.value = 'Image unavailable';
+      evidenceCell.font = { italic: true, size: 9, color: { argb: 'FF94A3B8' } };
+      console.warn(`Evidence image could not be embedded for record ${record.no ?? record.id}:`, error);
+    }
+  }
+
+  worksheet.getColumn('no').alignment = { horizontal: 'center', vertical: 'middle' };
+  worksheet.getColumn('ww').alignment = { horizontal: 'center', vertical: 'middle' };
+  worksheet.getColumn('shift').alignment = { horizontal: 'center', vertical: 'middle' };
+  worksheet.getColumn('status').alignment = { horizontal: 'center', vertical: 'middle' };
+  worksheet.getColumn('icarStatus').alignment = { horizontal: 'center', vertical: 'middle' };
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  downloadWorkbookBuffer(buffer, filename);
+
+  return { embeddedImages, failedImages };
 };
 
 export const calculateWW = (dateStr: string): string => {

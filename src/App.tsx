@@ -589,6 +589,7 @@ export default function App() {
   const [importDragActive, setImportDragActive] = useState(false);
   const [importFileError, setImportFileError] = useState('');
   const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
+  const [exportingExcel, setExportingExcel] = useState(false);
 
   // Admin-only AI Insights state. The assistant is deliberately read-only:
   // it can analyze and recommend, but never writes to the audit database.
@@ -1987,6 +1988,27 @@ export default function App() {
     }
   };
 
+  const handleExcelExport = async () => {
+    if (exportingExcel) return;
+
+    setExportingExcel(true);
+    try {
+      const result = await exportToExcel(records);
+
+      if (result.failedImages > 0) {
+        alert(
+          `Excel exported successfully with ${result.embeddedImages} embedded photo${result.embeddedImages === 1 ? '' : 's'}. ` +
+          `${result.failedImages} photo${result.failedImages === 1 ? '' : 's'} could not be loaded into the workbook.`
+        );
+      }
+    } catch (err) {
+      console.error('Excel export error:', err);
+      alert(err instanceof Error ? err.message : 'The Excel workbook could not be exported.');
+    } finally {
+      setExportingExcel(false);
+    }
+  };
+
   // Header title changes with the active tab, replacing the old static
   // "IPQC TRACKER" label + the separate "IPQC Records Management" panel
   // that used to repeat the same info and eat vertical space.
@@ -2954,11 +2976,12 @@ export default function App() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => exportToExcel(records)}
-                        className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-[10px] font-black uppercase tracking-[0.12em] text-slate-600 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-all hover:border-slate-300 hover:bg-slate-50 hover:text-slate-800"
+                        onClick={handleExcelExport}
+                        disabled={exportingExcel}
+                        className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-[10px] font-black uppercase tracking-[0.12em] text-slate-600 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-all hover:border-slate-300 hover:bg-slate-50 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-55"
                       >
-                        <Download size={14} className="text-emerald-600" />
-                        Export
+                        <Download size={14} className={`text-emerald-600 ${exportingExcel ? 'animate-pulse' : ''}`} />
+                        {exportingExcel ? 'Exporting...' : 'Export'}
                       </button>
                       <button
                         type="button"
