@@ -2131,7 +2131,7 @@ app.put('/api/records/:id', authenticateUser, upload.single('picture'), async (r
       action,
       entityType: 'finding',
       entityId: id,
-      description: `${action === 'FINDING_MQE_RECALCULATED' ? 'Recalculated MQE ownership for' : 'Updated'} Finding ${formatRecordNumber(updated, id)}`,
+      description: `${action === 'FINDING_MQE_RECALCULATED' ? 'Synced MQE ownership for' : 'Updated'} Finding ${formatRecordNumber(updated, id)}`,
       metadata: {
         changedFields,
         status: updated?.status || '',

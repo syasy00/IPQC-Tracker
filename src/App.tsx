@@ -262,7 +262,7 @@ const auditActionLabel = (action: string): string => {
     FINDING_CREATED: 'Created finding',
     FINDING_IMPORTED: 'Imported finding',
     FINDING_UPDATED: 'Updated finding',
-    FINDING_MQE_RECALCULATED: 'Recalculated MQE',
+    FINDING_MQE_RECALCULATED: 'Synced MQE ownership',
     FINDING_DELETED: 'Moved to recycle bin',
     FINDING_RESTORED: 'Restored finding',
     FINDING_VERSION_RESTORED: 'Restored record version',
@@ -293,7 +293,7 @@ const versionChangeLabel = (changeType: string): string => {
     created: 'Created',
     baseline: 'Baseline',
     updated: 'Updated',
-    mqe_recalculated: 'MQE recalculated',
+    mqe_recalculated: 'MQE ownership synced',
     deleted: 'Moved to recycle bin',
     restored: 'Restored',
     version_restored: 'Version restored',
@@ -1466,7 +1466,7 @@ export default function App() {
       return;
     }
 
-    if (!confirm(`This will update ${toFix.length} record(s) to match the current Platform - MQE mapping. Continue?`)) {
+    if (!confirm(`This will sync ${toFix.length} existing record(s) with the current Platform → MQE ownership. Continue?`)) {
       return;
     }
 
@@ -1491,10 +1491,10 @@ export default function App() {
         setRecords((await refreshResponse.json()).map(normalizeRecord));
       }
 
-      alert(`Updated ${successCount} out of ${toFix.length} record(s).`);
+      alert(`Synced ${successCount} of ${toFix.length} record(s).`);
     } catch (err) {
-      console.error('Recalculate MQE error:', err);
-      alert('Something went wrong while updating records. Some records may not have been updated.');
+      console.error('MQE ownership sync error:', err);
+      alert('Something went wrong while syncing records. Some records may not have been updated.');
     } finally {
       setRecalculating(false);
     }
@@ -5126,7 +5126,7 @@ export default function App() {
                               className="inline-flex h-10 w-full md:w-auto items-center justify-center gap-1.5 rounded-lg bg-slate-900 px-4 text-[10px] font-black uppercase tracking-wider text-white transition-all hover:bg-slate-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
                             >
                               <CheckCircle2 size={14} />
-                              Save assignment
+                              {mqeMappings[selectedPlatformForMapping]?.trim() ? 'Update MQE' : 'Assign MQE'}
                             </button>
                           </div>
                         </div>
@@ -5221,11 +5221,11 @@ export default function App() {
                       </div>
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="text-sm font-black text-slate-900">MQE assignment synchronization</h3>
+                          <h3 className="text-sm font-black text-slate-900">Sync MQE Ownership</h3>
                           <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-amber-700">Maintenance</span>
                         </div>
                         <p className="mt-1 max-w-3xl text-[11px] leading-5 text-slate-500">
-                          Re-apply the current Platform → MQE ownership rules to existing records. Use this after changing ownership for a platform that already has historical findings.
+                          Apply the current Platform → MQE ownership rules to existing findings. Use this after changing the MQE assigned to a platform.
                         </p>
                       </div>
                     </div>
@@ -5237,7 +5237,7 @@ export default function App() {
                       className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 text-[10px] font-black uppercase tracking-wider text-slate-700 shadow-sm transition-all hover:border-slate-400 hover:bg-slate-50 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <TrendingUp size={14} className={recalculating ? 'animate-pulse' : ''} />
-                      {recalculating ? 'Updating records...' : 'Recalculate assignments'}
+                      {recalculating ? 'Syncing records...' : 'Sync existing records'}
                     </button>
                   </div>
                 </section>
