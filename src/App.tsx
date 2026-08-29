@@ -653,13 +653,21 @@ export default function App() {
         setProfileMenuOpen(false);
       }
     };
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setProfileMenuOpen(false);
+    };
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
   }, []);
 
   // Sidebar destinations behave like separate pages. When the admin/user moves
   // to another destination, always start at the top of the content area.
   useEffect(() => {
+    setProfileMenuOpen(false);
     const frame = window.requestAnimationFrame(() => {
       mainScrollRef.current?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
     });
@@ -2741,7 +2749,7 @@ export default function App() {
       </aside>
 
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="h-16 bg-white border-b border-slate-200 px-4 md:px-6 flex items-center justify-between sticky top-0 z-10 shrink-0 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+        <header className="h-16 bg-white border-b border-slate-200 px-4 md:px-6 flex items-center justify-between sticky top-0 z-[60] shrink-0 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
           <div className="flex items-center gap-3 md:gap-4 overflow-hidden">
             <button 
               onClick={() => setSidebarOpen(!sidebarOpen)}
@@ -2753,60 +2761,78 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-4">
-            <div className="relative" ref={profileMenuRef}>
+            <div className="relative shrink-0" ref={profileMenuRef}>
               <button
+                type="button"
                 onClick={() => setProfileMenuOpen(o => !o)}
-                className="flex items-center gap-1.5 pl-1.5 pr-2 py-1.5 rounded-full border border-transparent hover:border-slate-200 hover:bg-slate-50 transition-colors"
+                className={`flex h-10 items-center gap-1.5 rounded-full border px-1.5 pr-2 transition-all ${profileMenuOpen ? 'border-slate-200 bg-slate-50 shadow-sm' : 'border-transparent hover:border-slate-200 hover:bg-slate-50'}`}
                 aria-label="Account menu"
+                aria-haspopup="menu"
+                aria-expanded={profileMenuOpen}
               >
-                <div className={`relative w-8 h-8 rounded-full flex items-center justify-center text-white font-black text-xs shrink-0 ${isAdmin ? 'bg-emerald-500' : isAuthenticated ? 'bg-slate-700' : 'bg-slate-400'}`}>
+                <div className={`relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-black text-white ${isAdmin ? 'bg-emerald-500' : isAuthenticated ? 'bg-slate-700' : 'bg-slate-400'}`}>
                   {currentUser ? (currentUser.fullName || currentUser.username).charAt(0).toUpperCase() : <User size={16} />}
                   {isAuthenticated && (
-                    <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-400 border-2 border-white" />
+                    <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white bg-emerald-400" />
                   )}
                 </div>
-                <ChevronDown size={14} className={`hidden sm:block text-slate-400 transition-transform ${profileMenuOpen ? 'rotate-180' : ''}`} />
+                <ChevronDown size={14} className={`hidden text-slate-400 transition-transform sm:block ${profileMenuOpen ? 'rotate-180' : ''}`} />
               </button>
 
               <AnimatePresence>
                 {profileMenuOpen && (
                   <motion.div
-                    initial={{ opacity: 0, y: -8, scale: 0.97 }}
+                    role="menu"
+                    initial={{ opacity: 0, y: -6, scale: 0.98 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: -8, scale: 0.97 }}
-                    transition={{ duration: 0.15 }}
-                    className="absolute right-0 top-full mt-2 w-72 bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden z-50"
+                    exit={{ opacity: 0, y: -6, scale: 0.98 }}
+                    transition={{ duration: 0.14, ease: 'easeOut' }}
+                    className="absolute right-0 top-full z-[100] mt-2 w-[260px] max-w-[calc(100vw-1.5rem)] origin-top-right overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_18px_45px_rgba(15,23,42,0.18)]"
                   >
-                    <div className="p-4 flex items-center gap-3 border-b border-slate-100 bg-slate-50/60">
-                      <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-black text-sm shrink-0 ${isAdmin ? 'bg-emerald-500' : isAuthenticated ? 'bg-slate-700' : 'bg-slate-400'}`}>
-                        {currentUser ? (currentUser.fullName || currentUser.username).charAt(0).toUpperCase() : <User size={18} />}
+                    <div className="flex items-center gap-2.5 border-b border-slate-100 bg-slate-50/70 p-3">
+                      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-black text-white ${isAdmin ? 'bg-emerald-500' : isAuthenticated ? 'bg-slate-700' : 'bg-slate-400'}`}>
+                        {currentUser ? (currentUser.fullName || currentUser.username).charAt(0).toUpperCase() : <User size={17} />}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <p className="text-xs font-black text-slate-800 truncate">{currentUser?.fullName || currentUser?.username || 'Not signed in'}</p>
-                        <div className="mt-0.5 flex items-center gap-2">
-                          <span className={`rounded-full px-2 py-0.5 text-[8px] font-black uppercase tracking-wider ${isAdmin ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}`}>
+                        <p className="truncate text-[12px] font-black leading-5 text-slate-800" title={currentUser?.fullName || currentUser?.username || 'Not signed in'}>
+                          {currentUser?.fullName || currentUser?.username || 'Not signed in'}
+                        </p>
+                        <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
+                          <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[7px] font-black uppercase tracking-[0.12em] ${isAdmin ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}`}>
                             {isAdmin ? 'Admin' : 'User'}
                           </span>
-                          {currentUser?.jobTitle && <span className="truncate text-[10px] font-semibold text-slate-400">{currentUser.jobTitle}</span>}
-                          {currentUser?.role === 'user' && currentUser.employeeId && <span className="truncate font-mono text-[9px] font-semibold text-slate-400">ID {currentUser.employeeId}</span>}
+                          {currentUser?.jobTitle && (
+                            <span className="min-w-0 truncate text-[9px] font-semibold text-slate-400" title={currentUser.jobTitle}>
+                              {currentUser.jobTitle}
+                            </span>
+                          )}
+                          {currentUser?.role === 'user' && currentUser.employeeId && (
+                            <span className="min-w-0 truncate font-mono text-[8px] font-semibold text-slate-400">ID {currentUser.employeeId}</span>
+                          )}
                         </div>
                       </div>
                     </div>
 
-                    <div className="p-2">
+                    <div className="p-1.5">
                       {isAuthenticated ? (
                         <button
+                          type="button"
+                          role="menuitem"
                           onClick={logout}
-                          className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-rose-600 hover:bg-rose-50 transition-colors text-[11px] font-black uppercase tracking-widest"
+                          className="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[10px] font-bold text-rose-600 transition-colors hover:bg-rose-50 focus:outline-none focus:ring-2 focus:ring-rose-100"
                         >
-                          <LogOut size={15} /> Sign Out
+                          <LogOut size={14} />
+                          <span>Sign out</span>
                         </button>
                       ) : (
                         <button
+                          type="button"
+                          role="menuitem"
                           onClick={() => { setShowLoginModal(true); setProfileMenuOpen(false); }}
-                          className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-slate-700 hover:bg-slate-50 transition-colors text-[11px] font-black uppercase tracking-widest"
+                          className="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-left text-[10px] font-bold text-slate-700 transition-colors hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-100"
                         >
-                          <LogIn size={15} /> Sign In
+                          <LogIn size={14} />
+                          <span>Sign in</span>
                         </button>
                       )}
                     </div>
@@ -2817,7 +2843,7 @@ export default function App() {
           </div>
         </header>
 
-        <main ref={mainScrollRef} className="flex-1 overflow-y-auto p-5 md:p-6 min-h-0 bg-[#f6f8fb] flex flex-col">
+        <main ref={mainScrollRef} onScroll={() => { if (profileMenuOpen) setProfileMenuOpen(false); }} className="flex-1 overflow-y-auto p-5 md:p-6 min-h-0 bg-[#f6f8fb] flex flex-col">
           <AnimatePresence mode="wait">
             {view === 'dashboard' && (
               <motion.div 
