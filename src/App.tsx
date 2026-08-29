@@ -139,6 +139,14 @@ type AIInsightResult = {
 type UserRole = 'user' | 'admin';
 type LoginMode = 'user' | 'admin';
 
+type ToastKind = 'success' | 'error' | 'warning' | 'info';
+type ToastMessage = {
+  id: number;
+  kind: ToastKind;
+  title: string;
+  message?: string;
+};
+
 type CurrentUser = {
   id: number;
   username: string;
@@ -477,6 +485,22 @@ const INITIAL_AUDITORS = [
 const WWS = Array.from({length: 52}, (_, i) => (i + 1).toString());
 
 export default function App() {
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const toastSequenceRef = useRef(0);
+
+  const dismissToast = (id: number) => {
+    setToasts((current) => current.filter((toast) => toast.id !== id));
+  };
+
+  const showToast = (kind: ToastKind, title: string, message?: string, duration?: number) => {
+    const id = ++toastSequenceRef.current;
+    const timeout = duration ?? (kind === 'error' ? 6000 : kind === 'warning' ? 5200 : 4200);
+    setToasts((current) => [...current.slice(-3), { id, kind, title, message }]);
+    window.setTimeout(() => {
+      setToasts((current) => current.filter((toast) => toast.id !== id));
+    }, timeout);
+  };
+
   const [view, setView] = useState<AppView>('ipqc');
   // The center content area is its own scroll container. Each top-level page
   // should open from the top instead of inheriting the previous page's scroll.
@@ -709,12 +733,14 @@ export default function App() {
     const fetchAudits = async () => {
       try {
         const response = await authFetch(`${API_BASE_URL}/api/records`);
-        if (response.ok) {
-          const data = await response.json();
-          setRecords(Array.isArray(data) ? data.map(normalizeRecord) : []);
+        const data = await response.json().catch(() => ([]));
+        if (!response.ok) {
+          throw new Error((data as any)?.error || 'Could not load IPQC records.');
         }
+        setRecords(Array.isArray(data) ? data.map(normalizeRecord) : []);
       } catch (error) {
         console.error('Error fetching data from database:', error);
+        showToast('error', 'Records unavailable', error instanceof Error ? error.message : 'Could not load IPQC records.');
       }
     };
     fetchAudits();
@@ -726,17 +752,17 @@ export default function App() {
     const fetchSettings = async () => {
       try {
         const response = await authFetch(`${API_BASE_URL}/api/settings`);
-        if (response.ok) {
-          const data = await response.json();
-          if (Array.isArray(data.auditors) && data.auditors.length > 0) {
-            setAuditorsList(data.auditors);
-          }
-          if (data.mqeMappings && Object.keys(data.mqeMappings).length > 0) {
-            setMqeMappings(data.mqeMappings);
-          }
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || 'Could not load quality configuration.');
+        if (Array.isArray(data.auditors) && data.auditors.length > 0) {
+          setAuditorsList(data.auditors);
+        }
+        if (data.mqeMappings && Object.keys(data.mqeMappings).length > 0) {
+          setMqeMappings(data.mqeMappings);
         }
       } catch (error) {
         console.error('Error fetching settings from database:', error);
+        showToast('error', 'Configuration unavailable', error instanceof Error ? error.message : 'Could not load quality configuration.');
       }
     };
     fetchSettings();
@@ -987,7 +1013,7 @@ export default function App() {
     return [...source].sort((a, b) => b.value - a.value);
   }, [analyticsData, analyticsDimension]);
 
-  const completeLoginSession = (data: any) => {
+  const completeLoginSession = (data: any, successMessage?: string) => {
     localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, data.token);
     localStorage.setItem(CURRENT_USER_STORAGE_KEY, JSON.stringify(data.user));
     localStorage.removeItem('ipqc_admin_token');
@@ -1004,6 +1030,9 @@ export default function App() {
     setShowLoginPassword(false);
     resetAdminMfaFlow();
     setShowCredentialChangeModal(Boolean(data.user.mustChangeCredential));
+    if (successMessage) {
+      showToast('success', 'Signed in', successMessage);
+    }
   };
 
   const handleLogin = async (e: FormEvent) => {
@@ -1047,7 +1076,12 @@ export default function App() {
       }
 
       if (response.ok && data.token && data.user) {
-        completeLoginSession(data);
+        completeLoginSession(
+          data,
+          loginMode === 'user'
+            ? `Welcome, ${data.user.fullName || 'user'}.`
+            : 'Administrator authentication completed.'
+        );
       } else {
         setLoginError(data.error || (loginMode === 'user'
           ? 'Invalid employee or PIN. Please try again.'
@@ -1081,7 +1115,12 @@ export default function App() {
       if (!response.ok || !data.token || !data.user) {
         throw new Error(data.error || 'Authenticator verification failed.');
       }
-      completeLoginSession(data);
+      completeLoginSession(
+        data,
+        adminMfaStage === 'setup'
+          ? 'Authenticator MFA is enabled and your administrator session is ready.'
+          : 'Authenticator verification completed successfully.'
+      );
     } catch (err) {
       setLoginError(err instanceof Error ? err.message : 'Authenticator verification failed.');
       setMfaCode('');
@@ -1133,6 +1172,11 @@ export default function App() {
       setNewCredential('');
       setConfirmCredential('');
       setShowCredentialChangeModal(false);
+      showToast(
+        'success',
+        isUserPin ? 'PIN updated' : 'Password updated',
+        isUserPin ? 'Your new 6-digit PIN is now active.' : 'Your administrator password has been updated.'
+      );
     } catch (err) {
       setCredentialChangeError(err instanceof Error ? err.message : 'Could not update your credential.');
     } finally {
@@ -1234,7 +1278,8 @@ export default function App() {
   // Every edit here is persisted to /api/settings immediately so all users
   // see the same list, instead of it living only in this browser tab's memory.
   const [savingSettings, setSavingSettings] = useState(false);
-  const saveSettings = async (nextAuditors: string[], nextMqeMappings: Record<string, string>) => {
+  const saveSettings = async (nextAuditors: string[], nextMqeMappings: Record<string, string>): Promise<boolean> => {
+    if (savingSettings) return false;
     setSavingSettings(true);
     try {
       const response = await authFetch(`${API_BASE_URL}/api/settings`, {
@@ -1242,63 +1287,121 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ auditors: nextAuditors, mqeMappings: nextMqeMappings }),
       });
+      const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        alert('Failed to save this change to the database. It may be lost on refresh - please try again.');
-      } else if (isAdmin) {
-        fetchAuditLog();
+        throw new Error(data.error || 'The change could not be saved to the database.');
       }
+      if (isAdmin) fetchAuditLog();
+      return true;
     } catch (err) {
       console.error('Error saving settings:', err);
-      alert('Could not reach the server to save this change. It may be lost on refresh.');
+      showToast(
+        'error',
+        'Settings not saved',
+        err instanceof Error ? err.message : 'Could not reach the server. Your change was not saved.'
+      );
+      return false;
     } finally {
       setSavingSettings(false);
     }
   };
 
-  const handleAddAuditor = (e: FormEvent) => {
+  const handleAddAuditor = async (e: FormEvent) => {
     e.preventDefault();
-    if (newAuditorName.trim() && !auditorsList.includes(newAuditorName.trim())) {
-      const updated = [...auditorsList, newAuditorName.trim()];
+    const auditorName = newAuditorName.trim();
+    if (!auditorName) {
+      showToast('warning', 'Auditor name required', 'Enter an auditor name before adding it.');
+      return;
+    }
+    if (auditorsList.some((name) => name.toLowerCase() === auditorName.toLowerCase())) {
+      showToast('info', 'Auditor already exists', `${auditorName} is already in the auditor list.`);
+      return;
+    }
+
+    const updated = [...auditorsList, auditorName];
+    if (await saveSettings(updated, mqeMappings)) {
       setAuditorsList(updated);
       setNewAuditorName('');
-      saveSettings(updated, mqeMappings);
+      showToast('success', 'Auditor added', `${auditorName} is now available for IPQC findings.`);
     }
   };
 
-  const handleSaveEditAuditor = (index: number) => {
-    if (editAuditorValue.trim()) {
-      const updated = [...auditorsList];
-      updated[index] = editAuditorValue.trim();
+  const handleSaveEditAuditor = async (index: number) => {
+    const auditorName = editAuditorValue.trim();
+    if (!auditorName) {
+      showToast('warning', 'Auditor name required', 'The auditor name cannot be blank.');
+      return;
+    }
+    if (auditorsList.some((name, itemIndex) => itemIndex !== index && name.toLowerCase() === auditorName.toLowerCase())) {
+      showToast('info', 'Auditor already exists', `${auditorName} is already in the auditor list.`);
+      return;
+    }
+
+    const previousName = auditorsList[index];
+    const updated = [...auditorsList];
+    updated[index] = auditorName;
+    if (await saveSettings(updated, mqeMappings)) {
       setAuditorsList(updated);
       setEditingAuditorIndex(null);
-      saveSettings(updated, mqeMappings);
+      showToast('success', 'Auditor updated', `${previousName} was updated to ${auditorName}.`);
     }
   };
 
-  const handleDeleteAuditor = (auditorToDelete: string) => {
+  const handleDeleteAuditor = async (auditorToDelete: string) => {
+    if (savingSettings) return;
+    if (!confirm(`Remove ${auditorToDelete} from the auditor list?`)) return;
     const updated = auditorsList.filter(a => a !== auditorToDelete);
-    setAuditorsList(updated);
-    saveSettings(updated, mqeMappings);
+    if (await saveSettings(updated, mqeMappings)) {
+      setAuditorsList(updated);
+      showToast('success', 'Auditor removed', `${auditorToDelete} was removed from the active auditor list.`);
+    }
   };
 
-  const handleAddOrUpdateMqeMapping = (e: FormEvent) => {
+  const handleAddOrUpdateMqeMapping = async (e: FormEvent) => {
     e.preventDefault();
-    if (newMqeName.trim()) {
-      const updated = {
-        ...mqeMappings,
-        [selectedPlatformForMapping]: newMqeName.trim()
-      };
+    const mqeName = newMqeName.trim();
+    if (!mqeName) {
+      showToast('warning', 'MQE name required', 'Enter the responsible MQE engineer before saving.');
+      return;
+    }
+
+    const previousOwner = String(mqeMappings[selectedPlatformForMapping] || '').trim();
+    if (previousOwner === mqeName) {
+      showToast('info', 'No changes to save', `${selectedPlatformForMapping} is already assigned to ${mqeName}.`);
+      return;
+    }
+
+    const updated = {
+      ...mqeMappings,
+      [selectedPlatformForMapping]: mqeName
+    };
+    if (await saveSettings(auditorsList, updated)) {
       setMqeMappings(updated);
       setNewMqeName('');
-      saveSettings(auditorsList, updated);
+      showToast(
+        'success',
+        previousOwner ? 'MQE ownership updated' : 'MQE assigned',
+        `${selectedPlatformForMapping} is now assigned to ${mqeName}.`
+      );
     }
   };
 
-  const handleClearMqeMapping = (platform: string) => {
+  const handleClearMqeMapping = async (platform: string) => {
+    if (savingSettings) return;
+    const previousOwner = mqeMappings[platform];
+    if (!previousOwner) {
+      showToast('info', 'No MQE assigned', `${platform} does not currently have an MQE owner.`);
+      return;
+    }
+    if (!confirm(`Clear the MQE owner for ${platform}?`)) return;
+
     const updated = { ...mqeMappings };
     delete updated[platform];
-    setMqeMappings(updated);
-    saveSettings(auditorsList, updated);
+    if (await saveSettings(auditorsList, updated)) {
+      setMqeMappings(updated);
+      if (selectedPlatformForMapping === platform) setNewMqeName('');
+      showToast('success', 'MQE ownership cleared', `${platform} is now unassigned.`);
+    }
   };
 
   const fetchManagedUsers = async () => {
@@ -1327,6 +1430,7 @@ export default function App() {
       setDeletedRecords(Array.isArray(data) ? data.map(normalizeRecord) : []);
     } catch (err) {
       console.error('Recycle bin error:', err);
+      showToast('error', 'Recycle bin unavailable', err instanceof Error ? err.message : 'Could not load deleted findings.');
     } finally {
       setDeletedRecordsLoading(false);
     }
@@ -1357,6 +1461,11 @@ export default function App() {
       setNewUserDraft({ fullName: '', employeeId: '', username: '', credential: '', role: 'user', jobTitle: '', department: '' });
       setShowCreateUser(false);
       fetchAuditLog();
+      showToast(
+        'success',
+        data.role === 'admin' ? 'Administrator created' : 'Employee account created',
+        `${data.fullName || 'The account'} was created successfully.`
+      );
     } catch (err) {
       setUserManagementError(err instanceof Error ? err.message : 'Failed to create user.');
     } finally {
@@ -1391,6 +1500,11 @@ export default function App() {
         localStorage.setItem(CURRENT_USER_STORAGE_KEY, JSON.stringify(data));
       }
       fetchAuditLog();
+      showToast(
+        'success',
+        data.isActive ? 'Account activated' : 'Account deactivated',
+        `${data.fullName || user.fullName} is now ${data.isActive ? 'active' : 'inactive'}.`
+      );
     } catch (err) {
       setUserManagementError(err instanceof Error ? err.message : 'Failed to update user.');
     } finally {
@@ -1403,7 +1517,14 @@ export default function App() {
     const target = managedUsers.find(user => user.id === resetCredentialUserId);
     if (!target || usersSaving) return;
     const valid = target.role === 'user' ? /^\d{6}$/.test(resetCredentialValue) : resetCredentialValue.length >= 12;
-    if (!valid) return;
+    if (!valid) {
+      setUserManagementError(
+        target.role === 'user'
+          ? 'Temporary PIN must be exactly 6 digits.'
+          : 'Temporary administrator password must be at least 12 characters.'
+      );
+      return;
+    }
 
     setUsersSaving(true);
     setUserManagementError('');
@@ -1419,6 +1540,11 @@ export default function App() {
       setResetCredentialValue('');
       fetchManagedUsers();
       fetchAuditLog();
+      showToast(
+        'success',
+        target.role === 'user' ? 'PIN reset' : 'Password reset',
+        `${target.fullName}'s temporary ${target.role === 'user' ? 'PIN' : 'password'} was reset successfully.`
+      );
     } catch (err) {
       setUserManagementError(err instanceof Error ? err.message : 'Failed to reset credential.');
     } finally {
@@ -1438,6 +1564,7 @@ export default function App() {
       if (!response.ok) throw new Error(data.error || 'Failed to reset administrator MFA.');
       fetchManagedUsers();
       fetchAuditLog();
+      showToast('success', 'MFA reset', `${user.fullName} must enrol an authenticator again at the next sign-in.`);
     } catch (err) {
       setUserManagementError(err instanceof Error ? err.message : 'Failed to reset administrator MFA.');
     } finally {
@@ -1462,7 +1589,7 @@ export default function App() {
     });
 
     if (toFix.length === 0) {
-      alert('All records already match the current Platform - MQE mapping.');
+      showToast('info', 'MQE ownership already in sync', 'All existing records already match the current Platform → MQE ownership rules.');
       return;
     }
 
@@ -1491,10 +1618,14 @@ export default function App() {
         setRecords((await refreshResponse.json()).map(normalizeRecord));
       }
 
-      alert(`Synced ${successCount} of ${toFix.length} record(s).`);
+      if (successCount === toFix.length) {
+        showToast('success', 'MQE ownership synced', `${successCount} existing record${successCount === 1 ? '' : 's'} updated successfully.`);
+      } else {
+        showToast('warning', 'MQE sync partially completed', `${successCount} of ${toFix.length} records were updated. Review the remaining records before retrying.`);
+      }
     } catch (err) {
       console.error('MQE ownership sync error:', err);
-      alert('Something went wrong while syncing records. Some records may not have been updated.');
+      showToast('error', 'MQE sync failed', 'Something went wrong while syncing existing records. Some records may not have been updated.');
     } finally {
       setRecalculating(false);
     }
@@ -1584,6 +1715,7 @@ export default function App() {
   };
 
   const [newAudit, setNewAudit] = useState<Partial<IPQCAuditRecord>>(() => createEmptyAudit());
+  const [auditSaving, setAuditSaving] = useState(false);
 
   const categoryOptionsForForm = useMemo(() => {
     const current = String(newAudit.category || '').trim();
@@ -1797,6 +1929,7 @@ export default function App() {
 
   const handleAddAudit = async (e: FormEvent) => {
     e.preventDefault();
+    if (auditSaving) return;
 
     const enteredIcarNumber = String(newAudit.icarNum ?? '').trim();
     const hasIcarNumber = enteredIcarNumber !== '' && enteredIcarNumber.toUpperCase() !== 'N/A';
@@ -1812,6 +1945,7 @@ export default function App() {
       icarStatus: hasIcarNumber ? 'Submitted' : 'Locked'
     };
 
+    setAuditSaving(true);
     try {
       if (editingId) {
         const response = await authFetch(`${API_BASE_URL}/api/records/${editingId}`, {
@@ -1819,14 +1953,16 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
+        const data = await response.json().catch(() => ({}));
         if (!response.ok) {
-          alert('Failed to update record. Your form has been kept so you can retry.');
+          showToast('error', 'Finding not updated', data.error || 'Your changes could not be saved. The form has been kept so you can retry.');
           return;
         }
 
-        const updated = normalizeRecord(await response.json());
+        const updated = normalizeRecord(data);
         setRecords(records.map(r => String(r.id) === String(editingId) ? updated : r));
         setHighlightedId(updated.id);
+        showToast('success', 'Finding updated', `Finding #${updated.no ?? updated.id} was updated successfully.`);
       } else {
         const response = await authFetch(`${API_BASE_URL}/api/records`, {
           method: 'POST',
@@ -1834,14 +1970,16 @@ export default function App() {
           body: JSON.stringify(payload),
         });
 
+        const data = await response.json().catch(() => ({}));
         if (!response.ok) {
-          alert('Failed to save the audit record. Your form has been kept so you can retry.');
+          showToast('error', 'Finding not added', data.error || 'The finding could not be saved. The form has been kept so you can retry.');
           return;
         }
 
-        const created = normalizeRecord(await response.json());
+        const created = normalizeRecord(data);
         setRecords([...records, created]);
         setHighlightedId(created.id);
+        showToast('success', 'Finding added', `Finding #${created.no ?? created.id} was saved successfully.`);
       }
 
       setNewAudit(createEmptyAudit());
@@ -1851,7 +1989,9 @@ export default function App() {
       if (fileInputRef.current) fileInputRef.current.value = '';
     } catch (error) {
       console.error('Error submitting audit:', error);
-      alert('A network error occurred while contacting the server.');
+      showToast('error', editingId ? 'Finding not updated' : 'Finding not added', 'A network error occurred while contacting the server. Your form has been kept so you can retry.');
+    } finally {
+      setAuditSaving(false);
     }
   };
 
@@ -1887,13 +2027,14 @@ export default function App() {
         const response = await authFetch(`${API_BASE_URL}/api/records/${id}`, { method: 'DELETE' });
         if (!response.ok) {
           const data = await response.json().catch(() => ({}));
-          alert(data.error || 'Failed to move record to recycle bin.');
+          showToast('error', 'Finding not moved', data.error || 'Failed to move the finding to the recycle bin.');
           return;
         }
         setRecords(prev => prev.filter(r => String(r.id) !== String(id)));
         if (isAdmin) fetchDeletedRecords();
+        showToast('success', 'Moved to recycle bin', 'The finding was removed from active records and can be restored by an administrator.');
       } catch (err) {
-        alert('Failed to move record to recycle bin.');
+        showToast('error', 'Finding not moved', 'Failed to move the finding to the recycle bin.');
       }
     }
   };
@@ -1910,8 +2051,9 @@ export default function App() {
         .sort((a, b) => Number(a.id) - Number(b.id)));
       setDeletedRecords(prev => prev.filter(item => String(item.id) !== String(record.id)));
       fetchAuditLog();
+      showToast('success', 'Finding restored', `Finding #${restored.no ?? restored.id} is active again.`);
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to restore record.');
+      showToast('error', 'Restore failed', err instanceof Error ? err.message : 'Failed to restore the finding.');
     }
   };
 
@@ -1929,8 +2071,9 @@ export default function App() {
       const versionsData = await versionsResponse.json().catch(() => ([]));
       if (versionsResponse.ok) setRecordVersions(Array.isArray(versionsData) ? versionsData : []);
       fetchAuditLog();
+      showToast('success', 'Version restored', `Finding #${restored.no ?? restored.id} was restored to version ${version.versionNo}.`);
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to restore version.');
+      showToast('error', 'Version restore failed', err instanceof Error ? err.message : 'Failed to restore this version.');
     }
   };
 
@@ -2069,9 +2212,9 @@ export default function App() {
       }
 
       if (failedCount > 0) {
-        alert(`Import finished: ${successCount} saved, ${failedCount} failed. Review the server log before retrying failed rows.`);
+        showToast('warning', 'Import partially completed', `${successCount} saved, ${failedCount} failed. Review the failed rows before retrying.`, 6500);
       } else {
-        alert(`Import complete. ${successCount} record${successCount === 1 ? '' : 's'} saved successfully.`);
+        showToast('success', 'Import completed', `${successCount} record${successCount === 1 ? '' : 's'} saved successfully.`);
       }
 
       setShowImportModal(false);
@@ -2080,7 +2223,9 @@ export default function App() {
       if (importFileInputRef.current) importFileInputRef.current.value = '';
     } catch (err) {
       console.error('Import error:', err);
-      setImportFileError(err instanceof Error ? err.message : 'The workbook could not be processed. Check its format and try again.');
+      const message = err instanceof Error ? err.message : 'The workbook could not be processed. Check its format and try again.';
+      setImportFileError(message);
+      showToast('error', 'Import failed', message);
     } finally {
       setImporting(false);
     }
@@ -2094,14 +2239,24 @@ export default function App() {
       const result = await exportToExcel(records);
 
       if (result.failedImages > 0) {
-        alert(
-          `Excel exported successfully with ${result.embeddedImages} embedded photo${result.embeddedImages === 1 ? '' : 's'}. ` +
-          `${result.failedImages} photo${result.failedImages === 1 ? '' : 's'} could not be loaded into the workbook.`
+        showToast(
+          'warning',
+          'Excel exported with photo warnings',
+          `${result.embeddedImages} photo${result.embeddedImages === 1 ? '' : 's'} embedded; ${result.failedImages} could not be loaded into the workbook.`,
+          6000
+        );
+      } else {
+        showToast(
+          'success',
+          'Excel export completed',
+          result.embeddedImages > 0
+            ? `${records.length} records exported with ${result.embeddedImages} embedded photo${result.embeddedImages === 1 ? '' : 's'}.`
+            : `${records.length} record${records.length === 1 ? '' : 's'} exported successfully.`
         );
       }
     } catch (err) {
       console.error('Excel export error:', err);
-      alert(err instanceof Error ? err.message : 'The Excel workbook could not be exported.');
+      showToast('error', 'Excel export failed', err instanceof Error ? err.message : 'The Excel workbook could not be exported.');
     } finally {
       setExportingExcel(false);
     }
@@ -3884,10 +4039,11 @@ export default function App() {
                       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
                         <button
                           type="submit"
-                          className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-brand-orange px-4 text-xs font-bold text-white shadow-sm transition-all hover:brightness-105 active:scale-[0.99]"
+                          disabled={auditSaving}
+                          className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-brand-orange px-4 text-xs font-bold text-white shadow-sm transition-all hover:brightness-105 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                          <CheckCircle2 size={15} />
-                          {editingId ? 'Update Finding' : 'Submit Finding'}
+                          <CheckCircle2 size={15} className={auditSaving ? 'animate-pulse' : ''} />
+                          {auditSaving ? (editingId ? 'Updating...' : 'Submitting...') : (editingId ? 'Update Finding' : 'Submit Finding')}
                         </button>
                         <button
                           type="button"
@@ -5122,7 +5278,7 @@ export default function App() {
                           <div className="md:self-end">
                             <button
                               type="submit"
-                              disabled={!newMqeName.trim() || savingSettings}
+                              disabled={!newMqeName.trim() || savingSettings || newMqeName.trim() === String(mqeMappings[selectedPlatformForMapping] || '').trim()}
                               className="inline-flex h-10 w-full md:w-auto items-center justify-center gap-1.5 rounded-lg bg-slate-900 px-4 text-[10px] font-black uppercase tracking-wider text-white transition-all hover:bg-slate-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
                             >
                               <CheckCircle2 size={14} />
@@ -5795,6 +5951,51 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Global operation notifications: successes are transient; contextual form errors remain inline. */}
+      <div className="pointer-events-none fixed bottom-4 right-4 z-[220] flex w-[calc(100%-2rem)] max-w-sm flex-col gap-2 sm:bottom-5 sm:right-5" aria-live="polite" aria-atomic="true">
+        <AnimatePresence initial={false}>
+          {toasts.map((toast) => {
+            const visual = toast.kind === 'success'
+              ? { shell: 'border-emerald-200', icon: 'bg-emerald-50 text-emerald-600', title: 'text-emerald-950' }
+              : toast.kind === 'error'
+                ? { shell: 'border-rose-200', icon: 'bg-rose-50 text-rose-600', title: 'text-rose-950' }
+                : toast.kind === 'warning'
+                  ? { shell: 'border-amber-200', icon: 'bg-amber-50 text-amber-600', title: 'text-amber-950' }
+                  : { shell: 'border-sky-200', icon: 'bg-sky-50 text-sky-600', title: 'text-sky-950' };
+
+            return (
+              <motion.div
+                key={toast.id}
+                initial={{ opacity: 0, y: 14, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, x: 24, scale: 0.98 }}
+                transition={{ duration: 0.18 }}
+                className={`pointer-events-auto overflow-hidden rounded-xl border bg-white shadow-[0_16px_45px_rgba(15,23,42,0.18)] ${visual.shell}`}
+                role={toast.kind === 'error' ? 'alert' : 'status'}
+              >
+                <div className="flex items-start gap-3 p-3.5">
+                  <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${visual.icon}`}>
+                    {toast.kind === 'success' ? <CheckCircle2 size={16} /> : toast.kind === 'info' ? <Info size={16} /> : <AlertCircle size={16} />}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className={`text-[12px] font-black ${visual.title}`}>{toast.title}</p>
+                    {toast.message && <p className="mt-0.5 text-[10px] font-medium leading-4 text-slate-500">{toast.message}</p>}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => dismissToast(toast.id)}
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-300 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                    aria-label="Dismiss notification"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              </motion.div>
+            );
+          })}
+        </AnimatePresence>
+      </div>
 
       <AnimatePresence>
         {previewImage && (
