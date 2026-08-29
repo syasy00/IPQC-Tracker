@@ -147,6 +147,21 @@ type ToastMessage = {
   message?: string;
 };
 
+type ConfirmationTone = 'danger' | 'warning' | 'neutral';
+type ConfirmationDialog = {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  cancelLabel?: string;
+  tone?: ConfirmationTone;
+};
+
+type AuditFormErrors = Partial<Record<
+  'auditDate' | 'shift' | 'department' | 'platform' | 'areaStation' |
+  'category' | 'detailsFindings' | 'status' | 'auditors' | 'personOnJob',
+  string
+>>;
+
 type CurrentUser = {
   id: number;
   username: string;
@@ -487,6 +502,9 @@ const WWS = Array.from({length: 52}, (_, i) => (i + 1).toString());
 export default function App() {
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const toastSequenceRef = useRef(0);
+  const [confirmationDialog, setConfirmationDialog] = useState<ConfirmationDialog | null>(null);
+  const [confirmationBusy, setConfirmationBusy] = useState(false);
+  const confirmationActionRef = useRef<null | (() => void | Promise<void>)>(null);
 
   const dismissToast = (id: number) => {
     setToasts((current) => current.filter((toast) => toast.id !== id));
@@ -501,11 +519,47 @@ export default function App() {
     }, timeout);
   };
 
+  const requestConfirmation = (dialog: ConfirmationDialog, action: () => void | Promise<void>) => {
+    confirmationActionRef.current = action;
+    setConfirmationBusy(false);
+    setConfirmationDialog(dialog);
+  };
+
+  const closeConfirmation = () => {
+    if (confirmationBusy) return;
+    confirmationActionRef.current = null;
+    setConfirmationDialog(null);
+  };
+
+  const runConfirmedAction = async () => {
+    const action = confirmationActionRef.current;
+    if (!action || confirmationBusy) return;
+    setConfirmationBusy(true);
+    try {
+      await action();
+      confirmationActionRef.current = null;
+      setConfirmationDialog(null);
+    } finally {
+      setConfirmationBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!confirmationDialog) return;
+    const handleConfirmationKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !confirmationBusy) closeConfirmation();
+    };
+    document.addEventListener('keydown', handleConfirmationKey);
+    return () => document.removeEventListener('keydown', handleConfirmationKey);
+  }, [confirmationDialog, confirmationBusy]);
+
   const [view, setView] = useState<AppView>('ipqc');
   // The center content area is its own scroll container. Each top-level page
   // should open from the top instead of inheriting the previous page's scroll.
   const mainScrollRef = useRef<HTMLElement | null>(null);
-  const [records, setRecords] = useState<IPQCAuditRecord[]>([]); 
+  const [records, setRecords] = useState<IPQCAuditRecord[]>([]);
+  const [recordsLoading, setRecordsLoading] = useState(false);
+  const [settingsLoading, setSettingsLoading] = useState(false);
   const [powerBiUrl, setPowerBiUrl] = useState<string>(''); 
   const [dashboardMode, setDashboardMode] = useState<'system' | 'powerbi'>('system');
   // Shared authentication for both system roles: user and admin.
@@ -728,9 +782,11 @@ export default function App() {
   useEffect(() => {
     if (!authToken) {
       setRecords([]);
+      setRecordsLoading(false);
       return;
     }
     const fetchAudits = async () => {
+      setRecordsLoading(true);
       try {
         const response = await authFetch(`${API_BASE_URL}/api/records`);
         const data = await response.json().catch(() => ([]));
@@ -741,6 +797,8 @@ export default function App() {
       } catch (error) {
         console.error('Error fetching data from database:', error);
         showToast('error', 'Records unavailable', error instanceof Error ? error.message : 'Could not load IPQC records.');
+      } finally {
+        setRecordsLoading(false);
       }
     };
     fetchAudits();
@@ -748,8 +806,12 @@ export default function App() {
 
   // Load the saved auditor list & platform-MQE mapping for authenticated users.
   useEffect(() => {
-    if (!authToken) return;
+    if (!authToken) {
+      setSettingsLoading(false);
+      return;
+    }
     const fetchSettings = async () => {
+      setSettingsLoading(true);
       try {
         const response = await authFetch(`${API_BASE_URL}/api/settings`);
         const data = await response.json().catch(() => ({}));
@@ -763,6 +825,8 @@ export default function App() {
       } catch (error) {
         console.error('Error fetching settings from database:', error);
         showToast('error', 'Configuration unavailable', error instanceof Error ? error.message : 'Could not load quality configuration.');
+      } finally {
+        setSettingsLoading(false);
       }
     };
     fetchSettings();
@@ -1347,14 +1411,24 @@ export default function App() {
     }
   };
 
-  const handleDeleteAuditor = async (auditorToDelete: string) => {
+  const handleDeleteAuditor = (auditorToDelete: string) => {
     if (savingSettings) return;
-    if (!confirm(`Remove ${auditorToDelete} from the auditor list?`)) return;
-    const updated = auditorsList.filter(a => a !== auditorToDelete);
-    if (await saveSettings(updated, mqeMappings)) {
-      setAuditorsList(updated);
-      showToast('success', 'Auditor removed', `${auditorToDelete} was removed from the active auditor list.`);
-    }
+    requestConfirmation(
+      {
+        title: 'Remove auditor?',
+        message: `${auditorToDelete} will no longer be available for new findings. Existing historical records are not changed.`,
+        confirmLabel: 'Remove auditor',
+        cancelLabel: 'Keep auditor',
+        tone: 'danger',
+      },
+      async () => {
+        const updated = auditorsList.filter(a => a !== auditorToDelete);
+        if (await saveSettings(updated, mqeMappings)) {
+          setAuditorsList(updated);
+          showToast('success', 'Auditor removed', `${auditorToDelete} was removed from the active auditor list.`);
+        }
+      },
+    );
   };
 
   const handleAddOrUpdateMqeMapping = async (e: FormEvent) => {
@@ -1386,22 +1460,32 @@ export default function App() {
     }
   };
 
-  const handleClearMqeMapping = async (platform: string) => {
+  const handleClearMqeMapping = (platform: string) => {
     if (savingSettings) return;
     const previousOwner = mqeMappings[platform];
     if (!previousOwner) {
       showToast('info', 'No MQE assigned', `${platform} does not currently have an MQE owner.`);
       return;
     }
-    if (!confirm(`Clear the MQE owner for ${platform}?`)) return;
 
-    const updated = { ...mqeMappings };
-    delete updated[platform];
-    if (await saveSettings(auditorsList, updated)) {
-      setMqeMappings(updated);
-      if (selectedPlatformForMapping === platform) setNewMqeName('');
-      showToast('success', 'MQE ownership cleared', `${platform} is now unassigned.`);
-    }
+    requestConfirmation(
+      {
+        title: 'Clear MQE ownership?',
+        message: `${platform} will become unassigned for new findings. Existing records keep their current MQE until you run Sync Existing Records.`,
+        confirmLabel: 'Clear assignment',
+        cancelLabel: 'Keep assignment',
+        tone: 'warning',
+      },
+      async () => {
+        const updated = { ...mqeMappings };
+        delete updated[platform];
+        if (await saveSettings(auditorsList, updated)) {
+          setMqeMappings(updated);
+          if (selectedPlatformForMapping === platform) setNewMqeName('');
+          showToast('success', 'MQE ownership cleared', `${platform} is now unassigned.`);
+        }
+      },
+    );
   };
 
   const fetchManagedUsers = async () => {
@@ -1512,6 +1596,25 @@ export default function App() {
     }
   };
 
+  const handleToggleManagedUser = (user: ManagedUser) => {
+    if (usersSaving || currentUser?.id === user.id) return;
+    if (!user.isActive) {
+      updateManagedUser(user, { isActive: true });
+      return;
+    }
+
+    requestConfirmation(
+      {
+        title: 'Deactivate account?',
+        message: `${user.fullName} will no longer be able to sign in. Existing audit history remains unchanged.`,
+        confirmLabel: 'Deactivate account',
+        cancelLabel: 'Keep active',
+        tone: 'danger',
+      },
+      () => updateManagedUser(user, { isActive: false }),
+    );
+  };
+
   const handleResetUserCredential = async (e: FormEvent) => {
     e.preventDefault();
     const target = managedUsers.find(user => user.id === resetCredentialUserId);
@@ -1552,24 +1655,33 @@ export default function App() {
     }
   };
 
-  const handleResetAdminMfa = async (user: ManagedUser) => {
+  const handleResetAdminMfa = (user: ManagedUser) => {
     if (usersSaving || user.role !== 'admin' || currentUser?.id === user.id) return;
-    if (!confirm(`Reset authenticator MFA for ${user.fullName}?\n\nTheir current sessions will be revoked and they must enrol their authenticator again at next sign-in.`)) return;
-
-    setUsersSaving(true);
-    setUserManagementError('');
-    try {
-      const response = await authFetch(`${API_BASE_URL}/api/users/${user.id}/reset-mfa`, { method: 'POST' });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || 'Failed to reset administrator MFA.');
-      fetchManagedUsers();
-      fetchAuditLog();
-      showToast('success', 'MFA reset', `${user.fullName} must enrol an authenticator again at the next sign-in.`);
-    } catch (err) {
-      setUserManagementError(err instanceof Error ? err.message : 'Failed to reset administrator MFA.');
-    } finally {
-      setUsersSaving(false);
-    }
+    requestConfirmation(
+      {
+        title: 'Reset administrator MFA?',
+        message: `${user.fullName}'s current sessions will be revoked. They must enrol an authenticator again at the next sign-in.`,
+        confirmLabel: 'Reset MFA',
+        cancelLabel: 'Cancel',
+        tone: 'danger',
+      },
+      async () => {
+        setUsersSaving(true);
+        setUserManagementError('');
+        try {
+          const response = await authFetch(`${API_BASE_URL}/api/users/${user.id}/reset-mfa`, { method: 'POST' });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(data.error || 'Failed to reset administrator MFA.');
+          fetchManagedUsers();
+          fetchAuditLog();
+          showToast('success', 'MFA reset', `${user.fullName} must enrol an authenticator again at the next sign-in.`);
+        } catch (err) {
+          setUserManagementError(err instanceof Error ? err.message : 'Failed to reset administrator MFA.');
+        } finally {
+          setUsersSaving(false);
+        }
+      },
+    );
   };
 
   const generateTemporaryPin = () => {
@@ -1582,7 +1694,7 @@ export default function App() {
   // a mapping assigned. Only touches records whose stored MQE no longer
   // matches what the current mapping says (so it's safe to re-run anytime).
   const [recalculating, setRecalculating] = useState(false);
-  const handleRecalculateMqe = async () => {
+  const handleRecalculateMqe = () => {
     const toFix = records.filter(r => {
       const correctMqe = getMqeForPlatform(r.platform);
       return (r.mqeEngineer || 'Unassigned') !== correctMqe;
@@ -1593,42 +1705,49 @@ export default function App() {
       return;
     }
 
-    if (!confirm(`This will sync ${toFix.length} existing record(s) with the current Platform → MQE ownership. Continue?`)) {
-      return;
-    }
+    requestConfirmation(
+      {
+        title: 'Sync existing records?',
+        message: `${toFix.length} existing record${toFix.length === 1 ? '' : 's'} will be updated to match the current Platform → MQE ownership rules.`,
+        confirmLabel: 'Sync records',
+        cancelLabel: 'Cancel',
+        tone: 'warning',
+      },
+      async () => {
+        setRecalculating(true);
+        let successCount = 0;
+        try {
+          for (const record of toFix) {
+            const correctMqe = getMqeForPlatform(record.platform);
+            const response = await authFetch(`${API_BASE_URL}/api/records/${record.id}`, {
+              method: 'PUT',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Audit-Source': 'mqe-recalculate',
+              },
+              body: JSON.stringify({ ...record, mqeEngineer: correctMqe }),
+            });
+            if (response.ok) successCount++;
+          }
 
-    setRecalculating(true);
-    let successCount = 0;
-    try {
-      for (const record of toFix) {
-        const correctMqe = getMqeForPlatform(record.platform);
-        const response = await authFetch(`${API_BASE_URL}/api/records/${record.id}`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Audit-Source': 'mqe-recalculate',
-          },
-          body: JSON.stringify({ ...record, mqeEngineer: correctMqe }),
-        });
-        if (response.ok) successCount++;
-      }
+          const refreshResponse = await authFetch(`${API_BASE_URL}/api/records`);
+          if (refreshResponse.ok) {
+            setRecords((await refreshResponse.json()).map(normalizeRecord));
+          }
 
-      const refreshResponse = await authFetch(`${API_BASE_URL}/api/records`);
-      if (refreshResponse.ok) {
-        setRecords((await refreshResponse.json()).map(normalizeRecord));
-      }
-
-      if (successCount === toFix.length) {
-        showToast('success', 'MQE ownership synced', `${successCount} existing record${successCount === 1 ? '' : 's'} updated successfully.`);
-      } else {
-        showToast('warning', 'MQE sync partially completed', `${successCount} of ${toFix.length} records were updated. Review the remaining records before retrying.`);
-      }
-    } catch (err) {
-      console.error('MQE ownership sync error:', err);
-      showToast('error', 'MQE sync failed', 'Something went wrong while syncing existing records. Some records may not have been updated.');
-    } finally {
-      setRecalculating(false);
-    }
+          if (successCount === toFix.length) {
+            showToast('success', 'MQE ownership synced', `${successCount} existing record${successCount === 1 ? '' : 's'} updated successfully.`);
+          } else {
+            showToast('warning', 'MQE sync partially completed', `${successCount} of ${toFix.length} records were updated. Review the remaining records before retrying.`);
+          }
+        } catch (err) {
+          console.error('MQE ownership sync error:', err);
+          showToast('error', 'MQE sync failed', 'Something went wrong while syncing existing records. Some records may not have been updated.');
+        } finally {
+          setRecalculating(false);
+        }
+      },
+    );
   };
   // ----------------------------------
 
@@ -1714,8 +1833,106 @@ export default function App() {
     };
   };
 
-  const [newAudit, setNewAudit] = useState<Partial<IPQCAuditRecord>>(() => createEmptyAudit());
+  const getAuditDraftFingerprint = (draft: Partial<IPQCAuditRecord>) => JSON.stringify({
+    auditDate: String(draft.auditDate || ''),
+    ww: String(draft.ww || ''),
+    shift: String(draft.shift || ''),
+    auditors: String(draft.auditors || ''),
+    personOnJob: String(draft.personOnJob || ''),
+    department: String(draft.department || ''),
+    platform: String(draft.platform || ''),
+    areaStation: String(draft.areaStation || ''),
+    groupFinding: String(draft.groupFinding || ''),
+    category: String(draft.category || ''),
+    detailsFindings: String(draft.detailsFindings || ''),
+    remark: String(draft.remark || ''),
+    status: String(draft.status || ''),
+    icarNum: String(draft.icarNum || ''),
+    icarStatus: String(draft.icarStatus || ''),
+    mqeEngineer: String(draft.mqeEngineer || ''),
+    picture: String(draft.picture || ''),
+  });
+
+  const initialAuditDraft = createEmptyAudit();
+  const [newAudit, setNewAudit] = useState<Partial<IPQCAuditRecord>>(initialAuditDraft);
+  const [auditBaseline, setAuditBaseline] = useState(() => getAuditDraftFingerprint(initialAuditDraft));
+  const [auditFormErrors, setAuditFormErrors] = useState<AuditFormErrors>({});
   const [auditSaving, setAuditSaving] = useState(false);
+  const isAuditDirty = view === 'add-audit' && getAuditDraftFingerprint(newAudit) !== auditBaseline;
+
+  const clearAuditFieldError = (field: keyof AuditFormErrors) => {
+    setAuditFormErrors((current) => {
+      if (!current[field]) return current;
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
+  };
+
+  const updateAuditField = (field: keyof IPQCAuditRecord, value: any, errorField?: keyof AuditFormErrors) => {
+    setNewAudit((current) => ({ ...current, [field]: value }));
+    if (errorField) clearAuditFieldError(errorField);
+  };
+
+  const validateAuditDraft = (): AuditFormErrors => {
+    const errors: AuditFormErrors = {};
+    const auditDate = String(newAudit.auditDate || '').trim();
+    const today = getTodayLocalISO();
+
+    if (!auditDate) errors.auditDate = 'Audit date is required.';
+    else if (!/^\d{4}-\d{2}-\d{2}$/.test(auditDate) || Number.isNaN(new Date(`${auditDate}T00:00:00`).getTime())) {
+      errors.auditDate = 'Enter a valid audit date.';
+    } else if (auditDate > today) {
+      errors.auditDate = 'Audit date cannot be in the future.';
+    }
+    if (!SHIFTS.includes(String(newAudit.shift || ''))) errors.shift = 'Select the shift.';
+    if (!String(newAudit.department || '').trim()) errors.department = 'Select the department.';
+    if (!String(newAudit.platform || '').trim()) errors.platform = 'Select the production platform.';
+    if (!String(newAudit.areaStation || '').trim()) errors.areaStation = 'Enter the area or station.';
+    if (!String(newAudit.category || '').trim()) errors.category = 'Select a finding category.';
+    if (!String(newAudit.detailsFindings || '').trim()) errors.detailsFindings = 'Select the finding details.';
+    if (!['Open', 'Closed'].includes(String(newAudit.status || ''))) errors.status = 'Select the finding status.';
+    if (!String(newAudit.auditors || '').trim()) errors.auditors = 'Select the IPQC auditor.';
+    if (!String(newAudit.personOnJob || '').trim()) errors.personOnJob = 'Enter the PIC name for this finding.';
+    return errors;
+  };
+
+  const focusFirstAuditError = (errors: AuditFormErrors) => {
+    const firstField = Object.keys(errors)[0] as keyof AuditFormErrors | undefined;
+    if (!firstField) return;
+    window.setTimeout(() => {
+      const element = document.getElementById(`audit-field-${firstField}`);
+      element?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (element instanceof HTMLElement) element.focus({ preventScroll: true });
+    }, 50);
+  };
+
+  const applyServerAuditErrors = (fields: unknown) => {
+    if (!fields || typeof fields !== 'object') return;
+    const supportedFields: Array<keyof AuditFormErrors> = [
+      'auditDate', 'shift', 'department', 'platform', 'areaStation',
+      'category', 'detailsFindings', 'status', 'auditors', 'personOnJob',
+    ];
+    const nextErrors: AuditFormErrors = {};
+    supportedFields.forEach((field) => {
+      const value = (fields as Record<string, unknown>)[field];
+      if (typeof value === 'string' && value.trim()) nextErrors[field] = value;
+    });
+    if (Object.keys(nextErrors).length > 0) {
+      setAuditFormErrors(nextErrors);
+      focusFirstAuditError(nextErrors);
+    }
+  };
+
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!isAuditDirty || auditSaving) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [isAuditDirty, auditSaving]);
 
   const categoryOptionsForForm = useMemo(() => {
     const current = String(newAudit.category || '').trim();
@@ -1738,6 +1955,7 @@ export default function App() {
       auditDate,
       ww: auditDate ? calculateWW(auditDate) : '',
     }));
+    clearAuditFieldError('auditDate');
   };
 
   const handleCategoryChange = (cat: string) => {
@@ -1747,6 +1965,8 @@ export default function App() {
       groupFinding: CATEGORY_GROUP_MAPPING[cat] || '',
       detailsFindings: '',
     }));
+    clearAuditFieldError('category');
+    clearAuditFieldError('detailsFindings');
   };
 
   const handlePlatformChange = (plat: string) => {
@@ -1755,6 +1975,7 @@ export default function App() {
       platform: plat,
       mqeEngineer: plat ? getMqeForPlatform(plat) : ''
     }));
+    clearAuditFieldError('platform');
   };
 
   const handleIcarNumChange = (num: string) => {
@@ -1765,6 +1986,41 @@ export default function App() {
       icarNum: num,
       icarStatus: hasIcarNumber ? 'Submitted' : 'Locked'
     }));
+  };
+
+  const resetAuditDraft = () => {
+    const empty = createEmptyAudit();
+    setEditingId(null);
+    setNewAudit(empty);
+    setAuditBaseline(getAuditDraftFingerprint(empty));
+    setAuditFormErrors({});
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const requestViewChange = (nextView: AppView) => {
+    if (view === nextView) return;
+
+    const completeNavigation = () => {
+      if (view === 'add-audit' && nextView !== 'add-audit') resetAuditDraft();
+      setView(nextView);
+      if (window.innerWidth < 768) setSidebarOpen(false);
+    };
+
+    if (view === 'add-audit' && nextView !== 'add-audit' && isAuditDirty && !auditSaving) {
+      requestConfirmation(
+        {
+          title: 'Discard unsaved changes?',
+          message: 'You have changes that have not been saved. Discard them and leave this form?',
+          confirmLabel: 'Discard changes',
+          cancelLabel: 'Keep editing',
+          tone: 'warning',
+        },
+        completeNavigation,
+      );
+      return;
+    }
+
+    completeNavigation();
   };
 
   const filteredRecords = useMemo(() => {
@@ -1901,35 +2157,65 @@ export default function App() {
   }, [selectedRecord?.id, authToken]);
 
   const handleOpenAddFinding = () => {
+    const empty = createEmptyAudit();
     setEditingId(null);
     setSelectedRecord(null);
     setOpenRowAction(null);
-    setNewAudit(createEmptyAudit());
+    setNewAudit(empty);
+    setAuditBaseline(getAuditDraftFingerprint(empty));
+    setAuditFormErrors({});
     if (fileInputRef.current) fileInputRef.current.value = '';
     setView('add-audit');
   };
 
   const handleCloseAuditForm = () => {
-    setEditingId(null);
-    setNewAudit(createEmptyAudit());
-    if (fileInputRef.current) fileInputRef.current.value = '';
-    setView('ipqc');
+    requestViewChange('ipqc');
   };
 
   const handleImageChange = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setNewAudit(prev => ({ ...prev, picture: reader.result as string }));
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+
+    const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+    const maxBytes = 5 * 1024 * 1024;
+    if (!allowedTypes.has(file.type)) {
+      showToast('error', 'Unsupported evidence file', 'Use a JPG, PNG or WEBP image.');
+      e.target.value = '';
+      return;
     }
+    if (file.size > maxBytes) {
+      showToast('error', 'Evidence image is too large', 'Choose an image smaller than 5 MB.');
+      e.target.value = '';
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setNewAudit(prev => ({ ...prev, picture: reader.result as string }));
+    };
+    reader.onerror = () => {
+      showToast('error', 'Image could not be read', 'Choose another evidence image and try again.');
+      e.target.value = '';
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleAddAudit = async (e: FormEvent) => {
     e.preventDefault();
     if (auditSaving) return;
+
+    const validationErrors = validateAuditDraft();
+    if (Object.keys(validationErrors).length > 0) {
+      setAuditFormErrors(validationErrors);
+      focusFirstAuditError(validationErrors);
+      showToast(
+        'warning',
+        'Complete required fields',
+        `${Object.keys(validationErrors).length} field${Object.keys(validationErrors).length === 1 ? '' : 's'} need attention before this finding can be saved.`
+      );
+      return;
+    }
+    setAuditFormErrors({});
 
     const enteredIcarNumber = String(newAudit.icarNum ?? '').trim();
     const hasIcarNumber = enteredIcarNumber !== '' && enteredIcarNumber.toUpperCase() !== 'N/A';
@@ -1955,6 +2241,7 @@ export default function App() {
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {
+          applyServerAuditErrors(data.fields);
           showToast('error', 'Finding not updated', data.error || 'Your changes could not be saved. The form has been kept so you can retry.');
           return;
         }
@@ -1972,6 +2259,7 @@ export default function App() {
 
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {
+          applyServerAuditErrors(data.fields);
           showToast('error', 'Finding not added', data.error || 'The finding could not be saved. The form has been kept so you can retry.');
           return;
         }
@@ -1982,7 +2270,10 @@ export default function App() {
         showToast('success', 'Finding added', `Finding #${created.no ?? created.id} was saved successfully.`);
       }
 
-      setNewAudit(createEmptyAudit());
+      const empty = createEmptyAudit();
+      setNewAudit(empty);
+      setAuditBaseline(getAuditDraftFingerprint(empty));
+      setAuditFormErrors({});
       setEditingId(null);
       setView('ipqc');
 
@@ -1996,7 +2287,7 @@ export default function App() {
   };
 
   const handleEditClick = (record: IPQCAuditRecord) => {
-    setNewAudit({
+    const draft: Partial<IPQCAuditRecord> = {
       no: record.no,
       auditDate: record.auditDate || '',
       ww: record.ww || '',
@@ -2015,66 +2306,99 @@ export default function App() {
       icarStatus: record.icarStatus || 'Locked',
       mqeEngineer: record.mqeEngineer || '',
       picture: record.picture || '',
-    });
+    };
+    setNewAudit(draft);
+    setAuditBaseline(getAuditDraftFingerprint(draft));
+    setAuditFormErrors({});
     setEditingId(record.id);
     setView('add-audit');
   };
 
-  const handleDeleteRecord = async (id: string) => {
+  const handleDeleteRecord = (id: string) => {
     const actor = currentUser?.fullName || currentUser?.username || 'Current user';
-    if (confirm(`Move this finding to the recycle bin?\n\nRecorded as: ${actor}\n\nThe record can be restored by an administrator and its version history will be retained.`)) {
-      try {
-        const response = await authFetch(`${API_BASE_URL}/api/records/${id}`, { method: 'DELETE' });
-        if (!response.ok) {
-          const data = await response.json().catch(() => ({}));
-          showToast('error', 'Finding not moved', data.error || 'Failed to move the finding to the recycle bin.');
-          return;
+    requestConfirmation(
+      {
+        title: 'Move finding to recycle bin?',
+        message: `This action will be recorded as ${actor}. The finding can be restored by an administrator and its version history will be retained.`,
+        confirmLabel: 'Move to recycle bin',
+        cancelLabel: 'Keep finding',
+        tone: 'danger',
+      },
+      async () => {
+        try {
+          const response = await authFetch(`${API_BASE_URL}/api/records/${id}`, { method: 'DELETE' });
+          if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            showToast('error', 'Finding not moved', data.error || 'Failed to move the finding to the recycle bin.');
+            return;
+          }
+          setRecords(prev => prev.filter(r => String(r.id) !== String(id)));
+          if (isAdmin) fetchDeletedRecords();
+          showToast('success', 'Moved to recycle bin', 'The finding was removed from active records and can be restored by an administrator.');
+        } catch (err) {
+          showToast('error', 'Finding not moved', 'Failed to move the finding to the recycle bin.');
         }
-        setRecords(prev => prev.filter(r => String(r.id) !== String(id)));
-        if (isAdmin) fetchDeletedRecords();
-        showToast('success', 'Moved to recycle bin', 'The finding was removed from active records and can be restored by an administrator.');
-      } catch (err) {
-        showToast('error', 'Finding not moved', 'Failed to move the finding to the recycle bin.');
-      }
-    }
+      },
+    );
   };
 
-  const handleRestoreDeletedRecord = async (record: IPQCAuditRecord) => {
+  const handleRestoreDeletedRecord = (record: IPQCAuditRecord) => {
     if (!isAdmin || !record.id) return;
-    if (!confirm(`Restore Finding #${record.no ?? record.id} from the recycle bin?`)) return;
-    try {
-      const response = await authFetch(`${API_BASE_URL}/api/records/${record.id}/restore`, { method: 'POST' });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || 'Failed to restore record.');
-      const restored = normalizeRecord(data);
-      setRecords(prev => [...prev.filter(item => String(item.id) !== String(restored.id)), restored]
-        .sort((a, b) => Number(a.id) - Number(b.id)));
-      setDeletedRecords(prev => prev.filter(item => String(item.id) !== String(record.id)));
-      fetchAuditLog();
-      showToast('success', 'Finding restored', `Finding #${restored.no ?? restored.id} is active again.`);
-    } catch (err) {
-      showToast('error', 'Restore failed', err instanceof Error ? err.message : 'Failed to restore the finding.');
-    }
+    requestConfirmation(
+      {
+        title: 'Restore finding?',
+        message: `Finding #${record.no ?? record.id} will return to the active IPQC records list.`,
+        confirmLabel: 'Restore finding',
+        cancelLabel: 'Cancel',
+        tone: 'neutral',
+      },
+      async () => {
+        try {
+          const response = await authFetch(`${API_BASE_URL}/api/records/${record.id}/restore`, { method: 'POST' });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(data.error || 'Failed to restore record.');
+          const restored = normalizeRecord(data);
+          setRecords(prev => [...prev.filter(item => String(item.id) !== String(restored.id)), restored]
+            .sort((a, b) => Number(a.id) - Number(b.id)));
+          setDeletedRecords(prev => prev.filter(item => String(item.id) !== String(record.id)));
+          fetchAuditLog();
+          showToast('success', 'Finding restored', `Finding #${restored.no ?? restored.id} is active again.`);
+        } catch (err) {
+          showToast('error', 'Restore failed', err instanceof Error ? err.message : 'Failed to restore the finding.');
+        }
+      },
+    );
   };
 
-  const handleRestoreRecordVersion = async (version: RecordVersion) => {
+  const handleRestoreRecordVersion = (version: RecordVersion) => {
     if (!isAdmin || !selectedRecord?.id) return;
-    if (!confirm(`Restore Finding #${selectedRecord.no ?? selectedRecord.id} to version ${version.versionNo}?\n\nThe current state will remain in version history.`)) return;
-    try {
-      const response = await authFetch(`${API_BASE_URL}/api/records/${selectedRecord.id}/versions/${version.versionNo}/restore`, { method: 'POST' });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || 'Failed to restore version.');
-      const restored = normalizeRecord(data);
-      setSelectedRecord(restored);
-      setRecords(prev => prev.map(item => String(item.id) === String(restored.id) ? restored : item));
-      const versionsResponse = await authFetch(`${API_BASE_URL}/api/records/${restored.id}/versions`);
-      const versionsData = await versionsResponse.json().catch(() => ([]));
-      if (versionsResponse.ok) setRecordVersions(Array.isArray(versionsData) ? versionsData : []);
-      fetchAuditLog();
-      showToast('success', 'Version restored', `Finding #${restored.no ?? restored.id} was restored to version ${version.versionNo}.`);
-    } catch (err) {
-      showToast('error', 'Version restore failed', err instanceof Error ? err.message : 'Failed to restore this version.');
-    }
+    const findingNumber = selectedRecord.no ?? selectedRecord.id;
+    requestConfirmation(
+      {
+        title: `Restore version ${version.versionNo}?`,
+        message: `Finding #${findingNumber} will be restored to version ${version.versionNo}. The current state remains available in version history.`,
+        confirmLabel: 'Restore version',
+        cancelLabel: 'Keep current version',
+        tone: 'warning',
+      },
+      async () => {
+        try {
+          const response = await authFetch(`${API_BASE_URL}/api/records/${selectedRecord.id}/versions/${version.versionNo}/restore`, { method: 'POST' });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(data.error || 'Failed to restore version.');
+          const restored = normalizeRecord(data);
+          setSelectedRecord(restored);
+          setRecords(prev => prev.map(item => String(item.id) === String(restored.id) ? restored : item));
+          const versionsResponse = await authFetch(`${API_BASE_URL}/api/records/${restored.id}/versions`);
+          const versionsData = await versionsResponse.json().catch(() => ([]));
+          if (versionsResponse.ok) setRecordVersions(Array.isArray(versionsData) ? versionsData : []);
+          fetchAuditLog();
+          showToast('success', 'Version restored', `Finding #${restored.no ?? restored.id} was restored to version ${version.versionNo}.`);
+        } catch (err) {
+          showToast('error', 'Version restore failed', err instanceof Error ? err.message : 'Failed to restore this version.');
+        }
+      },
+    );
   };
 
   const formatImportFileSize = (bytes: number) => {
@@ -2343,7 +2667,7 @@ export default function App() {
             label="Analytics" 
             active={view === 'dashboard'} 
             collapsed={!sidebarOpen && window.innerWidth >= 768}
-            onClick={() => { setView('dashboard'); if (window.innerWidth < 768) setSidebarOpen(false); }}
+            onClick={() => requestViewChange('dashboard')}
           />
 
           {sidebarOpen ? (
@@ -2358,7 +2682,7 @@ export default function App() {
             label="IPQC Records" 
             active={view === 'ipqc'} 
             collapsed={!sidebarOpen && window.innerWidth >= 768}
-            onClick={() => { setSelectedRecord(null); setView('ipqc'); if (window.innerWidth < 768) setSidebarOpen(false); }}
+            onClick={() => { setSelectedRecord(null); requestViewChange('ipqc'); }}
           />
 
           {sidebarOpen ? (
@@ -2375,7 +2699,7 @@ export default function App() {
             collapsed={!sidebarOpen && window.innerWidth >= 768}
             disabled={!isAdmin}
             onClick={() => {
-              setView('action-center');
+              requestViewChange('action-center');
               if (window.innerWidth < 768) setSidebarOpen(false);
             }}
           />
@@ -2386,7 +2710,7 @@ export default function App() {
             collapsed={!sidebarOpen && window.innerWidth >= 768}
             disabled={!isAdmin}
             onClick={() => {
-              setView('ai-insights');
+              requestViewChange('ai-insights');
               if (window.innerWidth < 768) setSidebarOpen(false);
             }}
           />
@@ -2397,7 +2721,7 @@ export default function App() {
             collapsed={!sidebarOpen && window.innerWidth >= 768}
             disabled={!isAdmin}
             onClick={() => {
-              setView('access-audit');
+              requestViewChange('access-audit');
               if (window.innerWidth < 768) setSidebarOpen(false);
             }}
           />
@@ -2408,7 +2732,7 @@ export default function App() {
             collapsed={!sidebarOpen && window.innerWidth >= 768}
             disabled={!isAdmin}
             onClick={() => {
-              setView('quality-config');
+              requestViewChange('quality-config');
               if (window.innerWidth < 768) setSidebarOpen(false);
             }}
           />
@@ -3439,7 +3763,16 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-200">
-                        {paginatedRecords.map((record, index) => (
+                        {recordsLoading && Array.from({ length: 8 }).map((_, index) => (
+                          <tr key={`records-skeleton-${index}`} className="animate-pulse bg-white">
+                            {Array.from({ length: 19 }).map((__, cell) => (
+                              <td key={cell} className="border-r border-slate-100 px-4 py-4">
+                                <div className={`h-3 rounded bg-slate-100 ${cell === 12 ? 'w-40' : cell === 13 ? 'mx-auto h-9 w-12' : cell === 18 ? 'ml-auto w-8' : 'w-20'}`} />
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                        {!recordsLoading && paginatedRecords.map((record, index) => (
                           <tr 
                             key={record.id} 
                             ref={(el) => { rowRefs.current[String(record.id)] = el; }}
@@ -3561,17 +3894,28 @@ export default function App() {
                     </table>
                   </div>
 
-                  {filteredRecords.length === 0 && (
-                    <div className="p-20 text-center bg-white flex-1 flex flex-col items-center justify-center">
-                      <div className="w-16 h-16 bg-bg-main rounded-full flex items-center justify-center mb-4 text-text-muted/30">
-                        <Filter size={32} />
+                  {!recordsLoading && filteredRecords.length === 0 && (
+                    <div className="flex flex-1 flex-col items-center justify-center bg-white px-6 py-16 text-center">
+                      <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 text-slate-400">
+                        {hasActiveQuery ? <Filter size={24} /> : <ClipboardCheck size={24} />}
                       </div>
-                      <h4 className="font-bold text-text-muted uppercase tracking-widest text-sm">No Results Found</h4>
-                      <p className="text-xs text-text-muted/60 mt-2">Try adjusting your filters or search query.</p>
+                      <h4 className="text-sm font-black text-slate-800">{hasActiveQuery ? 'No findings match these filters' : 'No findings recorded yet'}</h4>
+                      <p className="mt-1 max-w-md text-[11px] font-medium leading-5 text-slate-400">
+                        {hasActiveQuery
+                          ? 'Adjust the search or filters to broaden the results.'
+                          : 'Create the first finding to begin building the IPQC quality record.'}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={hasActiveQuery ? clearRecordFilters : handleOpenAddFinding}
+                        className="mt-4 inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 text-[10px] font-black uppercase tracking-wider text-slate-600 shadow-sm transition-colors hover:bg-slate-50 hover:text-slate-900"
+                      >
+                        {hasActiveQuery ? <><X size={13} /> Clear filters</> : <><Plus size={13} /> Add finding</>}
+                      </button>
                     </div>
                   )}
 
-                  {filteredRecords.length > 0 && (
+                  {!recordsLoading && filteredRecords.length > 0 && (
                     <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-5 py-3.5 bg-slate-50/70 border-t border-slate-200 shrink-0">
                       <div className="flex items-center gap-3 text-[11px] font-bold text-slate-500">
                         <span>
@@ -3673,7 +4017,13 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2 text-[10px] font-medium text-slate-500">
+                    <div className="flex flex-wrap items-center gap-2 text-[10px] font-medium text-slate-500">
+                      {isAuditDirty && (
+                        <span className="inline-flex items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 font-semibold text-amber-700">
+                          <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                          Unsaved changes
+                        </span>
+                      )}
                       <span className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5">
                         <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
                         Required fields marked *
@@ -3688,6 +4038,18 @@ export default function App() {
                       </span>
                     </div>
                   </div>
+
+                  {Object.keys(auditFormErrors).length > 0 && (
+                    <div className="mb-4 flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3.5 text-rose-700" role="alert">
+                      <AlertCircle size={17} className="mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-[11px] font-black">Please complete the required information before saving.</p>
+                        <p className="mt-0.5 text-[10px] font-medium leading-4 text-rose-600">
+                          {Object.keys(auditFormErrors).length} field{Object.keys(auditFormErrors).length === 1 ? '' : 's'} need attention. The first incomplete field has been highlighted.
+                        </p>
+                      </div>
+                    </div>
+                  )}
 
                   <form
                     onSubmit={handleAddAudit}
@@ -3713,6 +4075,8 @@ export default function App() {
                             label="Audit date"
                             type="date"
                             required
+                            inputId="audit-field-auditDate"
+                            error={auditFormErrors.auditDate}
                             value={newAudit.auditDate}
                             onChange={handleAuditDateChange}
                           />
@@ -3723,16 +4087,20 @@ export default function App() {
                           <FormSelect
                             label="Shift"
                             required
+                            inputId="audit-field-shift"
+                            error={auditFormErrors.shift}
                             value={newAudit.shift || ''}
-                            onChange={(v: string) => setNewAudit({ ...newAudit, shift: v })}
+                            onChange={(v: string) => updateAuditField('shift', v, 'shift')}
                             options={SHIFTS}
                             placeholder="Select shift"
                           />
                           <FormSelect
                             label="Department"
                             required
+                            inputId="audit-field-department"
+                            error={auditFormErrors.department}
                             value={newAudit.department || ''}
-                            onChange={(v: string) => setNewAudit({ ...newAudit, department: v })}
+                            onChange={(v: string) => updateAuditField('department', v, 'department')}
                             options={DEPARTMENTS}
                             placeholder="Select department"
                           />
@@ -3756,6 +4124,8 @@ export default function App() {
                           <FormSelect
                             label="Platform"
                             required
+                            inputId="audit-field-platform"
+                            error={auditFormErrors.platform}
                             value={newAudit.platform || ''}
                             onChange={handlePlatformChange}
                             options={platformsList}
@@ -3764,8 +4134,10 @@ export default function App() {
                           <FormInput
                             label="Area / station"
                             required
+                            inputId="audit-field-areaStation"
+                            error={auditFormErrors.areaStation}
                             value={newAudit.areaStation}
-                            onChange={(v: string) => setNewAudit({ ...newAudit, areaStation: v })}
+                            onChange={(v: string) => updateAuditField('areaStation', v, 'areaStation')}
                             placeholder="e.g. Station 2, EM2"
                           />
                           <AutoField label="MQE engineer" value={newAudit.mqeEngineer} accent="orange" />
@@ -3789,6 +4161,8 @@ export default function App() {
                           <FormSelect
                             label="Category"
                             required
+                            inputId="audit-field-category"
+                            error={auditFormErrors.category}
                             value={newAudit.category || ''}
                             onChange={handleCategoryChange}
                             options={categoryOptionsForForm}
@@ -3798,8 +4172,10 @@ export default function App() {
                           <FormSelect
                             label="Finding details"
                             required
+                            inputId="audit-field-detailsFindings"
+                            error={auditFormErrors.detailsFindings}
                             value={newAudit.detailsFindings || ''}
-                            onChange={(v: string) => setNewAudit({ ...newAudit, detailsFindings: v })}
+                            onChange={(v: string) => updateAuditField('detailsFindings', v, 'detailsFindings')}
                             options={findingDetailOptionsForForm}
                             placeholder={newAudit.category ? 'Select finding detail' : 'Select category first'}
                             disabled={!newAudit.category}
@@ -3810,8 +4186,10 @@ export default function App() {
                           <FormSelect
                             label="Finding status"
                             required
+                            inputId="audit-field-status"
+                            error={auditFormErrors.status}
                             value={newAudit.status || ''}
-                            onChange={(v: string) => setNewAudit({ ...newAudit, status: v })}
+                            onChange={(v: string) => updateAuditField('status', v, 'status')}
                             options={['Open', 'Closed']}
                             placeholder="Select finding status"
                           />
@@ -3847,16 +4225,20 @@ export default function App() {
                           <FormSelect
                             label="IPQC auditor"
                             required
+                            inputId="audit-field-auditors"
+                            error={auditFormErrors.auditors}
                             value={newAudit.auditors || ''}
-                            onChange={(v: string) => setNewAudit({ ...newAudit, auditors: v })}
+                            onChange={(v: string) => updateAuditField('auditors', v, 'auditors')}
                             options={auditorsList}
                             placeholder="Select auditor"
                           />
                           <FormInput
                             label="PIC name (finding)"
                             required
+                            inputId="audit-field-personOnJob"
+                            error={auditFormErrors.personOnJob}
                             value={newAudit.personOnJob}
-                            onChange={(v: string) => setNewAudit({ ...newAudit, personOnJob: v })}
+                            onChange={(v: string) => updateAuditField('personOnJob', v, 'personOnJob')}
                             placeholder="Person responsible on shift"
                           />
                         </div>
@@ -3907,7 +4289,7 @@ export default function App() {
                           <div className="lg:col-span-7">
                             <div className="mb-1.5 flex items-center justify-between gap-3">
                               <label className="text-[11px] font-semibold text-slate-700">Audit evidence</label>
-                              <span className="text-[10px] text-slate-400">JPG, PNG or WEBP · optional</span>
+                              <span className="text-[10px] text-slate-400">JPG, PNG or WEBP · max 5 MB · optional</span>
                             </div>
                             <div
                               onClick={() => !newAudit.picture && fileInputRef.current?.click()}
@@ -3921,7 +4303,7 @@ export default function App() {
                                 type="file"
                                 ref={fileInputRef}
                                 className="hidden"
-                                accept="image/*"
+                                accept="image/jpeg,image/png,image/webp"
                                 onChange={handleImageChange}
                               />
                               {newAudit.picture ? (
@@ -4087,7 +4469,7 @@ export default function App() {
                     </span>
                     <button
                       type="button"
-                      onClick={() => setView('ai-insights')}
+                      onClick={() => requestViewChange('ai-insights')}
                       className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-slate-900 px-3.5 text-[10px] font-black uppercase tracking-wider text-white transition-all hover:bg-slate-800"
                     >
                       <Sparkles size={13} />
@@ -4155,7 +4537,7 @@ export default function App() {
 
                   <button
                     type="button"
-                    onClick={() => setView('quality-config')}
+                    onClick={() => requestViewChange('quality-config')}
                     className="group rounded-xl border border-slate-200 bg-white p-4 text-left shadow-[0_1px_3px_rgba(15,23,42,0.04)] transition-all hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
                   >
                     <div className="flex items-start justify-between gap-3">
@@ -4212,7 +4594,7 @@ export default function App() {
                             {actionCenterData.oldestOpen.map(({ record, ageDays }) => (
                               <tr
                                 key={record.id}
-                                onClick={() => { setSelectedRecord(record); setView('ipqc'); }}
+                                onClick={() => { setSelectedRecord(record); requestViewChange('ipqc'); }}
                                 className="cursor-pointer transition-colors hover:bg-orange-50/40"
                               >
                                 <td className="px-5 py-3.5">
@@ -4358,7 +4740,7 @@ export default function App() {
                     </span>
                     <button
                       type="button"
-                      onClick={() => setView('action-center')}
+                      onClick={() => requestViewChange('action-center')}
                       className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 text-[10px] font-black uppercase tracking-wider text-slate-600 transition-colors hover:bg-slate-50"
                     >
                       <AlertCircle size={13} />
@@ -4579,13 +4961,13 @@ export default function App() {
                     ) : (
                       <span
                         className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[10px] font-black uppercase tracking-widest transition-colors ${
-                          savingSettings
+                          settingsLoading || savingSettings
                             ? 'border-amber-200 bg-amber-50 text-amber-700'
                             : 'border-emerald-200 bg-emerald-50 text-emerald-700'
                         }`}
                       >
-                        <span className={`h-1.5 w-1.5 rounded-full ${savingSettings ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`} />
-                        {savingSettings ? 'Saving changes' : 'Settings synced'}
+                        <span className={`h-1.5 w-1.5 rounded-full ${settingsLoading || savingSettings ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`} />
+                        {settingsLoading ? 'Loading settings' : (savingSettings ? 'Saving changes' : 'Settings synced')}
                       </span>
                     )}
                   </div>
@@ -4775,7 +5157,8 @@ export default function App() {
                             )}
                             className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 text-[10px] font-black uppercase tracking-wider text-white transition-all hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
                           >
-                            <ShieldCheck size={14} /> Create account
+                            <ShieldCheck size={14} className={usersSaving ? 'animate-pulse' : ''} />
+                            {usersSaving ? 'Creating...' : 'Create account'}
                           </button>
                         </div>
                       </form>
@@ -4802,9 +5185,24 @@ export default function App() {
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {usersLoading ? (
-                          <tr><td colSpan={6} className="px-6 py-10 text-center text-xs font-semibold text-slate-400">Loading accounts...</td></tr>
+                          Array.from({ length: 4 }).map((_, index) => (
+                            <tr key={`account-skeleton-${index}`} className="animate-pulse">
+                              <td className="px-5 py-4 md:px-6"><div className="h-8 w-44 rounded-lg bg-slate-100" /></td>
+                              <td className="px-5 py-4"><div className="h-7 w-28 rounded-lg bg-slate-100" /></td>
+                              <td className="px-5 py-4"><div className="h-5 w-24 rounded bg-slate-100" /></td>
+                              <td className="px-5 py-4"><div className="h-6 w-16 rounded-full bg-slate-100" /></td>
+                              <td className="px-5 py-4"><div className="h-6 w-20 rounded-full bg-slate-100" /></td>
+                              <td className="px-5 py-4 md:px-6"><div className="ml-auto h-7 w-32 rounded-lg bg-slate-100" /></td>
+                            </tr>
+                          ))
                         ) : managedUsers.length === 0 ? (
-                          <tr><td colSpan={6} className="px-6 py-10 text-center text-xs font-semibold text-slate-400">No accounts found.</td></tr>
+                          <tr>
+                            <td colSpan={6} className="px-6 py-14 text-center">
+                              <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100 text-slate-400"><Users size={20} /></div>
+                              <p className="mt-3 text-xs font-black text-slate-700">No accounts configured</p>
+                              <p className="mt-1 text-[10px] text-slate-400">Use Add account to create the first employee or administrator.</p>
+                            </td>
+                          </tr>
                         ) : managedUsers.map(user => (
                           <tr key={user.id} className="transition-colors hover:bg-slate-50/70">
                             <td className="px-5 py-3.5 md:px-6">
@@ -4833,7 +5231,9 @@ export default function App() {
                                 <button
                                   type="button"
                                   disabled={usersSaving || currentUser?.id === user.id}
-                                  onClick={() => updateManagedUser(user, { isActive: !user.isActive })}
+                                  onClick={() => handleToggleManagedUser(user)}
+                                  title={currentUser?.id === user.id ? 'You cannot change your own account status here' : (user.isActive ? 'Deactivate account' : 'Activate account')}
+                                  aria-label={user.isActive ? `Deactivate ${user.fullName}` : `Activate ${user.fullName}`}
                                   className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-wider disabled:cursor-not-allowed disabled:opacity-50 ${user.isActive ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-500'}`}
                                 >
                                   <span className={`h-1.5 w-1.5 rounded-full ${user.isActive ? 'bg-emerald-500' : 'bg-slate-400'}`} />
@@ -4858,6 +5258,8 @@ export default function App() {
                                   type="button"
                                   disabled={usersSaving || currentUser?.id === user.id}
                                   onClick={() => { setResetCredentialUserId(user.id); setResetCredentialValue(''); setUserManagementError(''); }}
+                                  title={user.role === 'user' ? 'Issue a temporary replacement PIN' : 'Issue a temporary replacement password'}
+                                  aria-label={`${user.role === 'user' ? 'Reset PIN for' : 'Reset password for'} ${user.fullName}`}
                                   className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[9px] font-black uppercase tracking-wider text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
                                 >
                                   <Lock size={12} /> {user.role === 'user' ? 'Reset PIN' : 'Reset password'}
@@ -4867,6 +5269,8 @@ export default function App() {
                                     type="button"
                                     disabled={usersSaving}
                                     onClick={() => handleResetAdminMfa(user)}
+                                    title="Reset authenticator enrollment and revoke current sessions"
+                                    aria-label={`Reset MFA for ${user.fullName}`}
                                     className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[9px] font-black uppercase tracking-wider text-amber-600 transition-colors hover:bg-amber-50 hover:text-amber-700 disabled:opacity-40"
                                   >
                                     <Smartphone size={12} /> Reset MFA
@@ -4905,7 +5309,7 @@ export default function App() {
                         </div>
                         <div className="flex gap-2">
                           <button type="button" onClick={() => { setResetCredentialUserId(null); setResetCredentialValue(''); }} className="h-10 rounded-lg border border-slate-200 bg-white px-3.5 text-[10px] font-black uppercase tracking-wider text-slate-500">Cancel</button>
-                          <button type="submit" disabled={usersSaving || !valid} className="h-10 rounded-lg bg-slate-900 px-4 text-[10px] font-black uppercase tracking-wider text-white disabled:opacity-40">Update credential</button>
+                          <button type="submit" disabled={usersSaving || !valid} className="h-10 rounded-lg bg-slate-900 px-4 text-[10px] font-black uppercase tracking-wider text-white disabled:opacity-40">{usersSaving ? 'Updating...' : 'Update credential'}</button>
                         </div>
                       </form>
                     );
@@ -4937,7 +5341,7 @@ export default function App() {
                         className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 text-[10px] font-black uppercase tracking-wider text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-50"
                       >
                         <Clock size={13} className={auditLogLoading ? 'animate-spin' : ''} />
-                        Refresh
+                        {auditLogLoading ? 'Refreshing...' : 'Refresh'}
                       </button>
                     </div>
                   </div>
@@ -5035,7 +5439,7 @@ export default function App() {
                       className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 text-[10px] font-black uppercase tracking-wider text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-50"
                     >
                       <RotateCcw size={13} className={deletedRecordsLoading ? 'animate-spin' : ''} />
-                      Refresh
+                      {deletedRecordsLoading ? 'Refreshing...' : 'Refresh'}
                     </button>
                   </div>
 
@@ -5088,6 +5492,12 @@ export default function App() {
 
                 {view === 'quality-config' && (
                   <>
+                {settingsLoading && (
+                  <section className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-[11px] font-semibold text-slate-500 shadow-sm">
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-brand-orange" />
+                    Loading quality configuration...
+                  </section>
+                )}
                 {/* Main management area */}
                 <section className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
                   {/* Auditors */}
@@ -5123,11 +5533,11 @@ export default function App() {
                         </div>
                         <button
                           type="submit"
-                          disabled={!newAuditorName.trim() || savingSettings}
+                          disabled={!newAuditorName.trim() || savingSettings || settingsLoading}
                           className="inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-brand-orange px-4 text-[10px] font-black uppercase tracking-wider text-white shadow-sm transition-all hover:brightness-105 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
                         >
-                          <Plus size={14} />
-                          Add
+                          <Plus size={14} className={savingSettings ? 'animate-pulse' : ''} />
+                          {savingSettings ? 'Saving...' : 'Add'}
                         </button>
                       </form>
                     </div>
@@ -5278,11 +5688,13 @@ export default function App() {
                           <div className="md:self-end">
                             <button
                               type="submit"
-                              disabled={!newMqeName.trim() || savingSettings || newMqeName.trim() === String(mqeMappings[selectedPlatformForMapping] || '').trim()}
+                              disabled={!newMqeName.trim() || savingSettings || settingsLoading || newMqeName.trim() === String(mqeMappings[selectedPlatformForMapping] || '').trim()}
                               className="inline-flex h-10 w-full md:w-auto items-center justify-center gap-1.5 rounded-lg bg-slate-900 px-4 text-[10px] font-black uppercase tracking-wider text-white transition-all hover:bg-slate-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
                             >
-                              <CheckCircle2 size={14} />
-                              {mqeMappings[selectedPlatformForMapping]?.trim() ? 'Update MQE' : 'Assign MQE'}
+                              <CheckCircle2 size={14} className={savingSettings ? 'animate-pulse' : ''} />
+                              {savingSettings
+                                ? 'Saving...'
+                                : (mqeMappings[selectedPlatformForMapping]?.trim() ? 'Update MQE' : 'Assign MQE')}
                             </button>
                           </div>
                         </div>
@@ -5952,6 +6364,71 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {confirmationDialog && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[210] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[3px]"
+            onMouseDown={(event) => { if (event.target === event.currentTarget) closeConfirmation(); }}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 12, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 12, scale: 0.98 }}
+              transition={{ duration: 0.16 }}
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="confirmation-dialog-title"
+              aria-describedby="confirmation-dialog-message"
+              className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.28)]"
+            >
+              <div className="flex items-start gap-3 border-b border-slate-100 px-6 py-5">
+                <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
+                  confirmationDialog.tone === 'danger'
+                    ? 'bg-rose-50 text-rose-600'
+                    : confirmationDialog.tone === 'warning'
+                      ? 'bg-amber-50 text-amber-600'
+                      : 'bg-blue-50 text-blue-600'
+                }`}>
+                  {confirmationDialog.tone === 'danger' ? <Trash2 size={18} /> : confirmationDialog.tone === 'warning' ? <AlertCircle size={18} /> : <RotateCcw size={18} />}
+                </div>
+                <div className="min-w-0">
+                  <h3 id="confirmation-dialog-title" className="text-base font-black text-slate-900">{confirmationDialog.title}</h3>
+                  <p id="confirmation-dialog-message" className="mt-1 text-[11px] font-medium leading-5 text-slate-500">{confirmationDialog.message}</p>
+                </div>
+              </div>
+              <div className="flex flex-col-reverse gap-2.5 bg-slate-50/70 px-6 py-4 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={closeConfirmation}
+                  disabled={confirmationBusy}
+                  className="h-10 rounded-lg border border-slate-200 bg-white px-4 text-[10px] font-black uppercase tracking-wider text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {confirmationDialog.cancelLabel || 'Cancel'}
+                </button>
+                <button
+                  type="button"
+                  onClick={runConfirmedAction}
+                  disabled={confirmationBusy}
+                  className={`inline-flex h-10 items-center justify-center gap-2 rounded-lg px-4 text-[10px] font-black uppercase tracking-wider text-white transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
+                    confirmationDialog.tone === 'danger'
+                      ? 'bg-rose-600 hover:bg-rose-700'
+                      : confirmationDialog.tone === 'warning'
+                        ? 'bg-amber-600 hover:bg-amber-700'
+                        : 'bg-slate-900 hover:bg-slate-800'
+                  }`}
+                >
+                  {confirmationBusy && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/35 border-t-white" />}
+                  {confirmationBusy ? 'Working...' : confirmationDialog.confirmLabel}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Global operation notifications: successes are transient; contextual form errors remain inline. */}
       <div className="pointer-events-none fixed bottom-4 right-4 z-[220] flex w-[calc(100%-2rem)] max-w-sm flex-col gap-2 sm:bottom-5 sm:right-5" aria-live="polite" aria-atomic="true">
         <AnimatePresence initial={false}>
@@ -6313,21 +6790,35 @@ function FilterInput({ label, value, onChange, type = 'text', options = [], plac
   );
 }
 
-function FormInput({ label, required, value, onChange, type = 'text', placeholder, helper }: any) {
+function FormInput({ label, required, value, onChange, type = 'text', placeholder, helper, error, inputId }: any) {
+  const describedBy = error ? `${inputId || 'field'}-error` : helper ? `${inputId || 'field'}-helper` : undefined;
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-[11px] font-semibold text-slate-700">
+      <label htmlFor={inputId} className="text-[11px] font-semibold text-slate-700">
         {label}{required && <span className="ml-0.5 text-rose-500">*</span>}
       </label>
       <input
+        id={inputId}
         type={type}
-        value={value}
+        value={value ?? ''}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
         required={required}
-        className="h-11 w-full rounded-lg border border-slate-300 bg-white px-3.5 text-sm font-medium text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/10"
+        aria-invalid={Boolean(error)}
+        aria-describedby={describedBy}
+        className={`h-11 w-full rounded-lg border bg-white px-3.5 text-sm font-medium text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:ring-4 ${
+          error
+            ? 'border-rose-300 focus:border-rose-400 focus:ring-rose-100'
+            : 'border-slate-300 focus:border-brand-orange focus:ring-brand-orange/10'
+        }`}
       />
-      {helper && <span className="px-0.5 text-[10px] leading-4 text-slate-400">{helper}</span>}
+      {error ? (
+        <span id={`${inputId || 'field'}-error`} className="flex items-start gap-1 px-0.5 text-[10px] font-semibold leading-4 text-rose-600">
+          <AlertCircle size={11} className="mt-0.5 shrink-0" /> {error}
+        </span>
+      ) : helper ? (
+        <span id={`${inputId || 'field'}-helper`} className="px-0.5 text-[10px] leading-4 text-slate-400">{helper}</span>
+      ) : null}
     </div>
   );
 }
@@ -6408,26 +6899,40 @@ function RecordDetailField({ label, value, accent, mono }: { label: string, valu
   );
 }
 
-function FormSelect({ label, value, onChange, options, required, helper, placeholder, disabled = false }: any) {
+function FormSelect({ label, value, onChange, options, required, helper, placeholder, disabled = false, error, inputId }: any) {
+  const describedBy = error ? `${inputId || 'field'}-error` : helper ? `${inputId || 'field'}-helper` : undefined;
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-[11px] font-semibold text-slate-700">
+      <label htmlFor={inputId} className="text-[11px] font-semibold text-slate-700">
         {label}{required && <span className="ml-0.5 text-rose-500">*</span>}
       </label>
       <div className="group relative">
         <select
-          value={value}
+          id={inputId}
+          value={value ?? ''}
           onChange={(e) => onChange(e.target.value)}
           required={required}
           disabled={disabled}
-          className="h-11 w-full appearance-none rounded-lg border border-slate-300 bg-white px-3.5 pr-9 text-sm font-medium text-slate-800 outline-none transition-all focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/10 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+          aria-invalid={Boolean(error)}
+          aria-describedby={describedBy}
+          className={`h-11 w-full appearance-none rounded-lg border bg-white px-3.5 pr-9 text-sm font-medium text-slate-800 outline-none transition-all focus:ring-4 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400 ${
+            error
+              ? 'border-rose-300 focus:border-rose-400 focus:ring-rose-100'
+              : 'border-slate-300 focus:border-brand-orange focus:ring-brand-orange/10'
+          }`}
         >
           {placeholder && <option value="" disabled={required}>{placeholder}</option>}
           {options.map((opt: any) => <option key={opt} value={opt}>{opt}</option>)}
         </select>
-        <ChevronDown size={15} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 transition-colors group-focus-within:text-brand-orange" />
+        <ChevronDown size={15} className={`pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 transition-colors ${error ? 'text-rose-400' : 'text-slate-400 group-focus-within:text-brand-orange'}`} />
       </div>
-      {helper && <span className="px-0.5 text-[10px] leading-4 text-slate-400">{helper}</span>}
+      {error ? (
+        <span id={`${inputId || 'field'}-error`} className="flex items-start gap-1 px-0.5 text-[10px] font-semibold leading-4 text-rose-600">
+          <AlertCircle size={11} className="mt-0.5 shrink-0" /> {error}
+        </span>
+      ) : helper ? (
+        <span id={`${inputId || 'field'}-helper`} className="px-0.5 text-[10px] leading-4 text-slate-400">{helper}</span>
+      ) : null}
     </div>
   );
 }

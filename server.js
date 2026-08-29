@@ -13,10 +13,68 @@ dotenv.config();
 
 const app = express();
 app.set('trust proxy', 1);
-app.use(cors());
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
-app.use('/uploads', express.static('public/uploads'));
+app.disable('x-powered-by');
+
+// Lightweight production security headers without adding another runtime dependency.
+// The policy keeps the current bundled React app, evidence previews and optional
+// Power BI frames working while blocking framing, MIME sniffing and unsafe objects.
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; " +
+    "img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https:; " +
+    "font-src 'self' data: https:; script-src 'self'; connect-src 'self' https:; " +
+    "frame-src 'self' https:; form-action 'self'"
+  );
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  if (req.secure || forwardedProto === 'https') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  next();
+});
+
+const configuredOrigins = String(process.env.ALLOWED_ORIGINS || process.env.FRONTEND_URL || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+const allowedOrigins = new Set(configuredOrigins);
+app.use(cors({
+  origin(origin, callback) {
+    // Requests without Origin (same-server navigation, curl, health checks) are safe.
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.has(origin)) return callback(null, true);
+    if (process.env.NODE_ENV !== 'production' && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)) {
+      return callback(null, true);
+    }
+    // Do not throw a server error. Simply omit CORS permission for untrusted origins.
+    return callback(null, false);
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Audit-Source'],
+  maxAge: 86400,
+}));
+
+// 12 MB comfortably fits a <=5 MB evidence photo after base64 encoding plus form data.
+app.use(express.json({ limit: '12mb' }));
+app.use(express.urlencoded({ limit: '2mb', extended: true }));
+app.use('/api', (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Pragma', 'no-cache');
+  next();
+});
+app.use('/uploads', express.static('public/uploads', {
+  dotfiles: 'deny',
+  fallthrough: false,
+  maxAge: process.env.NODE_ENV === 'production' ? '1d' : 0,
+  setHeaders: (res) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Disposition', 'inline');
+  },
+}));
 
 const {
   JWT_SECRET,
@@ -24,13 +82,14 @@ const {
   ADMIN_PASSWORD_HASH,
   GEMINI_API_KEY,
   GEMINI_MODEL = 'gemini-3.6-flash',
-  ALLOW_DATABASE_RESET = 'false',
   USER_SESSION_EXPIRES_IN = '7d',
   ADMIN_SESSION_EXPIRES_IN = '8h',
   MFA_ENCRYPTION_KEY = '',
   ADMIN_MFA_CHALLENGE_EXPIRES_IN = '5m',
   ADMIN_MAX_LOGIN_ATTEMPTS = '5',
-  ADMIN_LOCKOUT_MINUTES = '15'
+  ADMIN_LOCKOUT_MINUTES = '15',
+  MAX_EVIDENCE_IMAGE_MB = '5',
+  APP_TIMEZONE = 'Asia/Kuala_Lumpur'
 } = process.env;
 
 if (!JWT_SECRET) {
@@ -454,6 +513,136 @@ const normalizeIcarInput = (value) => {
     icarNum: hasIcarNumber ? trimmed : 'N/A',
     icarStatus: hasIcarNumber ? 'Submitted' : 'Locked',
   };
+};
+
+const maxEvidenceImageBytes = Math.max(1, Number(MAX_EVIDENCE_IMAGE_MB) || 5) * 1024 * 1024;
+const VALID_FINDING_STATUSES = new Set(['Open', 'Closed']);
+const VALID_SHIFTS = new Set(['A', 'B', 'C']);
+
+const getCurrentAppDateISO = () => {
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: APP_TIMEZONE,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date());
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return `${values.year}-${values.month}-${values.day}`;
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+};
+
+const detectEvidenceImageMime = (buffer) => {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 12) return null;
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return 'image/jpeg';
+  if (buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
+  if (buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
+  return null;
+};
+
+const validateEvidencePictureValue = (value) => {
+  if (value === null || value === undefined || value === '') return null;
+  const text = String(value);
+
+  if (text.startsWith('/uploads/')) {
+    return /^\/uploads\/[A-Za-z0-9._-]{1,240}$/.test(text) ? null : 'Evidence file reference is not valid.';
+  }
+  if (/^https:\/\//i.test(text)) {
+    return text.length <= 2048 ? null : 'Evidence image URL is too long.';
+  }
+  if (/^data:/i.test(text)) {
+    const match = text.match(/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/i);
+    if (!match) return 'Evidence photo must be a JPG, PNG or WEBP image.';
+    const encoded = match[2];
+    const base64 = encoded.replace(/=+$/, '');
+    const estimatedBytes = Math.floor((base64.length * 3) / 4);
+    if (estimatedBytes > maxEvidenceImageBytes) {
+      return `Evidence photo must be ${Math.max(1, Number(MAX_EVIDENCE_IMAGE_MB) || 5)} MB or smaller.`;
+    }
+    try {
+      const header = Buffer.from(encoded.slice(0, 64), 'base64');
+      const detectedMime = detectEvidenceImageMime(header);
+      if (!detectedMime || detectedMime.toLowerCase() !== match[1].toLowerCase()) {
+        return 'Evidence photo content does not match a supported JPG, PNG or WEBP image.';
+      }
+    } catch {
+      return 'Evidence photo data is not valid.';
+    }
+    return null;
+  }
+  return 'Evidence photo reference is not valid.';
+};
+
+const validateFindingPayload = (body = {}) => {
+  const errors = {};
+  const text = (key, max, required = false) => {
+    const value = String(body?.[key] ?? '').trim();
+    if (required && !value) errors[key] = 'This field is required.';
+    else if (value.length > max) errors[key] = `Must be ${max} characters or fewer.`;
+    return value;
+  };
+
+  const auditDate = text('auditDate', 10, true);
+  if (auditDate) {
+    const parsedAuditDate = new Date(`${auditDate}T00:00:00Z`);
+    const isValidCalendarDate = /^\d{4}-\d{2}-\d{2}$/.test(auditDate)
+      && !Number.isNaN(parsedAuditDate.getTime())
+      && parsedAuditDate.toISOString().slice(0, 10) === auditDate;
+    if (!isValidCalendarDate) errors.auditDate = 'Enter a valid audit date.';
+    else if (auditDate > getCurrentAppDateISO()) errors.auditDate = 'Audit date cannot be in the future.';
+  }
+
+  const wwText = String(body?.ww ?? '').trim();
+  const ww = Number(wwText);
+  if (!Number.isInteger(ww) || ww < 1 || ww > 53) errors.ww = 'Work week must be between 1 and 53.';
+
+  const shift = text('shift', 10, true);
+  if (shift && !VALID_SHIFTS.has(shift)) errors.shift = 'Shift must be A, B or C.';
+
+  const statusRaw = text('status', 20, true);
+  const status = statusRaw.toLowerCase() === 'closed' ? 'Closed' : statusRaw.toLowerCase() === 'open' ? 'Open' : statusRaw;
+  if (status && !VALID_FINDING_STATUSES.has(status)) errors.status = 'Finding status must be Open or Closed.';
+
+  const noRaw = body?.no;
+  const no = noRaw === undefined || noRaw === null || String(noRaw).trim() === '' ? null : Number(noRaw);
+  if (no !== null && (!Number.isInteger(no) || no < 0)) errors.no = 'Finding number must be a non-negative integer.';
+
+  const value = {
+    no,
+    auditDate,
+    ww: wwText,
+    shift,
+    auditors: text('auditors', 150, true),
+    personOnJob: text('personOnJob', 150, true),
+    department: text('department', 100, true),
+    platform: text('platform', 150, true),
+    areaStation: text('areaStation', 180, true),
+    groupFinding: text('groupFinding', 100, false),
+    category: text('category', 150, true),
+    detailsFindings: text('detailsFindings', 1000, true),
+    remark: text('remark', 3000, false),
+    status,
+    icarNum: text('icarNum', 120, false),
+    icarStatus: text('icarStatus', 20, false),
+    mqeEngineer: text('mqeEngineer', 150, false),
+    picture: body?.picture ?? null,
+  };
+
+  const pictureError = validateEvidencePictureValue(value.picture);
+  if (pictureError) errors.picture = pictureError;
+
+  return {
+    ok: Object.keys(errors).length === 0,
+    errors,
+    value,
+  };
+};
+
+const parsePositiveRecordId = (value) => {
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : null;
 };
 
 
@@ -1629,7 +1818,13 @@ app.put('/api/settings', authenticateUser, requireAdmin, async (req, res) => {
   }
 });
 
-// Configure Image Uploads
+// Configure evidence image uploads with explicit type/size restrictions.
+const evidenceMimeExtensions = new Map([
+  ['image/jpeg', '.jpg'],
+  ['image/png', '.png'],
+  ['image/webp', '.webp'],
+]);
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const dir = 'public/uploads';
@@ -1637,37 +1832,66 @@ const storage = multer.diskStorage({
     cb(null, dir);
   },
   filename: (req, file, cb) => {
-    cb(null, Date.now() + path.extname(file.originalname));
+    const extension = evidenceMimeExtensions.get(String(file.mimetype || '').toLowerCase()) || '.img';
+    cb(null, `${crypto.randomUUID()}${extension}`);
   }
 });
-const upload = multer({ storage: storage });
 
-// ==========================================
-// TEMPORARY API: Wipe Database Clean
-// This is a dangerous, irreversible operation. It is locked behind admin
-// auth below, but the safest move is to delete this route entirely once
-// you're done testing - it has no place in a production build.
-// ==========================================
-app.delete('/api/reset-database', authenticateUser, requireAdmin, async (req, res) => {
-  if (String(ALLOW_DATABASE_RESET).toLowerCase() !== 'true') {
-    return res.status(404).json({ error: 'Database reset is disabled' });
-  }
-  try {
-    await auditTrailReady;
-    await queryDb('TRUNCATE TABLE audit_records');
-    await queryDb('TRUNCATE TABLE record_versions');
-    await logAuditEvent(req, {
-      action: 'DATABASE_RESET',
-      entityType: 'system',
-      entityId: 'audit_records',
-      description: 'Reset the IPQC findings database',
-    });
-    res.status(200).json({ message: 'Database wiped clean! Auto-increment reset to 1.' });
-  } catch (err) {
-    console.error('Failed to clear database:', err);
-    res.status(500).json({ error: 'Failed to reset database' });
-  }
+const upload = multer({
+  storage,
+  limits: {
+    fileSize: maxEvidenceImageBytes,
+    files: 1,
+  },
+  fileFilter: (req, file, cb) => {
+    if (!evidenceMimeExtensions.has(String(file.mimetype || '').toLowerCase())) {
+      return cb(new Error('Evidence photo must be a JPG, PNG or WEBP image.'));
+    }
+    cb(null, true);
+  },
 });
+
+const removeUploadedFileQuietly = (file) => {
+  if (!file?.path) return;
+  fs.unlink(file.path, () => {});
+};
+
+const uploadEvidencePicture = (req, res, next) => {
+  upload.single('picture')(req, res, (err) => {
+    if (err) {
+      if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ error: `Evidence photo must be ${Math.max(1, Number(MAX_EVIDENCE_IMAGE_MB) || 5)} MB or smaller.` });
+      }
+      return res.status(400).json({ error: err.message || 'Invalid evidence photo.' });
+    }
+
+    if (!req.file?.path) return next();
+    fs.open(req.file.path, 'r', (openErr, fd) => {
+      if (openErr) {
+        removeUploadedFileQuietly(req.file);
+        return res.status(400).json({ error: 'The evidence image could not be verified.' });
+      }
+      const header = Buffer.alloc(16);
+      fs.read(fd, header, 0, header.length, 0, (readErr, bytesRead) => {
+        fs.close(fd, () => {});
+        if (readErr) {
+          removeUploadedFileQuietly(req.file);
+          return res.status(400).json({ error: 'The evidence image could not be verified.' });
+        }
+        const detectedMime = detectEvidenceImageMime(header.subarray(0, bytesRead));
+        if (!detectedMime || detectedMime !== String(req.file.mimetype || '').toLowerCase()) {
+          removeUploadedFileQuietly(req.file);
+          return res.status(400).json({ error: 'Evidence photo content does not match a supported JPG, PNG or WEBP image.' });
+        }
+        return next();
+      });
+    });
+  });
+};
+
+// Production hardening: the old /api/reset-database endpoint has been removed.
+// Database resets must be performed through an intentional administrative
+// maintenance process outside the running application.
 
 // API: Get All Records (READ) with creator/editor traceability.
 app.get('/api/records', authenticateUser, async (req, res) => {
@@ -2018,15 +2242,23 @@ Use at most four highlights.
 });
 
 // API: Add a New Record (CREATE)
-app.post('/api/records', authenticateUser, upload.single('picture'), async (req, res) => {
+app.post('/api/records', authenticateUser, uploadEvidencePicture, async (req, res) => {
+  const validation = validateFindingPayload(req.body);
+  if (!validation.ok) {
+    removeUploadedFileQuietly(req.file);
+    return res.status(400).json({
+      error: 'Please correct the invalid finding fields.',
+      fields: validation.errors,
+    });
+  }
+
   const {
     no, auditDate, ww, shift, auditors, personOnJob, department,
     platform, areaStation, groupFinding, category, detailsFindings,
-    remark, status, icarNum, icarStatus, mqeEngineer
-  } = req.body;
+    remark, status, icarNum, mqeEngineer
+  } = validation.value;
 
-  const picture = req.file ? `/uploads/${req.file.filename}` : (req.body.picture || null);
-  const rowNo = no !== undefined && no !== null && no !== '' ? no : null;
+  const picture = req.file ? `/uploads/${req.file.filename}` : (validation.value.picture || null);
   const normalizedIcar = normalizeIcarInput(icarNum);
 
   try {
@@ -2039,17 +2271,12 @@ app.post('/api/records', authenticateUser, upload.single('picture'), async (req,
         created_by, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
       [
-        rowNo, auditDate, ww, shift, auditors, personOnJob, department,
+        no, auditDate, ww, shift, auditors, personOnJob, department,
         platform, areaStation, groupFinding, category, detailsFindings,
         picture, remark, status || 'Open', normalizedIcar.icarStatus, normalizedIcar.icarNum, mqeEngineer,
         req.user.id,
       ]
     );
-
-    if (rowNo === null) {
-      // Preserve the app's existing display behavior where a missing "No." uses
-      // the inserted id, while keeping the database value nullable.
-    }
 
     const created = await selectRecordById(result.insertId);
     const source = String(req.headers['x-audit-source'] || '').trim().toLowerCase();
@@ -2073,30 +2300,48 @@ app.post('/api/records', authenticateUser, upload.single('picture'), async (req,
       no: created?.no ?? result.insertId,
     });
   } catch (err) {
+    // Avoid leaving an orphan upload if the database insert fails.
+    removeUploadedFileQuietly(req.file);
     console.error('Database insertion error:', err);
     res.status(500).json({ error: 'Database insertion failed' });
   }
 });
 
 // API: Update an Existing Record (UPDATE)
-app.put('/api/records/:id', authenticateUser, upload.single('picture'), async (req, res) => {
-  const { id } = req.params;
+app.put('/api/records/:id', authenticateUser, uploadEvidencePicture, async (req, res) => {
+  const id = parsePositiveRecordId(req.params.id);
+  if (!id) {
+    removeUploadedFileQuietly(req.file);
+    return res.status(400).json({ error: 'Invalid record id' });
+  }
+
+  const validation = validateFindingPayload(req.body);
+  if (!validation.ok) {
+    removeUploadedFileQuietly(req.file);
+    return res.status(400).json({
+      error: 'Please correct the invalid finding fields.',
+      fields: validation.errors,
+    });
+  }
+
   const {
     no, auditDate, ww, shift, auditors, personOnJob, department,
     platform, areaStation, groupFinding, category, detailsFindings,
-    remark, status, icarNum, icarStatus, mqeEngineer
-  } = req.body;
+    remark, status, icarNum, mqeEngineer
+  } = validation.value;
 
-  const picture = req.file ? `/uploads/${req.file.filename}` : req.body.picture;
+  const picture = req.file ? `/uploads/${req.file.filename}` : validation.value.picture;
   const normalizedIcar = normalizeIcarInput(icarNum);
 
   try {
     await auditTrailReady;
     const before = await selectRecordById(id);
     if (!before) {
+      removeUploadedFileQuietly(req.file);
       return res.status(404).json({ error: 'Record not found' });
     }
     if (before.deletedAt) {
+      removeUploadedFileQuietly(req.file);
       return res.status(409).json({ error: 'This record is in the recycle bin. Restore it before editing.' });
     }
     await ensureBaselineVersion(before);
@@ -2141,6 +2386,8 @@ app.put('/api/records/:id', authenticateUser, upload.single('picture'), async (r
 
     res.status(200).json(updated);
   } catch (err) {
+    // A newly uploaded replacement should not remain on disk if the update fails.
+    removeUploadedFileQuietly(req.file);
     console.error('Database update error:', err);
     res.status(500).json({ error: 'Database update failed' });
   }
@@ -2148,7 +2395,8 @@ app.put('/api/records/:id', authenticateUser, upload.single('picture'), async (r
 
 // API: Delete a Record (SOFT DELETE / RECYCLE BIN)
 app.delete('/api/records/:id', authenticateUser, async (req, res) => {
-  const { id } = req.params;
+  const id = parsePositiveRecordId(req.params.id);
+  if (!id) return res.status(400).json({ error: 'Invalid record id' });
   try {
     await auditTrailReady;
     const before = await selectRecordById(id);
