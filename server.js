@@ -506,6 +506,45 @@ const isSixDigitPin = (value) => /^\d{6}$/.test(String(value || ''));
 const isValidEmployeeId = (value) => /^[A-Za-z0-9._-]{2,50}$/.test(String(value || '').trim());
 const isValidUsername = (value) => /^[A-Za-z0-9._-]{3,100}$/.test(String(value || '').trim());
 
+// Temporary credentials are generated on the server so admins never need to
+// invent predictable defaults such as 000000. The plaintext value is returned
+// only in the create/reset response, then only its bcrypt hash remains stored.
+const WEAK_TEMP_PINS = new Set(['000000', '111111', '123456', '654321', '121212', '222222', '333333', '444444', '555555', '666666', '777777', '888888', '999999']);
+const generateTemporaryPin = () => {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const pin = crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
+    if (!WEAK_TEMP_PINS.has(pin)) return pin;
+  }
+  // crypto.randomInt is already unpredictable; this fallback is only defensive.
+  return crypto.randomInt(100000, 1_000_000).toString();
+};
+
+const randomChar = (alphabet) => alphabet[crypto.randomInt(0, alphabet.length)];
+const secureShuffle = (characters) => {
+  const items = [...characters];
+  for (let index = items.length - 1; index > 0; index--) {
+    const swapIndex = crypto.randomInt(0, index + 1);
+    [items[index], items[swapIndex]] = [items[swapIndex], items[index]];
+  }
+  return items.join('');
+};
+
+const generateTemporaryAdminPassword = (length = 16) => {
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const lower = 'abcdefghijkmnopqrstuvwxyz';
+  const digits = '23456789';
+  const symbols = '!@#$%*-_';
+  const all = `${upper}${lower}${digits}${symbols}`;
+  const characters = [
+    randomChar(upper),
+    randomChar(lower),
+    randomChar(digits),
+    randomChar(symbols),
+  ];
+  while (characters.length < Math.max(12, length)) characters.push(randomChar(all));
+  return secureShuffle(characters);
+};
+
 const normalizeIcarInput = (value) => {
   const trimmed = String(value ?? '').trim();
   const hasIcarNumber = trimmed !== '' && trimmed.toUpperCase() !== 'N/A';
@@ -1305,16 +1344,14 @@ app.post('/api/users', authenticateUser, requireAdmin, async (req, res) => {
 
   try {
     let result;
+    let temporaryCredential;
     if (role === 'admin') {
       const username = String(req.body?.username || '').trim();
-      const password = String(req.body?.credential || req.body?.password || '');
       if (!isValidUsername(username)) {
         return res.status(400).json({ error: 'Administrator username must be 3-100 characters using letters, numbers, dot, underscore or hyphen' });
       }
-      if (password.length < 12) {
-        return res.status(400).json({ error: 'Temporary administrator password must be at least 12 characters' });
-      }
-      const passwordHash = await bcrypt.hash(password, 12);
+      temporaryCredential = generateTemporaryAdminPassword();
+      const passwordHash = await bcrypt.hash(temporaryCredential, 12);
       result = await queryDb(
         `INSERT INTO users
           (username, employee_id, password_hash, pin_hash, full_name, role, job_title,
@@ -1324,14 +1361,11 @@ app.post('/api/users', authenticateUser, requireAdmin, async (req, res) => {
       );
     } else {
       const employeeId = String(req.body?.employeeId || '').trim();
-      const pin = String(req.body?.credential || req.body?.pin || '');
       if (!isValidEmployeeId(employeeId)) {
         return res.status(400).json({ error: 'Employee ID must be 2-50 characters using letters, numbers, dot, underscore or hyphen' });
       }
-      if (!isSixDigitPin(pin)) {
-        return res.status(400).json({ error: 'Temporary PIN must be exactly 6 digits' });
-      }
-      const pinHash = await bcrypt.hash(pin, 12);
+      temporaryCredential = generateTemporaryPin();
+      const pinHash = await bcrypt.hash(temporaryCredential, 12);
       result = await queryDb(
         `INSERT INTO users
           (username, employee_id, password_hash, pin_hash, full_name, role, job_title,
@@ -1362,10 +1396,19 @@ app.post('/api/users', authenticateUser, requireAdmin, async (req, res) => {
         role: createdUser.role,
         jobTitle: createdUser.jobTitle,
         department: createdUser.department,
-        temporaryCredential: true,
+        temporaryCredentialIssued: true,
+        requiresChangeOnNextLogin: true,
       },
     });
-    res.status(201).json(createdUser);
+
+    // IMPORTANT: temporaryCredential is intentionally returned only in this
+    // single response. It is never written to audit_log or stored in plaintext.
+    res.status(201).json({
+      ...createdUser,
+      temporaryCredential,
+      credentialType: role === 'admin' ? 'password' : 'pin',
+      shownOnce: true,
+    });
   } catch (err) {
     if (err?.code === 'ER_DUP_ENTRY') {
       return res.status(409).json({ error: 'That employee ID or administrator username is already in use' });
@@ -1478,7 +1521,6 @@ app.put('/api/users/:id', authenticateUser, requireAdmin, async (req, res) => {
 
 app.post('/api/users/:id/reset-credential', authenticateUser, requireAdmin, async (req, res) => {
   const targetId = Number(req.params.id);
-  const credential = String(req.body?.credential || '');
   if (!Number.isInteger(targetId) || targetId <= 0) return res.status(400).json({ error: 'Invalid user id' });
   if (targetId === Number(req.user.id)) {
     return res.status(400).json({ error: 'Use your own credential-change flow instead of resetting your current session here' });
@@ -1492,11 +1534,12 @@ app.post('/api/users/:id/reset-credential', authenticateUser, requireAdmin, asyn
     const target = rows[0];
     if (!target) return res.status(404).json({ error: 'User not found' });
 
+    const temporaryCredential = target.role === 'admin'
+      ? generateTemporaryAdminPassword()
+      : generateTemporaryPin();
+
     if (target.role === 'admin') {
-      if (credential.length < 12) {
-        return res.status(400).json({ error: 'Temporary administrator password must be at least 12 characters' });
-      }
-      const passwordHash = await bcrypt.hash(credential, 12);
+      const passwordHash = await bcrypt.hash(temporaryCredential, 12);
       await queryDb(
         `UPDATE users
          SET password_hash = ?, pin_hash = NULL, must_change_credential = TRUE,
@@ -1505,10 +1548,7 @@ app.post('/api/users/:id/reset-credential', authenticateUser, requireAdmin, asyn
         [passwordHash, targetId]
       );
     } else {
-      if (!isSixDigitPin(credential)) {
-        return res.status(400).json({ error: 'Temporary PIN must be exactly 6 digits' });
-      }
-      const pinHash = await bcrypt.hash(credential, 12);
+      const pinHash = await bcrypt.hash(temporaryCredential, 12);
       await queryDb(
         `UPDATE users
          SET pin_hash = ?, password_hash = NULL, must_change_credential = TRUE,
@@ -1522,13 +1562,27 @@ app.post('/api/users/:id/reset-credential', authenticateUser, requireAdmin, asyn
       action: 'USER_CREDENTIAL_RESET',
       entityType: 'user',
       entityId: targetId,
-      description: `Reset temporary ${target.role === 'admin' ? 'password' : 'PIN'} for ${target.full_name || target.username}`,
-      metadata: { targetRole: target.role, requiresChangeOnNextLogin: true },
+      description: `Issued a replacement temporary ${target.role === 'admin' ? 'password' : 'PIN'} for ${target.full_name || target.username}`,
+      metadata: {
+        targetRole: target.role,
+        requiresChangeOnNextLogin: true,
+        temporaryCredentialIssued: true,
+        sessionsRevoked: true,
+      },
     });
+
+    // Returned once to the authenticated administrator who performed the reset.
     res.status(200).json({
       message: target.role === 'admin'
-        ? 'Temporary administrator password updated. The administrator must change it at next sign in.'
-        : 'Temporary PIN updated. The employee must change it at next sign in.',
+        ? 'A new temporary administrator password was generated.'
+        : 'A new temporary employee PIN was generated.',
+      role: target.role,
+      fullName: target.full_name || target.username,
+      username: target.role === 'admin' ? target.username : undefined,
+      employeeId: target.role === 'user' ? target.employee_id : undefined,
+      temporaryCredential,
+      credentialType: target.role === 'admin' ? 'password' : 'pin',
+      shownOnce: true,
     });
   } catch (err) {
     console.error('Reset credential error:', err);
@@ -2049,7 +2103,11 @@ const ensureFindingClassificationSchema = async () => {
 
   const categoryCountRows = await queryDb('SELECT COUNT(*) AS count FROM finding_categories');
   const categoryCount = Number(categoryCountRows[0]?.count || 0);
-  if (categoryCount > 0) return;
+  // A previous startup may have been interrupted after inserting only part of the
+  // default master data. Repair that specific first-run condition automatically.
+  // Once all default category rows exist, later admin deactivations remain untouched
+  // because soft-deactivated rows are still counted here.
+  if (categoryCount >= DEFAULT_FINDING_CLASSIFICATION_SEED.length) return;
 
   // If an earlier JSON-based classification build was tested, migrate that data once.
   let seed = DEFAULT_FINDING_CLASSIFICATION_SEED;

@@ -208,6 +208,15 @@ type ManagedUser = CurrentUser & {
   updatedAt?: string | null;
 };
 
+type IssuedCredential = {
+  action: 'created' | 'reset';
+  role: UserRole;
+  fullName: string;
+  username?: string;
+  employeeId?: string;
+  temporaryCredential: string;
+};
+
 type PublicEmployee = {
   id: number;
   employeeId: string;
@@ -733,10 +742,9 @@ export default function App() {
   const [userManagementError, setUserManagementError] = useState('');
   const [showCreateUser, setShowCreateUser] = useState(false);
   const [newUserDraft, setNewUserDraft] = useState({
-    fullName: '', employeeId: '', username: '', credential: '', role: 'user' as UserRole, jobTitle: '', department: ''
+    fullName: '', employeeId: '', username: '', role: 'user' as UserRole, jobTitle: '', department: ''
   });
-  const [resetCredentialUserId, setResetCredentialUserId] = useState<number | null>(null);
-  const [resetCredentialValue, setResetCredentialValue] = useState('');
+  const [issuedCredential, setIssuedCredential] = useState<IssuedCredential | null>(null);
 
   // Admin audit trail: recent business/system mutations with authenticated actor.
   const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([]);
@@ -1870,14 +1878,34 @@ export default function App() {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || 'Failed to create user.');
-      setManagedUsers(prev => [...prev, data].sort((a, b) => a.fullName.localeCompare(b.fullName)));
-      setNewUserDraft({ fullName: '', employeeId: '', username: '', credential: '', role: 'user', jobTitle: '', department: '' });
+      if (!data.temporaryCredential) {
+        fetchManagedUsers();
+        fetchAuditLog();
+        setShowCreateUser(false);
+        throw new Error('Account was created, but the temporary credential was not returned. Use Reset PIN/Password once before handing over the account.');
+      }
+
+      // Never keep the plaintext temporary credential inside the normal user list.
+      const publicUser = { ...data };
+      delete publicUser.temporaryCredential;
+      delete publicUser.credentialType;
+      delete publicUser.shownOnce;
+      setManagedUsers(prev => [...prev, publicUser].sort((a, b) => a.fullName.localeCompare(b.fullName)));
+      setIssuedCredential({
+        action: 'created',
+        role: data.role === 'admin' ? 'admin' : 'user',
+        fullName: String(data.fullName || newUserDraft.fullName || 'New account'),
+        username: data.role === 'admin' ? String(data.username || newUserDraft.username || '') : undefined,
+        employeeId: data.role === 'user' ? String(data.employeeId || newUserDraft.employeeId || '') : undefined,
+        temporaryCredential: String(data.temporaryCredential),
+      });
+      setNewUserDraft({ fullName: '', employeeId: '', username: '', role: 'user', jobTitle: '', department: '' });
       setShowCreateUser(false);
       fetchAuditLog();
       showToast(
         'success',
         data.role === 'admin' ? 'Administrator created' : 'Employee account created',
-        `${data.fullName || 'The account'} was created successfully.`
+        'A unique temporary credential was generated. Save it from the one-time handover window.'
       );
     } catch (err) {
       setUserManagementError(err instanceof Error ? err.message : 'Failed to create user.');
@@ -1944,44 +1972,50 @@ export default function App() {
     );
   };
 
-  const handleResetUserCredential = async (e: FormEvent) => {
-    e.preventDefault();
-    const target = managedUsers.find(user => user.id === resetCredentialUserId);
-    if (!target || usersSaving) return;
-    const valid = target.role === 'user' ? /^\d{6}$/.test(resetCredentialValue) : resetCredentialValue.length >= 12;
-    if (!valid) {
-      setUserManagementError(
-        target.role === 'user'
-          ? 'Temporary PIN must be exactly 6 digits.'
-          : 'Temporary administrator password must be at least 12 characters.'
-      );
-      return;
-    }
+  const handleResetUserCredential = (target: ManagedUser) => {
+    if (usersSaving || currentUser?.id === target.id) return;
+    const credentialLabel = target.role === 'user' ? 'PIN' : 'password';
+    requestConfirmation(
+      {
+        title: `Issue new temporary ${credentialLabel}?`,
+        message: `The system will generate a new one-time temporary ${credentialLabel} for ${target.fullName}. Their existing sessions will be invalidated and they must replace it at the next sign-in.`,
+        confirmLabel: `Generate ${credentialLabel}`,
+        cancelLabel: 'Cancel',
+        tone: 'warning',
+      },
+      async () => {
+        setUsersSaving(true);
+        setUserManagementError('');
+        try {
+          const response = await authFetch(`${API_BASE_URL}/api/users/${target.id}/reset-credential`, {
+            method: 'POST',
+          });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(data.error || 'Failed to reset credential.');
+          if (!data.temporaryCredential) throw new Error('The credential was reset, but the temporary value was not returned. Generate another replacement before handover.');
 
-    setUsersSaving(true);
-    setUserManagementError('');
-    try {
-      const response = await authFetch(`${API_BASE_URL}/api/users/${target.id}/reset-credential`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ credential: resetCredentialValue }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || 'Failed to reset credential.');
-      setResetCredentialUserId(null);
-      setResetCredentialValue('');
-      fetchManagedUsers();
-      fetchAuditLog();
-      showToast(
-        'success',
-        target.role === 'user' ? 'PIN reset' : 'Password reset',
-        `${target.fullName}'s temporary ${target.role === 'user' ? 'PIN' : 'password'} was reset successfully.`
-      );
-    } catch (err) {
-      setUserManagementError(err instanceof Error ? err.message : 'Failed to reset credential.');
-    } finally {
-      setUsersSaving(false);
-    }
+          setIssuedCredential({
+            action: 'reset',
+            role: target.role,
+            fullName: target.fullName,
+            username: target.role === 'admin' ? String(data.username || target.username || '') : undefined,
+            employeeId: target.role === 'user' ? String(data.employeeId || target.employeeId || '') : undefined,
+            temporaryCredential: String(data.temporaryCredential),
+          });
+          fetchManagedUsers();
+          fetchAuditLog();
+          showToast(
+            'success',
+            target.role === 'user' ? 'Temporary PIN generated' : 'Temporary password generated',
+            `Save ${target.fullName}'s new temporary credential from the one-time handover window.`
+          );
+        } catch (err) {
+          setUserManagementError(err instanceof Error ? err.message : 'Failed to reset credential.');
+        } finally {
+          setUsersSaving(false);
+        }
+      },
+    );
   };
 
   const handleResetAdminMfa = (user: ManagedUser) => {
@@ -2011,11 +2045,6 @@ export default function App() {
         }
       },
     );
-  };
-
-  const generateTemporaryPin = () => {
-    const pin = String(Math.floor(100000 + Math.random() * 900000));
-    setNewUserDraft(prev => ({ ...prev, credential: pin }));
   };
 
   // Backfills mqeEngineer on existing records using the current Platform-MQE
@@ -5458,12 +5487,18 @@ export default function App() {
 
                     {showCreateUser && (
                       <form onSubmit={handleCreateUser} className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
-                        <div className="mb-3 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-[10px] font-semibold leading-4 text-blue-700">
-                          Create a temporary PIN for standard users or a temporary password for administrators. New administrators enrol an authenticator app at first sign-in.
+                        <div className="mb-3 flex items-start gap-2.5 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2.5 text-blue-700">
+                          <ShieldCheck size={14} className="mt-0.5 shrink-0" />
+                          <div>
+                            <p className="text-[10px] font-black">Secure temporary credential</p>
+                            <p className="mt-0.5 text-[10px] font-medium leading-4">
+                              The server generates a unique temporary {newUserDraft.role === 'user' ? '6-digit PIN' : 'administrator password'} after the account is created. It is shown once for handover and must be changed during first sign-in{newUserDraft.role === 'admin' ? '; administrators also complete authenticator MFA enrollment' : ''}.
+                            </p>
+                          </div>
                         </div>
                         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                           <FormInput label="Full name" required value={newUserDraft.fullName} onChange={(v: string) => setNewUserDraft(prev => ({ ...prev, fullName: v }))} placeholder="Employee full name" />
-                          <FormSelect label="System role" required value={newUserDraft.role} onChange={(v: UserRole) => setNewUserDraft(prev => ({ ...prev, role: v, employeeId: '', username: '', credential: '' }))} options={['user', 'admin']} />
+                          <FormSelect label="System role" required value={newUserDraft.role} onChange={(v: UserRole) => setNewUserDraft(prev => ({ ...prev, role: v, employeeId: '', username: '' }))} options={['user', 'admin']} />
                           {newUserDraft.role === 'user' ? (
                             <FormInput label="Employee ID" required value={newUserDraft.employeeId} onChange={(v: string) => setNewUserDraft(prev => ({ ...prev, employeeId: v }))} placeholder="e.g. 104582" />
                           ) : (
@@ -5472,27 +5507,10 @@ export default function App() {
                           <FormInput label="Job title / function" value={newUserDraft.jobTitle} onChange={(v: string) => setNewUserDraft(prev => ({ ...prev, jobTitle: v }))} placeholder="Operator, IPQC Auditor, MQE..." />
                           <FormInput label="Department" value={newUserDraft.department} onChange={(v: string) => setNewUserDraft(prev => ({ ...prev, department: v }))} placeholder="Production, Quality, Test..." />
                           <div className="flex flex-col gap-1.5">
-                            <label className="text-[11px] font-semibold text-slate-700">
-                              {newUserDraft.role === 'user' ? 'Temporary 6-digit PIN' : 'Temporary admin password'}<span className="ml-0.5 text-rose-500">*</span>
-                            </label>
-                            <div className="flex gap-2">
-                              <input
-                                type={newUserDraft.role === 'user' ? 'text' : 'password'}
-                                inputMode={newUserDraft.role === 'user' ? 'numeric' : undefined}
-                                maxLength={newUserDraft.role === 'user' ? 6 : undefined}
-                                value={newUserDraft.credential}
-                                onChange={(e) => setNewUserDraft(prev => ({
-                                  ...prev,
-                                  credential: newUserDraft.role === 'user' ? e.target.value.replace(/\D/g, '').slice(0, 6) : e.target.value,
-                                }))}
-                                placeholder={newUserDraft.role === 'user' ? '6 digits' : 'Minimum 12 characters'}
-                                className="h-11 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3.5 text-sm font-medium text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-brand-orange focus:ring-4 focus:ring-brand-orange/10"
-                              />
-                              {newUserDraft.role === 'user' && (
-                                <button type="button" onClick={generateTemporaryPin} className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-[9px] font-black uppercase tracking-wider text-slate-600 hover:bg-slate-50">
-                                  Generate
-                                </button>
-                              )}
+                            <label className="text-[11px] font-semibold text-slate-700">Temporary credential</label>
+                            <div className="flex h-11 items-center gap-2 rounded-lg border border-dashed border-slate-300 bg-white px-3.5 text-[10px] font-semibold text-slate-500">
+                              <Lock size={14} className="shrink-0 text-slate-400" />
+                              Generated securely after creation
                             </div>
                           </div>
                         </div>
@@ -5501,13 +5519,13 @@ export default function App() {
                             type="submit"
                             disabled={usersSaving || !newUserDraft.fullName.trim() || (
                               newUserDraft.role === 'user'
-                                ? !newUserDraft.employeeId.trim() || !/^\d{6}$/.test(newUserDraft.credential)
-                                : !newUserDraft.username.trim() || newUserDraft.credential.length < 12
+                                ? !newUserDraft.employeeId.trim()
+                                : !newUserDraft.username.trim()
                             )}
                             className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 text-[10px] font-black uppercase tracking-wider text-white transition-all hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             <ShieldCheck size={14} className={usersSaving ? 'animate-pulse' : ''} />
-                            {usersSaving ? 'Creating...' : 'Create account'}
+                            {usersSaving ? 'Creating...' : 'Create & generate credential'}
                           </button>
                         </div>
                       </form>
@@ -5606,8 +5624,8 @@ export default function App() {
                                 <button
                                   type="button"
                                   disabled={usersSaving || currentUser?.id === user.id}
-                                  onClick={() => { setResetCredentialUserId(user.id); setResetCredentialValue(''); setUserManagementError(''); }}
-                                  title={user.role === 'user' ? 'Issue a temporary replacement PIN' : 'Issue a temporary replacement password'}
+                                  onClick={() => handleResetUserCredential(user)}
+                                  title={user.role === 'user' ? 'Generate a temporary replacement PIN' : 'Generate a temporary replacement password'}
                                   aria-label={`${user.role === 'user' ? 'Reset PIN for' : 'Reset password for'} ${user.fullName}`}
                                   className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[9px] font-black uppercase tracking-wider text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
                                 >
@@ -5633,36 +5651,7 @@ export default function App() {
                     </table>
                   </div>
 
-                  {resetCredentialUserId && (() => {
-                    const target = managedUsers.find(user => user.id === resetCredentialUserId);
-                    if (!target) return null;
-                    const isPin = target.role === 'user';
-                    const valid = isPin ? /^\d{6}$/.test(resetCredentialValue) : resetCredentialValue.length >= 12;
-                    return (
-                      <form onSubmit={handleResetUserCredential} className="flex flex-col gap-3 border-t border-slate-100 bg-slate-50/70 px-5 py-4 md:flex-row md:items-end md:px-6">
-                        <div className="flex-1">
-                          <label className="mb-1.5 block text-[10px] font-bold text-slate-600">
-                            Temporary {isPin ? 'PIN' : 'password'} for {target.fullName}
-                          </label>
-                          <input
-                            type={isPin ? 'text' : 'password'}
-                            inputMode={isPin ? 'numeric' : undefined}
-                            maxLength={isPin ? 6 : undefined}
-                            value={resetCredentialValue}
-                            onChange={(e) => setResetCredentialValue(isPin ? e.target.value.replace(/\D/g, '').slice(0, 6) : e.target.value)}
-                            placeholder={isPin ? '6 digits' : 'Minimum 12 characters'}
-                            autoComplete="new-password"
-                            className="h-10 w-full max-w-md rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 outline-none focus:border-brand-orange focus:ring-4 focus:ring-orange-100/60"
-                          />
-                          <p className="mt-1 text-[9px] font-medium text-slate-400">The account holder must replace this temporary credential at the next sign-in.</p>
-                        </div>
-                        <div className="flex gap-2">
-                          <button type="button" onClick={() => { setResetCredentialUserId(null); setResetCredentialValue(''); }} className="h-10 rounded-lg border border-slate-200 bg-white px-3.5 text-[10px] font-black uppercase tracking-wider text-slate-500">Cancel</button>
-                          <button type="submit" disabled={usersSaving || !valid} className="h-10 rounded-lg bg-slate-900 px-4 text-[10px] font-black uppercase tracking-wider text-white disabled:opacity-40">{usersSaving ? 'Updating...' : 'Update credential'}</button>
-                        </div>
-                      </form>
-                    );
-                  })()}
+
                 </section>
 
                 {/* Operational audit trail */}
@@ -6969,6 +6958,149 @@ export default function App() {
                     </button>
                   </div>
                 </form>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {issuedCredential && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[205] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-[3px]"
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 12, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 12, scale: 0.98 }}
+              transition={{ duration: 0.16 }}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="issued-credential-title"
+              className="w-full max-w-[520px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_28px_80px_rgba(15,23,42,0.3)]"
+            >
+              <div className="flex items-start gap-3.5 border-b border-slate-100 px-6 py-5 md:px-7">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600 ring-1 ring-inset ring-emerald-100">
+                  <ShieldCheck size={20} />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[9px] font-black uppercase tracking-[0.16em] text-emerald-600">One-time credential handover</p>
+                  <h3 id="issued-credential-title" className="mt-1 text-lg font-black tracking-tight text-slate-900">
+                    {issuedCredential.action === 'created' ? 'Account created successfully' : 'Replacement credential generated'}
+                  </h3>
+                  <p className="mt-1 text-[11px] font-medium leading-5 text-slate-500">
+                    Give these details directly to {issuedCredential.fullName}. The temporary {issuedCredential.role === 'user' ? 'PIN' : 'password'} is not retrievable after this window is closed.
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-4 px-6 py-5 md:px-7">
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Account holder</p>
+                      <p className="mt-1 truncate text-sm font-black text-slate-900">{issuedCredential.fullName}</p>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-wider ${issuedCredential.role === 'admin' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}`}>
+                      {issuedCredential.role === 'admin' ? 'Administrator' : 'Employee'}
+                    </span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
+                    {issuedCredential.role === 'admin' ? 'Administrator username' : 'Employee ID'}
+                  </label>
+                  <div className="flex gap-2">
+                    <div className="flex h-11 min-w-0 flex-1 items-center rounded-lg border border-slate-200 bg-white px-3.5 font-mono text-sm font-bold text-slate-800">
+                      {issuedCredential.role === 'admin' ? issuedCredential.username : issuedCredential.employeeId}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const value = issuedCredential.role === 'admin' ? issuedCredential.username : issuedCredential.employeeId;
+                        if (!value) return;
+                        try {
+                          await navigator.clipboard.writeText(value);
+                          showToast('success', 'Identity copied', `${issuedCredential.role === 'admin' ? 'Username' : 'Employee ID'} copied to clipboard.`);
+                        } catch {
+                          showToast('error', 'Copy failed', 'Copy the identity manually from the field.');
+                        }
+                      }}
+                      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-800"
+                      title="Copy identity"
+                      aria-label="Copy account identity"
+                    >
+                      <Copy size={15} />
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">
+                    Temporary {issuedCredential.role === 'user' ? '6-digit PIN' : 'password'}
+                  </label>
+                  <div className="flex gap-2">
+                    <div className="flex min-h-12 min-w-0 flex-1 items-center break-all rounded-lg border border-amber-200 bg-amber-50 px-3.5 font-mono text-[15px] font-black tracking-[0.08em] text-amber-900">
+                      {issuedCredential.temporaryCredential}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(issuedCredential.temporaryCredential);
+                          showToast('success', 'Temporary credential copied', 'The one-time credential was copied to your clipboard.');
+                        } catch {
+                          showToast('error', 'Copy failed', 'Copy the temporary credential manually from the field.');
+                        }
+                      }}
+                      className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-amber-200 bg-white text-amber-700 transition-colors hover:bg-amber-50"
+                      title="Copy temporary credential"
+                      aria-label="Copy temporary credential"
+                    >
+                      <Copy size={16} />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-amber-800">
+                  <AlertCircle size={15} className="mt-0.5 shrink-0" />
+                  <div className="text-[10px] font-medium leading-4.5">
+                    <p className="font-black">Save this before closing.</p>
+                    <p className="mt-0.5">For security, the plaintext credential is shown only now. The database stores only its bcrypt hash.</p>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-white px-4 py-3.5">
+                  <p className="text-[10px] font-black text-slate-700">First sign-in</p>
+                  <ol className="mt-1.5 space-y-1 text-[10px] font-medium leading-4 text-slate-500">
+                    {issuedCredential.role === 'user' ? (
+                      <>
+                        <li>1. Select the employee name and enter this temporary PIN.</li>
+                        <li>2. Replace it with a personal 6-digit PIN.</li>
+                      </>
+                    ) : (
+                      <>
+                        <li>1. Sign in with the administrator username and temporary password.</li>
+                        <li>2. Complete authenticator MFA enrollment when prompted.</li>
+                        <li>3. Replace the temporary password with a new password when the secure-account prompt appears.</li>
+                      </>
+                    )}
+                  </ol>
+                </div>
+              </div>
+
+              <div className="flex justify-end border-t border-slate-100 bg-slate-50/70 px-6 py-4 md:px-7">
+                <button
+                  type="button"
+                  onClick={() => setIssuedCredential(null)}
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 text-[10px] font-black uppercase tracking-wider text-white transition-colors hover:bg-slate-800"
+                >
+                  <CheckCircle2 size={14} /> I have saved it
+                </button>
               </div>
             </motion.div>
           </motion.div>
