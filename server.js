@@ -140,6 +140,10 @@ const toPublicUser = (row) => ({
   employeeId: row.employee_id || '',
   fullName: String(row.full_name || row.username || row.employee_id || 'User'),
   role: row.role === 'admin' ? 'admin' : 'user',
+  // Super Admin remains an administrator credential type, but carries a separate
+  // protected ownership flag. This preserves the existing login/MFA model while
+  // allowing stricter account-governance permissions.
+  isSuperAdmin: row.role === 'admin' ? Boolean(row.is_super_admin) : false,
   jobTitle: row.job_title || '',
   department: row.department || '',
   isActive: Boolean(row.is_active),
@@ -180,6 +184,7 @@ const ensureUsersTable = async () => {
       pin_hash VARCHAR(255) NULL,
       full_name VARCHAR(150) NOT NULL,
       role ENUM('user', 'admin') NOT NULL DEFAULT 'user',
+      is_super_admin BOOLEAN NOT NULL DEFAULT FALSE,
       job_title VARCHAR(100) NULL,
       department VARCHAR(100) NULL,
       is_active BOOLEAN NOT NULL DEFAULT TRUE,
@@ -207,6 +212,7 @@ const ensureUsersTable = async () => {
   await ensureUsersColumn('pin_hash', 'pin_hash VARCHAR(255) NULL');
   await ensureUsersColumn('must_change_credential', 'must_change_credential BOOLEAN NOT NULL DEFAULT FALSE');
   await ensureUsersColumn('session_version', 'session_version INT NOT NULL DEFAULT 0');
+  await ensureUsersColumn('is_super_admin', 'is_super_admin BOOLEAN NOT NULL DEFAULT FALSE');
   await ensureUsersColumn('mfa_secret_enc', 'mfa_secret_enc TEXT NULL');
   await ensureUsersColumn('mfa_enabled', 'mfa_enabled BOOLEAN NOT NULL DEFAULT FALSE');
   await ensureUsersColumn('mfa_enrolled_at', 'mfa_enrolled_at DATETIME NULL');
@@ -246,6 +252,77 @@ const ensureUsersTable = async () => {
       );
       console.log('Bootstrap administrator migrated into the users table.');
     }
+  }
+
+  // ------------------------------------------------------------
+  // Single Super Admin ownership migration
+  // ------------------------------------------------------------
+  // The system deliberately supports EXACTLY ONE Super Admin. It is not a
+  // creatable role in the UI. Existing installations promote the current
+  // System Administrator / bootstrap ADMIN_USERNAME once, then keep that owner.
+  // Normal administrators remain role='admin' with is_super_admin=FALSE.
+  const existingSuperAdmins = await queryDb(
+    `SELECT id, username, full_name, is_active
+     FROM users
+     WHERE role = 'admin' AND is_super_admin = TRUE
+     ORDER BY id ASC`
+  );
+
+  let superAdminTarget = existingSuperAdmins.length === 1 ? existingSuperAdmins[0] : null;
+
+  if (!superAdminTarget) {
+    // If a previous/partial migration somehow marked multiple owners, prefer the
+    // configured bootstrap administrator, then the account named System Administrator.
+    if (ADMIN_USERNAME) {
+      const preferred = await queryDb(
+        `SELECT id, username, full_name, is_active
+         FROM users
+         WHERE role = 'admin' AND username = ?
+         LIMIT 1`,
+        [ADMIN_USERNAME]
+      );
+      if (preferred.length > 0) superAdminTarget = preferred[0];
+    }
+
+    if (!superAdminTarget) {
+      const preferred = await queryDb(
+        `SELECT id, username, full_name, is_active
+         FROM users
+         WHERE role = 'admin' AND LOWER(full_name) = 'system administrator'
+         ORDER BY id ASC
+         LIMIT 1`
+      );
+      if (preferred.length > 0) superAdminTarget = preferred[0];
+    }
+
+    if (!superAdminTarget && existingSuperAdmins.length > 0) {
+      superAdminTarget = existingSuperAdmins[0];
+    }
+
+    if (!superAdminTarget) {
+      const fallback = await queryDb(
+        `SELECT id, username, full_name, is_active
+         FROM users
+         WHERE role = 'admin'
+         ORDER BY is_active DESC, id ASC
+         LIMIT 1`
+      );
+      if (fallback.length > 0) superAdminTarget = fallback[0];
+    }
+  }
+
+  if (superAdminTarget?.id) {
+    // Reset any accidental duplicate flags first, then establish one protected owner.
+    await queryDb(`UPDATE users SET is_super_admin = FALSE WHERE role = 'admin' AND id <> ?`, [superAdminTarget.id]);
+    await queryDb(
+      `UPDATE users
+       SET is_super_admin = TRUE, is_active = TRUE
+       WHERE id = ? AND role = 'admin'`,
+      [superAdminTarget.id]
+    );
+    console.log(`Super Admin ready: ${superAdminTarget.full_name || superAdminTarget.username} (single system owner).`);
+  } else {
+    console.warn('No administrator account exists yet, so a Super Admin could not be assigned.');
   }
 };
 
@@ -785,7 +862,7 @@ const loadMfaChallengeUser = async (challengeToken, expectedStage) => {
   const decoded = jwt.verify(challengeToken, JWT_SECRET);
   if (decoded?.purpose !== 'admin-mfa' || decoded?.stage !== expectedStage) return null;
   const rows = await queryDb(
-    `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role,
+    `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role, is_super_admin,
             job_title, department, is_active, must_change_credential, session_version,
             mfa_secret_enc, mfa_enabled, mfa_enrolled_at, failed_login_attempts,
             locked_until, last_login_at, last_login_ip, created_at, updated_at
@@ -885,7 +962,7 @@ const authenticateUser = async (req, res, next) => {
     }
 
     const rows = await queryDb(
-      `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role,
+      `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role, is_super_admin,
               job_title, department, is_active, must_change_credential, session_version,
               mfa_secret_enc, mfa_enabled, mfa_enrolled_at, failed_login_attempts,
               locked_until, last_login_at, last_login_ip, created_at, updated_at
@@ -928,6 +1005,13 @@ const authenticateUser = async (req, res, next) => {
 const requireAdmin = (req, res, next) => {
   if (!req.user || req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Administrator access required' });
+  }
+  next();
+};
+
+const requireSuperAdmin = (req, res, next) => {
+  if (!req.user || req.user.role !== 'admin' || req.user.isSuperAdmin !== true) {
+    return res.status(403).json({ error: 'Super Admin access required' });
   }
   next();
 };
@@ -996,7 +1080,7 @@ app.post('/api/login', async (req, res) => {
       }
 
       const rows = await queryDb(
-        `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role,
+        `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role, is_super_admin,
                 job_title, department, is_active, must_change_credential, session_version,
                 mfa_secret_enc, mfa_enabled, mfa_enrolled_at, failed_login_attempts,
                 locked_until, last_login_at, last_login_ip, created_at, updated_at
@@ -1066,7 +1150,7 @@ app.post('/api/login', async (req, res) => {
     }
 
     const rows = await queryDb(
-      `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role,
+      `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role, is_super_admin,
               job_title, department, is_active, must_change_credential, session_version,
               mfa_secret_enc, mfa_enabled, mfa_enrolled_at, failed_login_attempts,
               locked_until, last_login_at, last_login_ip, created_at, updated_at
@@ -1081,7 +1165,7 @@ app.post('/api/login', async (req, res) => {
 
     await queryDb('UPDATE users SET last_login_at = NOW(), last_login_ip = ? WHERE id = ?', [getRequestIp(req), user.id]);
     const refreshedRows = await queryDb(
-      `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role,
+      `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role, is_super_admin,
               job_title, department, is_active, must_change_credential, session_version,
               mfa_secret_enc, mfa_enabled, mfa_enrolled_at, failed_login_attempts,
               locked_until, last_login_at, last_login_ip, created_at, updated_at
@@ -1142,7 +1226,7 @@ app.post('/api/login/mfa/setup', async (req, res) => {
     clearAuthAttempts(rateKey);
 
     const refreshedRows = await queryDb(
-      `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role,
+      `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role, is_super_admin,
               job_title, department, is_active, must_change_credential, session_version,
               mfa_secret_enc, mfa_enabled, mfa_enrolled_at, failed_login_attempts,
               locked_until, last_login_at, last_login_ip, created_at, updated_at
@@ -1204,7 +1288,7 @@ app.post('/api/login/mfa/verify', async (req, res) => {
     );
     clearAuthAttempts(rateKey);
     const refreshedRows = await queryDb(
-      `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role,
+      `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role, is_super_admin,
               job_title, department, is_active, must_change_credential, session_version,
               mfa_secret_enc, mfa_enabled, mfa_enrolled_at, failed_login_attempts,
               locked_until, last_login_at, last_login_ip, created_at, updated_at
@@ -1247,7 +1331,7 @@ app.post('/api/session/refresh', authenticateUser, (req, res) => {
 app.post('/api/change-credential', authenticateUser, async (req, res) => {
   try {
     const rows = await queryDb(
-      `SELECT id, username, employee_id, full_name, role, job_title, department,
+      `SELECT id, username, employee_id, full_name, role, is_super_admin, job_title, department,
               is_active, must_change_credential, session_version, last_login_at,
               created_at, updated_at
        FROM users WHERE id = ? LIMIT 1`,
@@ -1297,7 +1381,7 @@ app.post('/api/change-credential', authenticateUser, async (req, res) => {
     }
 
     const refreshedRows = await queryDb(
-      `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role,
+      `SELECT id, username, employee_id, password_hash, pin_hash, full_name, role, is_super_admin,
               job_title, department, is_active, must_change_credential, session_version,
               mfa_secret_enc, mfa_enabled, mfa_enrolled_at, failed_login_attempts,
               locked_until, last_login_at, last_login_ip, created_at, updated_at
@@ -1319,7 +1403,7 @@ app.get('/api/users', authenticateUser, requireAdmin, async (req, res) => {
   try {
     await usersReady;
     const rows = await queryDb(`
-      SELECT id, username, employee_id, full_name, role, job_title, department,
+      SELECT id, username, employee_id, full_name, role, is_super_admin, job_title, department,
              is_active, must_change_credential, mfa_enabled, mfa_enrolled_at,
              last_login_at, created_at, updated_at,
              (password_hash IS NOT NULL) AS has_password,
@@ -1336,6 +1420,9 @@ app.get('/api/users', authenticateUser, requireAdmin, async (req, res) => {
 
 app.post('/api/users', authenticateUser, requireAdmin, async (req, res) => {
   const role = req.body?.role === 'admin' ? 'admin' : 'user';
+  if (role === 'admin' && req.user?.isSuperAdmin !== true) {
+    return res.status(403).json({ error: 'Only the Super Admin can create administrator accounts.' });
+  }
   const fullName = String(req.body?.fullName || '').trim();
   const jobTitle = String(req.body?.jobTitle || '').trim() || null;
   const department = String(req.body?.department || '').trim() || null;
@@ -1354,9 +1441,9 @@ app.post('/api/users', authenticateUser, requireAdmin, async (req, res) => {
       const passwordHash = await bcrypt.hash(temporaryCredential, 12);
       result = await queryDb(
         `INSERT INTO users
-          (username, employee_id, password_hash, pin_hash, full_name, role, job_title,
+          (username, employee_id, password_hash, pin_hash, full_name, role, is_super_admin, job_title,
            department, is_active, must_change_credential, session_version)
-         VALUES (?, NULL, ?, NULL, ?, 'admin', ?, ?, TRUE, TRUE, 0)`,
+         VALUES (?, NULL, ?, NULL, ?, 'admin', FALSE, ?, ?, TRUE, TRUE, 0)`,
         [username, passwordHash, fullName, jobTitle, department]
       );
     } else {
@@ -1376,7 +1463,7 @@ app.post('/api/users', authenticateUser, requireAdmin, async (req, res) => {
     }
 
     const rows = await queryDb(
-      `SELECT id, username, employee_id, full_name, role, job_title, department,
+      `SELECT id, username, employee_id, full_name, role, is_super_admin, job_title, department,
               is_active, must_change_credential, mfa_enabled, mfa_enrolled_at,
               last_login_at, created_at, updated_at,
               (password_hash IS NOT NULL) AS has_password,
@@ -1436,7 +1523,7 @@ app.put('/api/users/:id', authenticateUser, requireAdmin, async (req, res) => {
 
   try {
     const currentRows = await queryDb(
-      `SELECT id, username, employee_id, full_name, role, job_title, department,
+      `SELECT id, username, employee_id, full_name, role, is_super_admin, job_title, department,
               is_active, password_hash, pin_hash
        FROM users WHERE id = ? LIMIT 1`,
       [targetId]
@@ -1444,11 +1531,21 @@ app.put('/api/users/:id', authenticateUser, requireAdmin, async (req, res) => {
     if (currentRows.length === 0) return res.status(404).json({ error: 'User not found' });
     const target = currentRows[0];
 
+    if (Boolean(target.is_super_admin) && targetId !== Number(req.user.id)) {
+      return res.status(403).json({ error: 'The Super Admin account is protected and cannot be managed by another account.' });
+    }
+    if (target.role === 'admin' && !Boolean(target.is_super_admin) && req.user?.isSuperAdmin !== true && targetId !== Number(req.user.id)) {
+      return res.status(403).json({ error: 'Only the Super Admin can manage administrator accounts.' });
+    }
+
     if (req.body?.role && req.body.role !== target.role) {
       return res.status(400).json({ error: 'Changing account role in place is disabled. Create a separate account with the correct role.' });
     }
     if (targetId === Number(req.user.id) && !isActive) {
       return res.status(400).json({ error: 'You cannot deactivate your own administrator account' });
+    }
+    if (Boolean(target.is_super_admin) && !isActive) {
+      return res.status(403).json({ error: 'The single Super Admin account cannot be deactivated.' });
     }
     if (target.role === 'admin' && target.is_active && !isActive && await activeAdminCount() <= 1) {
       return res.status(400).json({ error: 'At least one active administrator account must remain' });
@@ -1480,7 +1577,7 @@ app.put('/api/users/:id', authenticateUser, requireAdmin, async (req, res) => {
     );
 
     const rows = await queryDb(
-      `SELECT id, username, employee_id, full_name, role, job_title, department,
+      `SELECT id, username, employee_id, full_name, role, is_super_admin, job_title, department,
               is_active, must_change_credential, mfa_enabled, mfa_enrolled_at,
               last_login_at, created_at, updated_at,
               (password_hash IS NOT NULL) AS has_password,
@@ -1528,11 +1625,17 @@ app.post('/api/users/:id/reset-credential', authenticateUser, requireAdmin, asyn
 
   try {
     const rows = await queryDb(
-      'SELECT id, username, employee_id, full_name, role FROM users WHERE id = ? LIMIT 1',
+      'SELECT id, username, employee_id, full_name, role, is_super_admin FROM users WHERE id = ? LIMIT 1',
       [targetId]
     );
     const target = rows[0];
     if (!target) return res.status(404).json({ error: 'User not found' });
+    if (Boolean(target.is_super_admin)) {
+      return res.status(403).json({ error: 'The Super Admin credential cannot be reset from User Access Management. Use the signed-in account password-change flow.' });
+    }
+    if (target.role === 'admin' && req.user?.isSuperAdmin !== true) {
+      return res.status(403).json({ error: 'Only the Super Admin can reset an administrator password.' });
+    }
 
     const temporaryCredential = target.role === 'admin'
       ? generateTemporaryAdminPassword()
@@ -1591,7 +1694,7 @@ app.post('/api/users/:id/reset-credential', authenticateUser, requireAdmin, asyn
 });
 
 
-app.post('/api/users/:id/reset-mfa', authenticateUser, requireAdmin, async (req, res) => {
+app.post('/api/users/:id/reset-mfa', authenticateUser, requireSuperAdmin, async (req, res) => {
   const targetId = Number(req.params.id);
   if (!Number.isInteger(targetId) || targetId <= 0) return res.status(400).json({ error: 'Invalid user id' });
   if (targetId === Number(req.user.id)) {
@@ -1600,12 +1703,15 @@ app.post('/api/users/:id/reset-mfa', authenticateUser, requireAdmin, async (req,
 
   try {
     const rows = await queryDb(
-      'SELECT id, username, full_name, role, is_active FROM users WHERE id = ? LIMIT 1',
+      'SELECT id, username, full_name, role, is_super_admin, is_active FROM users WHERE id = ? LIMIT 1',
       [targetId]
     );
     const target = rows[0];
     if (!target) return res.status(404).json({ error: 'User not found' });
     if (target.role !== 'admin') return res.status(400).json({ error: 'MFA reset applies only to administrator accounts' });
+    if (Boolean(target.is_super_admin)) {
+      return res.status(403).json({ error: 'The single Super Admin MFA cannot be reset from User Access Management.' });
+    }
 
     await queryDb(
       `UPDATE users
@@ -1626,6 +1732,70 @@ app.post('/api/users/:id/reset-mfa', authenticateUser, requireAdmin, async (req,
   } catch (err) {
     console.error('Reset MFA error:', err);
     res.status(500).json({ error: 'Failed to reset administrator MFA' });
+  }
+});
+
+
+// Super Admin only: permanently remove an UNUSED account.
+// Accounts with finding/audit/version history are intentionally preserved and
+// must be deactivated instead so QMS traceability is never broken.
+app.delete('/api/users/:id', authenticateUser, requireSuperAdmin, async (req, res) => {
+  const targetId = Number(req.params.id);
+  if (!Number.isInteger(targetId) || targetId <= 0) return res.status(400).json({ error: 'Invalid user id' });
+  if (targetId === Number(req.user.id)) return res.status(400).json({ error: 'You cannot remove your own Super Admin account.' });
+
+  try {
+    await auditTrailReady;
+    const rows = await queryDb(
+      `SELECT id, username, employee_id, full_name, role, is_super_admin, is_active
+       FROM users WHERE id = ? LIMIT 1`,
+      [targetId]
+    );
+    const target = rows[0];
+    if (!target) return res.status(404).json({ error: 'User not found' });
+    if (Boolean(target.is_super_admin)) {
+      return res.status(403).json({ error: 'The single Super Admin account cannot be removed.' });
+    }
+
+    const usageRows = await queryDb(
+      `SELECT
+         (SELECT COUNT(*) FROM audit_records
+          WHERE created_by = ? OR updated_by = ? OR deleted_by = ?) AS findingRefs,
+         (SELECT COUNT(*) FROM record_versions WHERE actor_user_id = ?) AS versionRefs,
+         (SELECT COUNT(*) FROM audit_log WHERE actor_user_id = ?) AS auditRefs`,
+      [targetId, targetId, targetId, targetId, targetId]
+    );
+    const usage = usageRows[0] || {};
+    const findingRefs = Number(usage.findingRefs || 0);
+    const versionRefs = Number(usage.versionRefs || 0);
+    const auditRefs = Number(usage.auditRefs || 0);
+    const totalRefs = findingRefs + versionRefs + auditRefs;
+
+    if (totalRefs > 0) {
+      return res.status(409).json({
+        error: 'This account has historical system activity and cannot be permanently removed. Deactivate it instead to preserve traceability.',
+        references: { findings: findingRefs, versions: versionRefs, auditEvents: auditRefs },
+      });
+    }
+
+    await queryDb('DELETE FROM users WHERE id = ?', [targetId]);
+    await logAuditEvent(req, {
+      action: 'USER_PERMANENTLY_REMOVED',
+      entityType: 'user',
+      entityId: targetId,
+      description: `Permanently removed unused ${target.role === 'admin' ? 'administrator' : 'employee'} account ${target.full_name || target.username}`,
+      metadata: {
+        targetRole: target.role,
+        targetUsername: target.role === 'admin' ? target.username : null,
+        targetEmployeeId: target.role === 'user' ? target.employee_id : null,
+        superAdminOnly: true,
+        historicalReferences: 0,
+      },
+    });
+    res.status(200).json({ success: true, removedUserId: targetId });
+  } catch (err) {
+    console.error('Permanent user removal error:', err);
+    res.status(500).json({ error: 'Failed to remove account' });
   }
 });
 

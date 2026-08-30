@@ -190,6 +190,7 @@ type CurrentUser = {
   employeeId?: string;
   fullName: string;
   role: UserRole;
+  isSuperAdmin?: boolean;
   jobTitle?: string;
   department?: string;
   isActive?: boolean;
@@ -548,6 +549,7 @@ export default function App() {
   const lastSessionRefreshAtRef = useRef(0);
   const isAuthenticated = Boolean(authToken && currentUser);
   const isAdmin = currentUser?.role === 'admin';
+  const isSuperAdmin = isAdmin && currentUser?.isSuperAdmin === true;
 
   const [showLoginModal, setShowLoginModal] = useState(() => (
     !localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || !readStoredCurrentUser()
@@ -1865,9 +1867,27 @@ export default function App() {
     }
   }, [view, isAdmin, authToken]);
 
+  const canManageUserAccount = (target: ManagedUser) => {
+    if (!isAdmin) return false;
+    if (target.isSuperAdmin) return false;
+    if (target.role === 'admin') return isSuperAdmin;
+    return true;
+  };
+
+  const managedUserRestrictionText = (target: ManagedUser) => {
+    if (target.isSuperAdmin) return 'The single Super Admin account is protected.';
+    if (target.role === 'admin' && !isSuperAdmin) return 'Only the Super Admin can manage administrator accounts.';
+    if (currentUser?.id === target.id) return 'Use your own account controls for this action.';
+    return '';
+  };
+
   const handleCreateUser = async (e: FormEvent) => {
     e.preventDefault();
     if (usersSaving) return;
+    if (newUserDraft.role === 'admin' && !isSuperAdmin) {
+      setUserManagementError('Only the Super Admin can create administrator accounts.');
+      return;
+    }
     setUsersSaving(true);
     setUserManagementError('');
     try {
@@ -1954,7 +1974,7 @@ export default function App() {
   };
 
   const handleToggleManagedUser = (user: ManagedUser) => {
-    if (usersSaving || currentUser?.id === user.id) return;
+    if (usersSaving || currentUser?.id === user.id || !canManageUserAccount(user)) return;
     if (!user.isActive) {
       updateManagedUser(user, { isActive: true });
       return;
@@ -1973,7 +1993,7 @@ export default function App() {
   };
 
   const handleResetUserCredential = (target: ManagedUser) => {
-    if (usersSaving || currentUser?.id === target.id) return;
+    if (usersSaving || currentUser?.id === target.id || !canManageUserAccount(target)) return;
     const credentialLabel = target.role === 'user' ? 'PIN' : 'password';
     requestConfirmation(
       {
@@ -2019,7 +2039,7 @@ export default function App() {
   };
 
   const handleResetAdminMfa = (user: ManagedUser) => {
-    if (usersSaving || user.role !== 'admin' || currentUser?.id === user.id) return;
+    if (usersSaving || !isSuperAdmin || user.role !== 'admin' || user.isSuperAdmin || currentUser?.id === user.id) return;
     requestConfirmation(
       {
         title: 'Reset administrator MFA?',
@@ -2040,6 +2060,37 @@ export default function App() {
           showToast('success', 'MFA reset', `${user.fullName} must enrol an authenticator again at the next sign-in.`);
         } catch (err) {
           setUserManagementError(err instanceof Error ? err.message : 'Failed to reset administrator MFA.');
+        } finally {
+          setUsersSaving(false);
+        }
+      },
+    );
+  };
+
+
+  const handlePermanentlyRemoveUser = (target: ManagedUser) => {
+    if (usersSaving || !isSuperAdmin || target.isSuperAdmin || currentUser?.id === target.id) return;
+    requestConfirmation(
+      {
+        title: 'Permanently remove unused account?',
+        message: `${target.fullName} will be permanently removed only if the account has no finding, version or audit history. If any historical activity exists, the server will block removal and the account should be deactivated instead.`,
+        confirmLabel: 'Remove account',
+        cancelLabel: 'Cancel',
+        tone: 'danger',
+      },
+      async () => {
+        setUsersSaving(true);
+        setUserManagementError('');
+        try {
+          const response = await authFetch(`${API_BASE_URL}/api/users/${target.id}`, { method: 'DELETE' });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(data.error || 'Failed to remove account.');
+          setManagedUsers(prev => prev.filter(user => user.id !== target.id));
+          fetchAuditLog();
+          showToast('success', 'Account removed', `${target.fullName}'s unused account was permanently removed.`);
+        } catch (err) {
+          setUserManagementError(err instanceof Error ? err.message : 'Failed to remove account.');
+          showToast('error', 'Account not removed', err instanceof Error ? err.message : 'The account could not be removed.');
         } finally {
           setUsersSaving(false);
         }
@@ -3122,7 +3173,7 @@ export default function App() {
                 aria-haspopup="menu"
                 aria-expanded={profileMenuOpen}
               >
-                <div className={`relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-black text-white ${isAdmin ? 'bg-emerald-500' : isAuthenticated ? 'bg-slate-700' : 'bg-slate-400'}`}>
+                <div className={`relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-black text-white ${isSuperAdmin ? 'bg-amber-500' : isAdmin ? 'bg-emerald-500' : isAuthenticated ? 'bg-slate-700' : 'bg-slate-400'}`}>
                   {currentUser ? (currentUser.fullName || currentUser.username).charAt(0).toUpperCase() : <User size={16} />}
                   {isAuthenticated && (
                     <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white bg-emerald-400" />
@@ -3142,7 +3193,7 @@ export default function App() {
                     className="absolute right-0 top-full z-[100] mt-2 w-[260px] max-w-[calc(100vw-1.5rem)] origin-top-right overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_18px_45px_rgba(15,23,42,0.18)]"
                   >
                     <div className="flex items-center gap-2.5 border-b border-slate-100 bg-slate-50/70 p-3">
-                      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-black text-white ${isAdmin ? 'bg-emerald-500' : isAuthenticated ? 'bg-slate-700' : 'bg-slate-400'}`}>
+                      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-black text-white ${isSuperAdmin ? 'bg-amber-500' : isAdmin ? 'bg-emerald-500' : isAuthenticated ? 'bg-slate-700' : 'bg-slate-400'}`}>
                         {currentUser ? (currentUser.fullName || currentUser.username).charAt(0).toUpperCase() : <User size={17} />}
                       </div>
                       <div className="min-w-0 flex-1">
@@ -3150,8 +3201,8 @@ export default function App() {
                           {currentUser?.fullName || currentUser?.username || 'Not signed in'}
                         </p>
                         <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
-                          <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[7px] font-black uppercase tracking-[0.12em] ${isAdmin ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}`}>
-                            {isAdmin ? 'Admin' : 'User'}
+                          <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[7px] font-black uppercase tracking-[0.12em] ${isSuperAdmin ? 'bg-amber-100 text-amber-700' : isAdmin ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}`}>
+                            {isSuperAdmin ? 'Super Admin' : isAdmin ? 'Admin' : 'User'}
                           </span>
                           {currentUser?.jobTitle && (
                             <span className="min-w-0 truncate text-[9px] font-semibold text-slate-400" title={currentUser.jobTitle}>
@@ -5325,7 +5376,7 @@ export default function App() {
                     </h2>
                     <p className="mt-1.5 max-w-2xl text-xs md:text-sm leading-6 text-slate-500">
                       {view === 'access-audit'
-                        ? 'Manage employee access, review accountable system activity and recover accidentally deleted findings.'
+                        ? 'Manage employee access and traceability. The single Super Admin additionally governs administrator accounts and unused-account removal.'
                         : 'Manage auditors, finding classifications and Platform → MQE ownership rules used across IPQC records.'}
                     </p>
                   </div>
@@ -5334,7 +5385,7 @@ export default function App() {
                     {view === 'access-audit' ? (
                       <span className="inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-[10px] font-black uppercase tracking-widest text-blue-700">
                         <ShieldCheck size={12} />
-                        Protected access
+                        {isSuperAdmin ? 'Super Admin access' : 'Protected access'}
                       </span>
                     ) : (
                       <span
@@ -5369,8 +5420,9 @@ export default function App() {
                     <div className="rounded-xl border border-slate-200 bg-white px-4 py-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
                       <div className="flex items-center justify-between gap-3">
                         <div>
-                          <p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">Administrators</p>
+                          <p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">Admin accounts</p>
                           <p className="mt-1 text-xl font-black tabular-nums text-slate-900">{managedUsers.filter(user => user.role === 'admin' && user.isActive).length}</p>
+                          <p className="mt-0.5 text-[8px] font-bold uppercase tracking-wider text-amber-600">{managedUsers.filter(user => user.isSuperAdmin && user.isActive).length} protected Super Admin</p>
                         </div>
                         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
                           <ShieldCheck size={17} />
@@ -5467,7 +5519,7 @@ export default function App() {
                         <div>
                           <h3 className="text-sm font-black text-slate-900">User Access Management</h3>
                           <p className="mt-0.5 max-w-2xl text-[10px] font-medium leading-4 text-slate-400">
-                            Standard users use Employee ID + PIN. Administrators use an individual username, strong password and authenticator MFA. Temporary credentials must be changed on first sign-in.
+                            Employees use Employee ID + PIN. Administrators use username + password + authenticator MFA. There is one protected Super Admin (System Administrator) who exclusively governs administrator accounts and permanent removal of unused accounts.
                           </p>
                         </div>
                       </div>
@@ -5492,13 +5544,13 @@ export default function App() {
                           <div>
                             <p className="text-[10px] font-black">Secure temporary credential</p>
                             <p className="mt-0.5 text-[10px] font-medium leading-4">
-                              The server generates a unique temporary {newUserDraft.role === 'user' ? '6-digit PIN' : 'administrator password'} after the account is created. It is shown once for handover and must be changed during first sign-in{newUserDraft.role === 'admin' ? '; administrators also complete authenticator MFA enrollment' : ''}.
+                              The server generates a unique temporary {newUserDraft.role === 'user' ? '6-digit PIN' : 'administrator password'} after creation. It is shown once and must be changed during first sign-in{newUserDraft.role === 'admin' ? '; administrators also complete authenticator MFA enrollment. Only the Super Admin can create administrator accounts' : ''}.
                             </p>
                           </div>
                         </div>
                         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                           <FormInput label="Full name" required value={newUserDraft.fullName} onChange={(v: string) => setNewUserDraft(prev => ({ ...prev, fullName: v }))} placeholder="Employee full name" />
-                          <FormSelect label="System role" required value={newUserDraft.role} onChange={(v: UserRole) => setNewUserDraft(prev => ({ ...prev, role: v, employeeId: '', username: '' }))} options={['user', 'admin']} />
+                          <FormSelect label="System role" required value={newUserDraft.role} onChange={(v: UserRole) => setNewUserDraft(prev => ({ ...prev, role: v, employeeId: '', username: '' }))} options={isSuperAdmin ? ['user', 'admin'] : ['user']} />
                           {newUserDraft.role === 'user' ? (
                             <FormInput label="Employee ID" required value={newUserDraft.employeeId} onChange={(v: string) => setNewUserDraft(prev => ({ ...prev, employeeId: v }))} placeholder="e.g. 104582" />
                           ) : (
@@ -5574,7 +5626,7 @@ export default function App() {
                           <tr key={user.id} className="transition-colors hover:bg-slate-50/70">
                             <td className="px-5 py-3.5 md:px-6">
                               <div className="flex items-center gap-2.5">
-                                <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[10px] font-black text-white ${user.role === 'admin' ? 'bg-emerald-500' : 'bg-slate-700'}`}>
+                                <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[10px] font-black text-white ${user.isSuperAdmin ? 'bg-amber-500' : user.role === 'admin' ? 'bg-emerald-500' : 'bg-slate-700'}`}>
                                   {(user.fullName || user.username).charAt(0).toUpperCase()}
                                 </div>
                                 <div className="min-w-0">
@@ -5589,23 +5641,26 @@ export default function App() {
                             </td>
                             <td className="px-5 py-3.5 text-xs font-semibold text-slate-600">{user.department || '—'}</td>
                             <td className="px-5 py-3.5">
-                              <span className={`inline-flex rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-wider ${user.role === 'admin' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
-                                {user.role}
+                              <span className={`inline-flex rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-wider ${user.isSuperAdmin ? 'bg-amber-50 text-amber-700 ring-1 ring-amber-200' : user.role === 'admin' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+                                {user.isSuperAdmin ? 'Super Admin' : user.role === 'admin' ? 'Admin' : 'User'}
                               </span>
                             </td>
                             <td className="px-5 py-3.5">
                               <div className="flex flex-col items-start gap-1.5">
                                 <button
                                   type="button"
-                                  disabled={usersSaving || currentUser?.id === user.id}
+                                  disabled={usersSaving || currentUser?.id === user.id || !canManageUserAccount(user)}
                                   onClick={() => handleToggleManagedUser(user)}
-                                  title={currentUser?.id === user.id ? 'You cannot change your own account status here' : (user.isActive ? 'Deactivate account' : 'Activate account')}
+                                  title={currentUser?.id === user.id ? 'You cannot change your own account status here' : (!canManageUserAccount(user) ? managedUserRestrictionText(user) : (user.isActive ? 'Deactivate account' : 'Activate account'))}
                                   aria-label={user.isActive ? `Deactivate ${user.fullName}` : `Activate ${user.fullName}`}
                                   className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-wider disabled:cursor-not-allowed disabled:opacity-50 ${user.isActive ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-500'}`}
                                 >
                                   <span className={`h-1.5 w-1.5 rounded-full ${user.isActive ? 'bg-emerald-500' : 'bg-slate-400'}`} />
                                   {user.isActive ? 'Active' : 'Inactive'}
                                 </button>
+                                {user.isSuperAdmin && (
+                                  <span className="text-[9px] font-black uppercase tracking-wider text-amber-600">Protected system owner</span>
+                                )}
                                 {user.mustChangeCredential && user.isActive && (
                                   <span className="text-[9px] font-bold text-amber-600">Temporary credential</span>
                                 )}
@@ -5623,15 +5678,15 @@ export default function App() {
                                 )}
                                 <button
                                   type="button"
-                                  disabled={usersSaving || currentUser?.id === user.id}
+                                  disabled={usersSaving || currentUser?.id === user.id || !canManageUserAccount(user)}
                                   onClick={() => handleResetUserCredential(user)}
-                                  title={user.role === 'user' ? 'Generate a temporary replacement PIN' : 'Generate a temporary replacement password'}
+                                  title={!canManageUserAccount(user) ? managedUserRestrictionText(user) : (user.role === 'user' ? 'Generate a temporary replacement PIN' : 'Generate a temporary replacement password')}
                                   aria-label={`${user.role === 'user' ? 'Reset PIN for' : 'Reset password for'} ${user.fullName}`}
                                   className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[9px] font-black uppercase tracking-wider text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
                                 >
                                   <Lock size={12} /> {user.role === 'user' ? 'Reset PIN' : 'Reset password'}
                                 </button>
-                                {user.role === 'admin' && user.mfaEnabled && currentUser?.id !== user.id && (
+                                {isSuperAdmin && user.role === 'admin' && !user.isSuperAdmin && user.mfaEnabled && currentUser?.id !== user.id && (
                                   <button
                                     type="button"
                                     disabled={usersSaving}
@@ -5641,6 +5696,18 @@ export default function App() {
                                     className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[9px] font-black uppercase tracking-wider text-amber-600 transition-colors hover:bg-amber-50 hover:text-amber-700 disabled:opacity-40"
                                   >
                                     <Smartphone size={12} /> Reset MFA
+                                  </button>
+                                )}
+                                {isSuperAdmin && !user.isSuperAdmin && currentUser?.id !== user.id && (
+                                  <button
+                                    type="button"
+                                    disabled={usersSaving}
+                                    onClick={() => handlePermanentlyRemoveUser(user)}
+                                    title="Permanently remove only if this account has no historical system activity"
+                                    aria-label={`Remove unused account for ${user.fullName}`}
+                                    className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[9px] font-black uppercase tracking-wider text-rose-600 transition-colors hover:bg-rose-50 hover:text-rose-700 disabled:opacity-40"
+                                  >
+                                    <Trash2 size={12} /> Remove
                                   </button>
                                 )}
                               </div>
