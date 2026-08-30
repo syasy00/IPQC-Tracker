@@ -136,6 +136,28 @@ type AIInsightResult = {
   generatedAt?: string;
 };
 
+type FindingGroupOption = {
+  id: number;
+  name: string;
+  sortOrder: number;
+};
+
+type FindingDetailMaster = {
+  id: number;
+  description: string;
+  sortOrder: number;
+};
+
+type FindingClassification = {
+  id: number;
+  category: string;
+  groupId: number;
+  groupFinding: string;
+  sortOrder: number;
+  details: string[];
+  detailRows: FindingDetailMaster[];
+};
+
 type UserRole = 'user' | 'admin';
 type LoginMode = 'user' | 'admin';
 
@@ -305,6 +327,13 @@ const auditActionLabel = (action: string): string => {
     USER_SIGNED_IN: 'Signed in',
     AUDITOR_LIST_UPDATED: 'Updated auditor list',
     MQE_MAPPING_UPDATED: 'Updated MQE mapping',
+    FINDING_CLASSIFICATION_UPDATED: 'Updated finding classification',
+    FINDING_CATEGORY_CREATED: 'Created finding category',
+    FINDING_CATEGORY_UPDATED: 'Updated finding category',
+    FINDING_CATEGORY_DEACTIVATED: 'Removed finding category',
+    FINDING_DETAIL_CREATED: 'Created finding detail',
+    FINDING_DETAIL_UPDATED: 'Updated finding detail',
+    FINDING_DETAIL_DEACTIVATED: 'Removed finding detail',
     SETTINGS_UPDATED: 'Updated settings',
     DATABASE_RESET: 'Reset database',
   };
@@ -333,85 +362,6 @@ const DEPARTMENTS = [
   'PE Team'
 ];
 
-const FINDING_DETAILS_BY_CATEGORY: Record<string, string[]> = {
-  '6S': [
-    'Mix material inside the material bin',
-    'Dustbin located at non-kanban area',
-    'Unnecessary item/material found on the workstation',
-    'Improper storage of Tool/Equipment',
-    'Mixed chemicals stored in the same bin',
-    'No Workstation / Tester Identification',
-    'No label Identification on Equipment / Tools',
-    'Material Scrap Bin without cover',
-    'Dust on workstation/rack/ect',
-    'Trolly not properly inside kanban',
-    'Improper storage of Kit / Bulk Material',
-  ],
-  'Calibration': [
-    'Calibration Overdue ESD Monitor',
-    'Calibration Overdue Manual Torque',
-    'Equipment without Calibration Label',
-    'Calibration Overdue Tools / Equipment',
-    'Calibration Overdue Torque Drive',
-    'Calibration Overdue Solder Iron',
-  ],
-  'PM': [
-    'Equipment without Preventive Equipment Label',
-    'Preventive Maintenance Overdue',
-  ],
-  'Procedural non-compliance': [
-    'Setup check list not updated',
-    'Operating the process without OMS/WI displayed',
-    'Not following OMS / WI',
-    'No Set-Up Checklist displayed',
-  ],
-  'Docs/WI': [
-    'Use Obsolete Visual Standard',
-    "OMS doesn't match current practice",
-    'Incomplete OMS',
-  ],
-  'ESD': [
-    'Ionizer turn off',
-    'No Insulative Mat',
-    'Ionizer is not available at the workstation',
-    'ESD mat was not grounded',
-    'No ESD grounding points',
-    'ESD Monitoring not function',
-    'Ionizer Calibration Date Expired',
-  ],
-  'Expired Material': [
-    'Chemical / Material Overdue',
-  ],
-  'Safety Concern': [
-    'Improper sitting position',
-    'Water leaking from the tester/machine',
-    'Material Handling & Storage',
-    'Cable wire damage',
-  ],
-  'Identification': [
-    'IPA without Expiry Date Label',
-    'IPA Label Damage , Torn, Smear',
-    'Material without Expiring Label',
-    'Torque number is smear / missing /damage / torn off',
-    'Missing Label Expiry Date',
-    'Calibration Label damage, Torn on Tools / Equipment',
-  ],
-  'Training/Competency': [
-    'Assembler operating without certification',
-    'Assembler improper used of jigs / Fixture at Workstation',
-  ],
-  'Handling': [
-    'Operators handling parts without required gloves or finger cots.',
-    'Material handled without ESD protection.',
-    'Product transferred without using the designated tray/trolley',
-    'Components / Unit placed directly on the floor.',
-    'Product exposed to contamination during handling.',
-    'WIP transported without proper identification',
-  ],
-};
-
-const CATEGORIES = Object.keys(FINDING_DETAILS_BY_CATEGORY);
-
 const PLATFORMS = [
   'Apex',
   'Ascent',
@@ -437,28 +387,45 @@ const PLATFORMS = [
   'VHF'
 ];
 
-const CATEGORY_GROUP_MAPPING: Record<string, string> = {
-  '6S': 'Method',
-  'Calibration': 'Machine',
-  'PM': 'Machine',
-  'Procedural non-compliance': 'Method',
-  'Docs/WI': 'Method',
-  'ESD': 'Machine',
-  'Expired Material': 'Material',
-  'Safety Concern': 'Man',
-  'Identification': 'Material',
-  'Training/Competency': 'Man',
-  'Handling': 'Man',
+const normalizeFindingClassificationResponse = (value: unknown): {
+  groups: FindingGroupOption[];
+  classifications: FindingClassification[];
+} => {
+  const source = value && typeof value === 'object' ? value as any : {};
+  const groupsRaw = Array.isArray(source.groups) ? source.groups : [];
+  const classificationsRaw = Array.isArray(source.classifications) ? source.classifications : [];
 
-  // Legacy values are kept so older records can still be edited without data loss.
-  Compliance_6S: 'Method',
-  Calibration_PM: 'Machine',
-  Documentation_And_Process_Adherence: 'Method',
-  ESD_Control: 'Machine',
-  Material_Control_And_Chemical_Management: 'Material',
-  Safety_Concern: 'Man',
-  Tooling_Labeling: 'Material',
-  Training_Certification: 'Man',
+  const groups: FindingGroupOption[] = groupsRaw
+    .map((raw: any) => ({
+      id: Number(raw?.id || 0),
+      name: String(raw?.name || '').trim(),
+      sortOrder: Number(raw?.sortOrder || 0),
+    }))
+    .filter((group: FindingGroupOption) => group.id > 0 && Boolean(group.name));
+
+  const classifications: FindingClassification[] = classificationsRaw
+    .map((raw: any) => {
+      const detailRows: FindingDetailMaster[] = (Array.isArray(raw?.details) ? raw.details : [])
+        .map((detail: any) => ({
+          id: Number(detail?.id || 0),
+          description: String(detail?.description || '').trim(),
+          sortOrder: Number(detail?.sortOrder || 0),
+        }))
+        .filter((detail: FindingDetailMaster) => detail.id > 0 && Boolean(detail.description));
+
+      return {
+        id: Number(raw?.id || 0),
+        category: String(raw?.category || '').trim(),
+        groupId: Number(raw?.groupId || 0),
+        groupFinding: String(raw?.groupFinding || '').trim(),
+        sortOrder: Number(raw?.sortOrder || 0),
+        details: detailRows.map((detail) => detail.description),
+        detailRows,
+      };
+    })
+    .filter((item: FindingClassification) => item.id > 0 && Boolean(item.category) && Boolean(item.groupFinding));
+
+  return { groups, classifications };
 };
 
 const INITIAL_PLATFORM_MQE_MAPPING: Record<string, string> = {
@@ -726,6 +693,38 @@ export default function App() {
   const [selectedPlatformForMapping, setSelectedPlatformForMapping] = useState(PLATFORMS[0]);
   const [newMqeName, setNewMqeName] = useState('');
 
+  // Database-backed finding classification master data.
+  // The frontend no longer owns the Category / Group / Finding Detail lists.
+  const [findingGroups, setFindingGroups] = useState<FindingGroupOption[]>([]);
+  const [findingClassifications, setFindingClassifications] = useState<FindingClassification[]>([]);
+  const [classificationSaving, setClassificationSaving] = useState(false);
+  const [selectedClassificationCategory, setSelectedClassificationCategory] = useState('');
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [newCategoryGroup, setNewCategoryGroup] = useState('');
+  const [editingCategoryName, setEditingCategoryName] = useState<string | null>(null);
+  const [editCategoryName, setEditCategoryName] = useState('');
+  const [editCategoryGroup, setEditCategoryGroup] = useState('');
+  const [newFindingDetail, setNewFindingDetail] = useState('');
+  const [editingFindingDetailIndex, setEditingFindingDetailIndex] = useState<number | null>(null);
+  const [editFindingDetailValue, setEditFindingDetailValue] = useState('');
+
+  const configuredCategories = useMemo(
+    () => findingClassifications.map((item) => item.category),
+    [findingClassifications]
+  );
+  const configuredFindingDetailsByCategory = useMemo(
+    () => Object.fromEntries(findingClassifications.map((item) => [item.category, item.details])),
+    [findingClassifications]
+  );
+  const configuredCategoryGroupMapping = useMemo(
+    () => Object.fromEntries(findingClassifications.map((item) => [item.category, item.groupFinding])),
+    [findingClassifications]
+  );
+  const selectedFindingClassification = useMemo(
+    () => findingClassifications.find((item) => item.category === selectedClassificationCategory) || null,
+    [findingClassifications, selectedClassificationCategory]
+  );
+
 
   // Database-backed account management. Only admins can load or change this list.
   const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([]);
@@ -784,8 +783,8 @@ export default function App() {
     const existing = records
       .map(record => String(record.category || '').trim())
       .filter(Boolean);
-    return Array.from(new Set([...CATEGORIES, ...existing]));
-  }, [records]);
+    return Array.from(new Set([...configuredCategories, ...existing]));
+  }, [records, configuredCategories]);
 
   useEffect(() => {
     if (!authToken) {
@@ -812,7 +811,7 @@ export default function App() {
     fetchAudits();
   }, [authToken]);
 
-  // Load the saved auditor list & platform-MQE mapping for authenticated users.
+  // Load shared quality configuration for authenticated users.
   useEffect(() => {
     if (!authToken) {
       setSettingsLoading(false);
@@ -821,15 +820,35 @@ export default function App() {
     const fetchSettings = async () => {
       setSettingsLoading(true);
       try {
-        const response = await authFetch(`${API_BASE_URL}/api/settings`);
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.error || 'Could not load quality configuration.');
-        if (Array.isArray(data.auditors) && data.auditors.length > 0) {
-          setAuditorsList(data.auditors);
+        const [settingsResponse, classificationResponse] = await Promise.all([
+          authFetch(`${API_BASE_URL}/api/settings`),
+          authFetch(`${API_BASE_URL}/api/finding-classifications`),
+        ]);
+        const settingsData = await settingsResponse.json().catch(() => ({}));
+        const classificationData = await classificationResponse.json().catch(() => ({}));
+        if (!settingsResponse.ok) throw new Error(settingsData.error || 'Could not load quality configuration.');
+        if (!classificationResponse.ok) throw new Error(classificationData.error || 'Could not load finding classifications.');
+
+        if (Array.isArray(settingsData.auditors) && settingsData.auditors.length > 0) {
+          setAuditorsList(settingsData.auditors);
         }
-        if (data.mqeMappings && Object.keys(data.mqeMappings).length > 0) {
-          setMqeMappings(data.mqeMappings);
+        if (settingsData.mqeMappings && Object.keys(settingsData.mqeMappings).length > 0) {
+          setMqeMappings(settingsData.mqeMappings);
         }
+
+        const normalized = normalizeFindingClassificationResponse(classificationData);
+        setFindingGroups(normalized.groups);
+        setFindingClassifications(normalized.classifications);
+        setSelectedClassificationCategory((current) =>
+          normalized.classifications.some((item) => item.category === current)
+            ? current
+            : (normalized.classifications[0]?.category || '')
+        );
+        setNewCategoryGroup((current) =>
+          current && normalized.groups.some((group) => group.name === current)
+            ? current
+            : (normalized.groups[0]?.name || '')
+        );
       } catch (error) {
         console.error('Error fetching settings from database:', error);
         showToast('error', 'Configuration unavailable', error instanceof Error ? error.message : 'Could not load quality configuration.');
@@ -1350,14 +1369,20 @@ export default function App() {
   // Every edit here is persisted to /api/settings immediately so all users
   // see the same list, instead of it living only in this browser tab's memory.
   const [savingSettings, setSavingSettings] = useState(false);
-  const saveSettings = async (nextAuditors: string[], nextMqeMappings: Record<string, string>): Promise<boolean> => {
+  const saveSettings = async (
+    nextAuditors: string[],
+    nextMqeMappings: Record<string, string>
+  ): Promise<boolean> => {
     if (savingSettings) return false;
     setSavingSettings(true);
     try {
       const response = await authFetch(`${API_BASE_URL}/api/settings`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ auditors: nextAuditors, mqeMappings: nextMqeMappings }),
+        body: JSON.stringify({
+          auditors: nextAuditors,
+          mqeMappings: nextMqeMappings,
+        }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -1375,6 +1400,60 @@ export default function App() {
       return false;
     } finally {
       setSavingSettings(false);
+    }
+  };
+
+  const refreshFindingClassifications = async (preferredCategory?: string): Promise<FindingClassification[]> => {
+    const response = await authFetch(`${API_BASE_URL}/api/finding-classifications`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Could not load finding classifications.');
+
+    const normalized = normalizeFindingClassificationResponse(data);
+    setFindingGroups(normalized.groups);
+    setFindingClassifications(normalized.classifications);
+    setSelectedClassificationCategory((current) => {
+      const candidate = preferredCategory || current;
+      if (candidate && normalized.classifications.some((item) => item.category === candidate)) return candidate;
+      return normalized.classifications[0]?.category || '';
+    });
+    setNewCategoryGroup((current) =>
+      current && normalized.groups.some((group) => group.name === current)
+        ? current
+        : (normalized.groups[0]?.name || '')
+    );
+    return normalized.classifications;
+  };
+
+  const runClassificationMutation = async (
+    url: string,
+    options: RequestInit,
+    preferredCategory?: string,
+  ): Promise<any | null> => {
+    if (classificationSaving) return null;
+    setClassificationSaving(true);
+    try {
+      const response = await authFetch(`${API_BASE_URL}${url}`, {
+        ...options,
+        headers: {
+          ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+          ...(options.headers as Record<string, string> | undefined),
+        },
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'The finding classification change could not be saved.');
+      await refreshFindingClassifications(preferredCategory);
+      if (isAdmin) fetchAuditLog();
+      return data;
+    } catch (err) {
+      console.error('Finding classification update failed:', err);
+      showToast(
+        'error',
+        'Classification not saved',
+        err instanceof Error ? err.message : 'Could not save the finding classification change.'
+      );
+      return null;
+    } finally {
+      setClassificationSaving(false);
     }
   };
 
@@ -1492,6 +1571,248 @@ export default function App() {
           if (selectedPlatformForMapping === platform) setNewMqeName('');
           showToast('success', 'MQE ownership cleared', `${platform} is now unassigned.`);
         }
+      },
+    );
+  };
+
+  const handleAddFindingCategory = async (e: FormEvent) => {
+    e.preventDefault();
+    const category = newCategoryName.trim();
+    const groupFinding = newCategoryGroup.trim();
+
+    if (!category) {
+      showToast('warning', 'Category name required', 'Enter a category name before adding it.');
+      return;
+    }
+    if (!findingGroups.some((group) => group.name === groupFinding)) {
+      showToast('warning', 'Group finding required', 'Choose a valid Group Finding.');
+      return;
+    }
+    if (findingClassifications.some((item) => item.category.toLowerCase() === category.toLowerCase())) {
+      showToast('info', 'Category already exists', `${category} is already in the active finding classification list.`);
+      return;
+    }
+
+    const data = await runClassificationMutation(
+      '/api/finding-classifications/categories',
+      {
+        method: 'POST',
+        body: JSON.stringify({ name: category, groupFinding }),
+      },
+      category,
+    );
+    if (!data) return;
+
+    setNewCategoryName('');
+    setEditingCategoryName(null);
+    setEditingFindingDetailIndex(null);
+    showToast(
+      'success',
+      data.reactivated ? 'Category reactivated' : 'Category added',
+      `${category} is available for new findings. Add its finding details as needed.`
+    );
+  };
+
+  const beginEditFindingCategory = (classification: FindingClassification) => {
+    setEditingCategoryName(classification.category);
+    setEditCategoryName(classification.category);
+    setEditCategoryGroup(classification.groupFinding);
+    setEditingFindingDetailIndex(null);
+  };
+
+  const handleSaveFindingCategory = async () => {
+    if (!editingCategoryName) return;
+    const classification = findingClassifications.find((item) => item.category === editingCategoryName);
+    if (!classification) return;
+
+    const category = editCategoryName.trim();
+    const groupFinding = editCategoryGroup.trim();
+    if (!category) {
+      showToast('warning', 'Category name required', 'The category name cannot be blank.');
+      return;
+    }
+    if (!findingGroups.some((group) => group.name === groupFinding)) {
+      showToast('warning', 'Group finding required', 'Choose a valid Group Finding.');
+      return;
+    }
+    if (
+      findingClassifications.some(
+        (item) => item.id !== classification.id && item.category.toLowerCase() === category.toLowerCase()
+      )
+    ) {
+      showToast('info', 'Category already exists', `${category} is already in the active finding classification list.`);
+      return;
+    }
+
+    const previousName = classification.category;
+    const data = await runClassificationMutation(
+      `/api/finding-classifications/categories/${classification.id}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ name: category, groupFinding }),
+      },
+      category,
+    );
+    if (!data) return;
+
+    setEditingCategoryName(null);
+    setEditCategoryName('');
+    setEditCategoryGroup('');
+    showToast(
+      'success',
+      'Category updated',
+      previousName === category
+        ? `${category} now uses the ${groupFinding} group.`
+        : `${previousName} was renamed to ${category}. Historical records keep their stored wording.`
+    );
+  };
+
+  const handleDeleteFindingCategory = (category: string) => {
+    if (classificationSaving) return;
+    const classification = findingClassifications.find((item) => item.category === category);
+    if (!classification) return;
+    if (findingClassifications.length <= 1) {
+      showToast('warning', 'Keep one category', 'Add another category before removing the last active category.');
+      return;
+    }
+
+    const historicalCount = records.filter(
+      (record) => String(record.category || '').trim().toLowerCase() === category.toLowerCase()
+    ).length;
+
+    requestConfirmation(
+      {
+        title: 'Remove finding category?',
+        message: historicalCount > 0
+          ? `${category} will be deactivated for future finding entry. ${historicalCount} existing record${historicalCount === 1 ? '' : 's'} using this category will remain unchanged for traceability.`
+          : `${category} will be deactivated for future finding entry. Historical records are never rewritten.`,
+        confirmLabel: 'Remove category',
+        cancelLabel: 'Keep category',
+        tone: 'danger',
+      },
+      async () => {
+        const data = await runClassificationMutation(
+          `/api/finding-classifications/categories/${classification.id}`,
+          { method: 'DELETE' },
+        );
+        if (!data) return;
+        if (editingCategoryName === category) setEditingCategoryName(null);
+        setEditingFindingDetailIndex(null);
+        showToast('success', 'Category removed', `${category} is no longer available for new findings.`);
+      },
+    );
+  };
+
+  const handleAddFindingDetail = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!selectedFindingClassification) {
+      showToast('warning', 'Select a category', 'Choose a category before adding a finding detail.');
+      return;
+    }
+
+    const detail = newFindingDetail.trim();
+    if (!detail) {
+      showToast('warning', 'Finding detail required', 'Enter a finding detail before adding it.');
+      return;
+    }
+    if (
+      selectedFindingClassification.details.some(
+        (item) => item.toLowerCase() === detail.toLowerCase()
+      )
+    ) {
+      showToast('info', 'Finding detail already exists', 'This finding detail is already configured for the selected category.');
+      return;
+    }
+
+    const data = await runClassificationMutation(
+      `/api/finding-classifications/categories/${selectedFindingClassification.id}/details`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ description: detail }),
+      },
+      selectedFindingClassification.category,
+    );
+    if (!data) return;
+
+    setNewFindingDetail('');
+    showToast(
+      'success',
+      data.reactivated ? 'Finding detail reactivated' : 'Finding detail added',
+      `Added to ${selectedFindingClassification.category}.`
+    );
+  };
+
+  const handleSaveFindingDetail = async (index: number) => {
+    if (!selectedFindingClassification) return;
+    const detailRow = selectedFindingClassification.detailRows[index];
+    if (!detailRow) return;
+    const detail = editFindingDetailValue.trim();
+
+    if (!detail) {
+      showToast('warning', 'Finding detail required', 'The finding detail cannot be blank.');
+      return;
+    }
+    if (
+      selectedFindingClassification.details.some(
+        (item, itemIndex) => itemIndex !== index && item.toLowerCase() === detail.toLowerCase()
+      )
+    ) {
+      showToast('info', 'Finding detail already exists', 'This finding detail is already configured for the selected category.');
+      return;
+    }
+
+    const previousDetail = detailRow.description;
+    const data = await runClassificationMutation(
+      `/api/finding-classifications/details/${detailRow.id}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ description: detail }),
+      },
+      selectedFindingClassification.category,
+    );
+    if (!data) return;
+
+    setEditingFindingDetailIndex(null);
+    setEditFindingDetailValue('');
+    showToast(
+      'success',
+      'Finding detail updated',
+      previousDetail === detail ? 'The finding detail was saved.' : 'The finding detail wording was updated.'
+    );
+  };
+
+  const handleDeleteFindingDetail = (index: number) => {
+    if (!selectedFindingClassification || classificationSaving) return;
+    const detailRow = selectedFindingClassification.detailRows[index];
+    if (!detailRow) return;
+    const detail = detailRow.description;
+
+    const historicalCount = records.filter(
+      (record) =>
+        String(record.category || '').trim() === selectedFindingClassification.category &&
+        String(record.detailsFindings || '').trim() === detail
+    ).length;
+
+    requestConfirmation(
+      {
+        title: 'Remove finding detail?',
+        message: historicalCount > 0
+          ? `This detail will be deactivated for future ${selectedFindingClassification.category} selections. ${historicalCount} historical record${historicalCount === 1 ? '' : 's'} will keep the stored wording.`
+          : `This detail will be deactivated for future ${selectedFindingClassification.category} selections.`,
+        confirmLabel: 'Remove detail',
+        cancelLabel: 'Keep detail',
+        tone: 'danger',
+      },
+      async () => {
+        const data = await runClassificationMutation(
+          `/api/finding-classifications/details/${detailRow.id}`,
+          { method: 'DELETE' },
+          selectedFindingClassification.category,
+        );
+        if (!data) return;
+        setEditingFindingDetailIndex(null);
+        setEditFindingDetailValue('');
+        showToast('success', 'Finding detail removed', `Removed from ${selectedFindingClassification.category}.`);
       },
     );
   };
@@ -1944,15 +2265,17 @@ export default function App() {
 
   const categoryOptionsForForm = useMemo(() => {
     const current = String(newAudit.category || '').trim();
-    return current && !CATEGORIES.includes(current) ? [current, ...CATEGORIES] : CATEGORIES;
-  }, [newAudit.category]);
+    return current && !configuredCategories.includes(current)
+      ? [current, ...configuredCategories]
+      : configuredCategories;
+  }, [newAudit.category, configuredCategories]);
 
   const findingDetailOptionsForForm = useMemo(() => {
     const category = String(newAudit.category || '').trim();
     const currentDetail = String(newAudit.detailsFindings || '').trim();
-    const mapped = FINDING_DETAILS_BY_CATEGORY[category] || [];
+    const mapped = configuredFindingDetailsByCategory[category] || [];
     return currentDetail && !mapped.includes(currentDetail) ? [currentDetail, ...mapped] : mapped;
-  }, [newAudit.category, newAudit.detailsFindings]);
+  }, [newAudit.category, newAudit.detailsFindings, configuredFindingDetailsByCategory]);
 
   // Keep the stored WW when an existing record is opened. Recalculate WW only
   // when the user deliberately changes the audit date, so View and Edit never
@@ -1970,8 +2293,8 @@ export default function App() {
     setNewAudit(prev => ({
       ...prev,
       category: cat,
-      groupFinding: CATEGORY_GROUP_MAPPING[cat] || '',
-      detailsFindings: '',
+      groupFinding: configuredCategoryGroupMapping[cat] || (cat === String(prev.category || '') ? String(prev.groupFinding || '') : ''),
+      detailsFindings: cat === String(prev.category || '') ? prev.detailsFindings : '',
     }));
     clearAuditFieldError('category');
     clearAuditFieldError('detailsFindings');
@@ -2230,7 +2553,7 @@ export default function App() {
 
     const payload = {
       ...newAudit,
-      groupFinding: CATEGORY_GROUP_MAPPING[newAudit.category || ''] || '',
+      groupFinding: configuredCategoryGroupMapping[newAudit.category || ''] || newAudit.groupFinding || '',
       // Date changes already recalculate WW. Keeping the current WW here avoids
       // silently changing a stored historical WW when an existing record is edited.
       ww: newAudit.ww || (newAudit.auditDate ? calculateWW(newAudit.auditDate) : ''),
@@ -2510,7 +2833,7 @@ export default function App() {
           department: row.department || DEPARTMENTS[0],
           platform: row.platform || PLATFORMS[0],
           areaStation: row.areaStation || '',
-          groupFinding: row.groupFinding || (row.category ? CATEGORY_GROUP_MAPPING[row.category] || '' : ''),
+          groupFinding: row.groupFinding || (row.category ? configuredCategoryGroupMapping[row.category] || '' : ''),
           category: row.category || '',
           detailsFindings: row.detailsFindings || '',
 
@@ -4974,7 +5297,7 @@ export default function App() {
                     <p className="mt-1.5 max-w-2xl text-xs md:text-sm leading-6 text-slate-500">
                       {view === 'access-audit'
                         ? 'Manage employee access, review accountable system activity and recover accidentally deleted findings.'
-                        : 'Manage the IPQC auditor directory and Platform → MQE ownership rules used across finding records.'}
+                        : 'Manage auditors, finding classifications and Platform → MQE ownership rules used across IPQC records.'}
                     </p>
                   </div>
 
@@ -4987,13 +5310,13 @@ export default function App() {
                     ) : (
                       <span
                         className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[10px] font-black uppercase tracking-widest transition-colors ${
-                          settingsLoading || savingSettings
+                          settingsLoading || savingSettings || classificationSaving
                             ? 'border-amber-200 bg-amber-50 text-amber-700'
                             : 'border-emerald-200 bg-emerald-50 text-emerald-700'
                         }`}
                       >
-                        <span className={`h-1.5 w-1.5 rounded-full ${settingsLoading || savingSettings ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`} />
-                        {settingsLoading ? 'Loading settings' : (savingSettings ? 'Saving changes' : 'Settings synced')}
+                        <span className={`h-1.5 w-1.5 rounded-full ${settingsLoading || savingSettings || classificationSaving ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`} />
+                        {settingsLoading ? 'Loading settings' : ((savingSettings || classificationSaving) ? 'Saving changes' : 'Settings synced')}
                       </span>
                     )}
                   </div>
@@ -5091,11 +5414,11 @@ export default function App() {
                     <div className="rounded-xl border border-slate-200 bg-white px-4 py-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
                       <div className="flex items-center justify-between gap-3">
                         <div>
-                          <p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">Unassigned</p>
-                          <p className="mt-1 text-xl font-black tabular-nums text-slate-900">{platformsList.filter(platform => !mqeMappings[platform]?.trim()).length}</p>
+                          <p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">Categories</p>
+                          <p className="mt-1 text-xl font-black tabular-nums text-slate-900">{findingClassifications.length}</p>
                         </div>
-                        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
-                          <AlertCircle size={17} />
+                        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-50 text-brand-orange">
+                          <ClipboardCheck size={17} />
                         </div>
                       </div>
                     </div>
@@ -5803,6 +6126,333 @@ export default function App() {
                         </tbody>
                       </table>
                     </div>
+                  </div>
+                </section>
+
+                {/* Finding classification management */}
+                <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_8px_30px_rgba(15,23,42,0.04)]">
+                  <div className="border-b border-slate-100 px-5 py-4 md:px-6">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                      <div className="flex items-start gap-3">
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-orange-50 text-brand-orange ring-1 ring-inset ring-orange-100">
+                          <ClipboardCheck size={17} />
+                        </div>
+                        <div>
+                          <h3 className="text-sm font-black text-slate-900">Finding Classification</h3>
+                          <p className="mt-0.5 max-w-3xl text-[10px] font-medium leading-4 text-slate-400">
+                            Manage database-backed Category → Group Finding → Finding Details used in the Add / Edit Finding form. Removing an item deactivates it for future use without rewriting historical records.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[9px] font-black uppercase tracking-wider text-slate-500">
+                          {findingClassifications.length} categories
+                        </span>
+                        <span className="rounded-full bg-orange-50 px-2.5 py-1 text-[9px] font-black uppercase tracking-wider text-orange-700">
+                          {findingClassifications.reduce((total, item) => total + item.details.length, 0)} details
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-[minmax(300px,0.85fr)_minmax(0,1.35fr)]">
+                    {/* Category manager */}
+                    <div className="border-b border-slate-100 lg:border-b-0 lg:border-r">
+                      <div className="border-b border-slate-100 bg-slate-50/50 px-5 py-4 md:px-6">
+                        <p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">Add category</p>
+                        <form onSubmit={handleAddFindingCategory} className="mt-3 space-y-2.5">
+                          <input
+                            type="text"
+                            value={newCategoryName}
+                            onChange={(e) => setNewCategoryName(e.target.value)}
+                            placeholder="Category name"
+                            maxLength={150}
+                            className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 outline-none transition-all placeholder:font-medium placeholder:text-slate-400 focus:border-slate-400 focus:ring-4 focus:ring-slate-900/5"
+                          />
+                          <div className="flex gap-2">
+                            <select
+                              value={newCategoryGroup}
+                              disabled={findingGroups.length === 0 || classificationSaving || settingsLoading}
+                              onChange={(e) => setNewCategoryGroup(e.target.value)}
+                              className="h-10 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 outline-none focus:border-slate-400 focus:ring-4 focus:ring-slate-900/5"
+                            >
+                              {findingGroups.map((group) => (
+                                <option key={group.id} value={group.name}>{group.name}</option>
+                              ))}
+                            </select>
+                            <button
+                              type="submit"
+                              disabled={!newCategoryName.trim() || !newCategoryGroup || classificationSaving || settingsLoading}
+                              className="inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-brand-orange px-4 text-[10px] font-black uppercase tracking-wider text-white shadow-sm transition-all hover:brightness-105 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              <Plus size={14} />
+                              Add
+                            </button>
+                          </div>
+                        </form>
+                      </div>
+
+                      <div className="max-h-[520px] overflow-y-auto custom-scrollbar">
+                        {findingClassifications.map((classification) => {
+                          const selected = classification.category === selectedClassificationCategory;
+                          const editing = editingCategoryName === classification.category;
+
+                          return (
+                            <div
+                              key={classification.category}
+                              className={`border-b border-slate-100 px-4 py-3.5 transition-colors md:px-5 ${
+                                selected ? 'bg-orange-50/50' : 'hover:bg-slate-50/70'
+                              }`}
+                            >
+                              {editing ? (
+                                <div className="space-y-2.5">
+                                  <input
+                                    type="text"
+                                    value={editCategoryName}
+                                    onChange={(e) => setEditCategoryName(e.target.value)}
+                                    maxLength={150}
+                                    autoFocus
+                                    className="h-9 w-full rounded-lg border border-brand-orange bg-white px-3 text-xs font-bold text-slate-800 outline-none ring-4 ring-brand-orange/5"
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        handleSaveFindingCategory();
+                                      }
+                                      if (e.key === 'Escape') setEditingCategoryName(null);
+                                    }}
+                                  />
+                                  <div className="flex gap-2">
+                                    <select
+                                      value={editCategoryGroup}
+                                      disabled={findingGroups.length === 0 || classificationSaving}
+                                      onChange={(e) => setEditCategoryGroup(e.target.value)}
+                                      className="h-9 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-[10px] font-bold text-slate-700 outline-none"
+                                    >
+                                      {findingGroups.map((group) => (
+                                        <option key={group.id} value={group.name}>{group.name}</option>
+                                      ))}
+                                    </select>
+                                    <button
+                                      type="button"
+                                      onClick={handleSaveFindingCategory}
+                                      disabled={!editCategoryName.trim() || classificationSaving}
+                                      className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600 hover:bg-emerald-100 disabled:opacity-40"
+                                      title="Save category"
+                                      aria-label={`Save ${classification.category}`}
+                                    >
+                                      <CheckCircle2 size={15} />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setEditingCategoryName(null)}
+                                      className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-slate-500 hover:bg-slate-200"
+                                      title="Cancel editing"
+                                      aria-label="Cancel editing category"
+                                    >
+                                      <X size={15} />
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="flex items-center gap-3">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedClassificationCategory(classification.category);
+                                      setEditingFindingDetailIndex(null);
+                                      setNewFindingDetail('');
+                                    }}
+                                    className="min-w-0 flex-1 text-left"
+                                  >
+                                    <div className="flex items-center gap-2">
+                                      <p className={`truncate text-xs font-black ${selected ? 'text-slate-900' : 'text-slate-700'}`}>
+                                        {classification.category}
+                                      </p>
+                                      <span className="shrink-0 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-slate-500">
+                                        {classification.groupFinding}
+                                      </span>
+                                    </div>
+                                    <p className="mt-1 text-[9px] font-semibold text-slate-400">
+                                      {classification.details.length} finding detail{classification.details.length === 1 ? '' : 's'}
+                                    </p>
+                                  </button>
+                                  <div className="flex shrink-0 items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedClassificationCategory(classification.category);
+                                        beginEditFindingCategory(classification);
+                                      }}
+                                      className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-white hover:text-slate-700 hover:shadow-sm"
+                                      title="Edit category"
+                                      aria-label={`Edit ${classification.category}`}
+                                    >
+                                      <Pencil size={13} />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteFindingCategory(classification.category)}
+                                      disabled={classificationSaving}
+                                      className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40"
+                                      title="Remove category"
+                                      aria-label={`Remove ${classification.category}`}
+                                    >
+                                      <Trash2 size={13} />
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Finding-detail manager */}
+                    <div className="min-w-0">
+                      {selectedFindingClassification ? (
+                        <>
+                          <div className="border-b border-slate-100 px-5 py-4 md:px-6">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                              <div className="min-w-0">
+                                <p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">Selected category</p>
+                                <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                                  <h4 className="text-sm font-black text-slate-900">{selectedFindingClassification.category}</h4>
+                                  <span className="rounded-full border border-blue-100 bg-blue-50 px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-blue-700">
+                                    Group: {selectedFindingClassification.groupFinding}
+                                  </span>
+                                </div>
+                              </div>
+                              <span className="text-[9px] font-bold text-slate-400">
+                                Used for new finding entry
+                              </span>
+                            </div>
+
+                            <form onSubmit={handleAddFindingDetail} className="mt-4 flex gap-2">
+                              <input
+                                type="text"
+                                value={newFindingDetail}
+                                onChange={(e) => setNewFindingDetail(e.target.value)}
+                                placeholder={`Add finding detail for ${selectedFindingClassification.category}`}
+                                maxLength={1000}
+                                className="h-10 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 outline-none transition-all placeholder:font-medium placeholder:text-slate-400 focus:border-slate-400 focus:ring-4 focus:ring-slate-900/5"
+                              />
+                              <button
+                                type="submit"
+                                disabled={!newFindingDetail.trim() || classificationSaving || settingsLoading}
+                                className="inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-slate-900 px-4 text-[10px] font-black uppercase tracking-wider text-white transition-all hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                <Plus size={14} />
+                                Add detail
+                              </button>
+                            </form>
+                          </div>
+
+                          <div className="max-h-[520px] overflow-y-auto custom-scrollbar">
+                            {selectedFindingClassification.details.length === 0 ? (
+                              <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
+                                <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
+                                  <AlertCircle size={20} />
+                                </div>
+                                <p className="text-xs font-black text-slate-700">No finding details configured</p>
+                                <p className="mt-1 max-w-sm text-[10px] leading-4 text-slate-400">
+                                  Add at least one finding detail so users can complete this category in the Add Finding form.
+                                </p>
+                              </div>
+                            ) : (
+                              <div className="divide-y divide-slate-100">
+                                {selectedFindingClassification.details.map((detail, index) => (
+                                  <div key={`${selectedFindingClassification.category}-${detail}-${index}`} className="px-5 py-3.5 md:px-6 hover:bg-slate-50/70">
+                                    {editingFindingDetailIndex === index ? (
+                                      <div className="flex items-center gap-2">
+                                        <input
+                                          type="text"
+                                          value={editFindingDetailValue}
+                                          onChange={(e) => setEditFindingDetailValue(e.target.value)}
+                                          maxLength={1000}
+                                          autoFocus
+                                          className="h-9 min-w-0 flex-1 rounded-lg border border-brand-orange bg-white px-3 text-xs font-semibold text-slate-800 outline-none ring-4 ring-brand-orange/5"
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                              e.preventDefault();
+                                              handleSaveFindingDetail(index);
+                                            }
+                                            if (e.key === 'Escape') setEditingFindingDetailIndex(null);
+                                          }}
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() => handleSaveFindingDetail(index)}
+                                          disabled={!editFindingDetailValue.trim() || classificationSaving}
+                                          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600 hover:bg-emerald-100 disabled:opacity-40"
+                                          title="Save finding detail"
+                                          aria-label="Save finding detail"
+                                        >
+                                          <CheckCircle2 size={15} />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setEditingFindingDetailIndex(null);
+                                            setEditFindingDetailValue('');
+                                          }}
+                                          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500 hover:bg-slate-200"
+                                          title="Cancel editing"
+                                          aria-label="Cancel editing finding detail"
+                                        >
+                                          <X size={15} />
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <div className="flex items-start gap-3">
+                                        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-[9px] font-black tabular-nums text-slate-500">
+                                          {String(index + 1).padStart(2, '0')}
+                                        </div>
+                                        <p className="min-w-0 flex-1 text-xs font-semibold leading-5 text-slate-700">{detail}</p>
+                                        <div className="flex shrink-0 items-center gap-1">
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setEditingFindingDetailIndex(index);
+                                              setEditFindingDetailValue(detail);
+                                            }}
+                                            className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-white hover:text-slate-700 hover:shadow-sm"
+                                            title="Edit finding detail"
+                                            aria-label={`Edit ${detail}`}
+                                          >
+                                            <Pencil size={13} />
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleDeleteFindingDetail(index)}
+                                            disabled={classificationSaving}
+                                            className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40"
+                                            title="Remove finding detail"
+                                            aria-label={`Remove ${detail}`}
+                                          >
+                                            <Trash2 size={13} />
+                                          </button>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="flex min-h-[360px] flex-col items-center justify-center px-6 text-center">
+                          <ClipboardCheck size={28} className="text-slate-300" />
+                          <p className="mt-3 text-xs font-black text-slate-700">Select a category</p>
+                          <p className="mt-1 text-[10px] text-slate-400">Choose a category on the left to manage its finding details.</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="border-t border-slate-100 bg-slate-50/60 px-5 py-3 text-[9px] font-medium leading-4 text-slate-400 md:px-6">
+                    Historical findings keep the Category, Group Finding and Finding Details originally saved. Removing or renaming configuration values only changes the choices available for future entry.
                   </div>
                 </section>
 

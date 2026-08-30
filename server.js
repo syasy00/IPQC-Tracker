@@ -1714,79 +1714,108 @@ const sanitizeAiFilters = (filters = {}) => {
 };
 
 // ==========================================
-// App Settings (auditor list & platform-MQE mapping)
-// Stored as a single row so every user sees the same list instead of each
-// browser tab resetting to hardcoded defaults on reload.
+// App Settings (global lists that remain JSON settings)
+// - Auditor directory
+// - Platform -> MQE ownership
+// Finding classifications are intentionally NOT stored here. They use normalized relational tables below.
 // ==========================================
-const ensureSettingsTable = () => {
-  db.query(
-    `CREATE TABLE IF NOT EXISTS app_settings (
+const parseSettingsJson = (value, fallback) => {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return fallback;
+    }
+  }
+  return value;
+};
+
+const ensureSettingsTable = async () => {
+  await queryDb(`
+    CREATE TABLE IF NOT EXISTS app_settings (
       id INT PRIMARY KEY,
       auditors JSON NOT NULL,
       mqe_mappings JSON NOT NULL
-    )`,
-    (err) => {
-      if (err) {
-        console.error('Failed to ensure app_settings table:', err);
-        return;
-      }
-      db.query('SELECT id FROM app_settings WHERE id = 1', (err, rows) => {
-        if (err) return console.error('Failed to check app_settings row:', err);
-        if (rows.length === 0) {
-          db.query(
-            'INSERT INTO app_settings (id, auditors, mqe_mappings) VALUES (1, ?, ?)',
-            [JSON.stringify([]), JSON.stringify({})],
-            (err) => {
-              if (err) console.error('Failed to seed app_settings row:', err);
-            }
-          );
-        }
-      });
-    }
-  );
-};
-ensureSettingsTable();
+    )
+  `);
 
-// API: Get current auditors + platform-MQE mapping.
-// Authenticated users need these lists to populate record-entry dropdowns. Empty arrays/objects mean no admin
-// has saved custom values yet, in which case the frontend falls back to
-// its built-in defaults.
-app.get('/api/settings', authenticateUser, (req, res) => {
-  db.query('SELECT auditors, mqe_mappings FROM app_settings WHERE id = 1', (err, rows) => {
-    if (err) {
-      console.error('Failed to fetch settings:', err);
-      return res.status(500).json({ error: 'Failed to fetch settings' });
-    }
-    if (rows.length === 0) {
-      return res.status(200).json({ auditors: [], mqeMappings: {} });
-    }
-    const row = rows[0];
-    const auditors = typeof row.auditors === 'string' ? JSON.parse(row.auditors) : row.auditors;
-    const mqeMappings = typeof row.mqe_mappings === 'string' ? JSON.parse(row.mqe_mappings) : row.mqe_mappings;
-    res.status(200).json({ auditors, mqeMappings });
-  });
+  const rows = await queryDb('SELECT id FROM app_settings WHERE id = 1 LIMIT 1');
+  if (rows.length === 0) {
+    await queryDb(
+      'INSERT INTO app_settings (id, auditors, mqe_mappings) VALUES (1, ?, ?)',
+      [JSON.stringify([]), JSON.stringify({})]
+    );
+  }
+};
+
+const settingsReady = ensureSettingsTable().catch((err) => {
+  console.error('Failed to initialize app settings:', err);
+  throw err;
 });
 
-// API: Replace auditors + platform-MQE mapping (admin only)
+app.get('/api/settings', authenticateUser, async (req, res) => {
+  try {
+    await settingsReady;
+    const rows = await queryDb('SELECT auditors, mqe_mappings FROM app_settings WHERE id = 1 LIMIT 1');
+    if (rows.length === 0) return res.status(200).json({ auditors: [], mqeMappings: {} });
+
+    const row = rows[0];
+    const auditors = parseSettingsJson(row.auditors, []);
+    const mqeMappings = parseSettingsJson(row.mqe_mappings, {});
+    res.status(200).json({
+      auditors: Array.isArray(auditors) ? auditors : [],
+      mqeMappings: mqeMappings && typeof mqeMappings === 'object' ? mqeMappings : {},
+    });
+  } catch (err) {
+    console.error('Failed to fetch settings:', err);
+    res.status(500).json({ error: 'Failed to fetch settings' });
+  }
+});
+
 app.put('/api/settings', authenticateUser, requireAdmin, async (req, res) => {
   const { auditors, mqeMappings } = req.body || {};
-  if (!Array.isArray(auditors) || typeof mqeMappings !== 'object' || mqeMappings === null) {
+  if (!Array.isArray(auditors) || typeof mqeMappings !== 'object' || mqeMappings === null || Array.isArray(mqeMappings)) {
     return res.status(400).json({ error: 'auditors must be an array and mqeMappings must be an object' });
   }
 
+  const cleanedAuditors = [];
+  const auditorKeys = new Set();
+  for (const raw of auditors) {
+    const name = String(raw || '').trim();
+    if (!name) continue;
+    if (name.length > 150) return res.status(400).json({ error: 'Auditor names must be 150 characters or fewer' });
+    const key = name.toLowerCase();
+    if (auditorKeys.has(key)) return res.status(400).json({ error: `Duplicate auditor: ${name}` });
+    auditorKeys.add(key);
+    cleanedAuditors.push(name);
+  }
+
+  const cleanedMappings = {};
+  for (const [platformRaw, ownerRaw] of Object.entries(mqeMappings)) {
+    const platform = String(platformRaw || '').trim();
+    const owner = String(ownerRaw || '').trim();
+    if (!platform || !owner) continue;
+    if (platform.length > 150 || owner.length > 150) {
+      return res.status(400).json({ error: 'Platform and MQE names must be 150 characters or fewer' });
+    }
+    cleanedMappings[platform] = owner;
+  }
+
   try {
+    await settingsReady;
     const beforeRows = await queryDb('SELECT auditors, mqe_mappings FROM app_settings WHERE id = 1 LIMIT 1');
     const before = beforeRows[0] || { auditors: [], mqe_mappings: {} };
-    const previousAuditors = typeof before.auditors === 'string' ? JSON.parse(before.auditors) : (before.auditors || []);
-    const previousMappings = typeof before.mqe_mappings === 'string' ? JSON.parse(before.mqe_mappings) : (before.mqe_mappings || {});
+    const previousAuditors = parseSettingsJson(before.auditors, []);
+    const previousMappings = parseSettingsJson(before.mqe_mappings, {});
 
     await queryDb(
       'UPDATE app_settings SET auditors = ?, mqe_mappings = ? WHERE id = 1',
-      [JSON.stringify(auditors), JSON.stringify(mqeMappings)]
+      [JSON.stringify(cleanedAuditors), JSON.stringify(cleanedMappings)]
     );
 
-    const auditorsChanged = JSON.stringify(previousAuditors) !== JSON.stringify(auditors);
-    const mappingsChanged = JSON.stringify(previousMappings) !== JSON.stringify(mqeMappings);
+    const auditorsChanged = JSON.stringify(previousAuditors) !== JSON.stringify(cleanedAuditors);
+    const mappingsChanged = JSON.stringify(previousMappings) !== JSON.stringify(cleanedMappings);
     if (auditorsChanged || mappingsChanged) {
       const action = auditorsChanged && mappingsChanged
         ? 'SETTINGS_UPDATED'
@@ -1805,16 +1834,581 @@ app.put('/api/settings', authenticateUser, requireAdmin, async (req, res) => {
         entityId: 'app_settings',
         description,
         metadata: {
-          auditorCount: auditors.length,
-          mappedPlatformCount: Object.values(mqeMappings).filter((value) => String(value || '').trim()).length,
+          auditorCount: cleanedAuditors.length,
+          mappedPlatformCount: Object.values(cleanedMappings).filter((value) => String(value || '').trim()).length,
         },
       });
     }
 
-    res.status(200).json({ auditors, mqeMappings });
+    res.status(200).json({ auditors: cleanedAuditors, mqeMappings: cleanedMappings });
   } catch (err) {
     console.error('Failed to update settings:', err);
     res.status(500).json({ error: 'Failed to update settings' });
+  }
+});
+
+// ==========================================
+// Finding Classification Master Data
+// Normalized relational model:
+// finding_groups -> finding_categories -> finding_details
+// The Add/Edit Finding UI reads these tables at runtime. Historical audit_records keep their stored text values.
+// ==========================================
+const DEFAULT_FINDING_CLASSIFICATION_SEED = [
+  {
+    "category": "6S",
+    "groupFinding": "Method",
+    "details": [
+      "Mix material inside the material bin",
+      "Dustbin located at non-kanban area",
+      "Unnecessary item/material found on the workstation",
+      "Improper storage of Tool/Equipment",
+      "Mixed chemicals stored in the same bin",
+      "No Workstation / Tester Identification",
+      "No label Identification on Equipment / Tools",
+      "Material Scrap Bin without cover",
+      "Dust on workstation/rack/ect",
+      "Trolly not properly inside kanban",
+      "Improper storage of Kit / Bulk Material"
+    ]
+  },
+  {
+    "category": "Calibration",
+    "groupFinding": "Machine",
+    "details": [
+      "Calibration Overdue ESD Monitor",
+      "Calibration Overdue Manual Torque",
+      "Equipment without Calibration Label",
+      "Calibration Overdue Tools / Equipment",
+      "Calibration Overdue Torque Drive",
+      "Calibration Overdue Solder Iron"
+    ]
+  },
+  {
+    "category": "PM",
+    "groupFinding": "Machine",
+    "details": [
+      "Equipment without Preventive Equipment Label",
+      "Preventive Maintenance Overdue"
+    ]
+  },
+  {
+    "category": "Procedural non-compliance",
+    "groupFinding": "Method",
+    "details": [
+      "Setup check list not updated",
+      "Operating the process without OMS/WI displayed",
+      "Not following OMS / WI",
+      "No Set-Up Checklist displayed"
+    ]
+  },
+  {
+    "category": "Docs/WI",
+    "groupFinding": "Method",
+    "details": [
+      "Use Obsolete Visual Standard",
+      "OMS doesn't match current practice",
+      "Incomplete OMS"
+    ]
+  },
+  {
+    "category": "ESD",
+    "groupFinding": "Machine",
+    "details": [
+      "Ionizer turn off",
+      "No Insulative Mat",
+      "Ionizer is not available at the workstation",
+      "ESD mat was not grounded",
+      "No ESD grounding points",
+      "ESD Monitoring not function",
+      "Ionizer Calibration Date Expired"
+    ]
+  },
+  {
+    "category": "Expired Material",
+    "groupFinding": "Material",
+    "details": [
+      "Chemical / Material Overdue"
+    ]
+  },
+  {
+    "category": "Safety Concern",
+    "groupFinding": "Man",
+    "details": [
+      "Improper sitting position",
+      "Water leaking from the tester/machine",
+      "Material Handling & Storage",
+      "Cable wire damage"
+    ]
+  },
+  {
+    "category": "Identification",
+    "groupFinding": "Material",
+    "details": [
+      "IPA without Expiry Date Label",
+      "IPA Label Damage , Torn, Smear",
+      "Material without Expiring Label",
+      "Torque number is smear / missing /damage / torn off",
+      "Missing Label Expiry Date",
+      "Calibration Label damage, Torn on Tools / Equipment"
+    ]
+  },
+  {
+    "category": "Training/Competency",
+    "groupFinding": "Man",
+    "details": [
+      "Assembler operating without certification",
+      "Assembler improper used of jigs / Fixture at Workstation"
+    ]
+  },
+  {
+    "category": "Handling",
+    "groupFinding": "Man",
+    "details": [
+      "Operators handling parts without required gloves or finger cots.",
+      "Material handled without ESD protection.",
+      "Product transferred without using the designated tray/trolley",
+      "Components / Unit placed directly on the floor.",
+      "Product exposed to contamination during handling.",
+      "WIP transported without proper identification"
+    ]
+  }
+];
+const MASTER_FINDING_GROUPS = ['Man', 'Machine', 'Method', 'Material'];
+
+const classificationText = (value, maxLength) => {
+  const text = String(value || '').trim();
+  if (!text) return { ok: false, error: 'A value is required.', value: '' };
+  if (text.length > maxLength) return { ok: false, error: `Must be ${maxLength} characters or fewer.`, value: '' };
+  return { ok: true, value: text };
+};
+
+const detailHash = (description) => crypto
+  .createHash('sha256')
+  .update(String(description || '').trim().toLowerCase(), 'utf8')
+  .digest('hex');
+
+const ensureFindingClassificationSchema = async () => {
+  await queryDb(`
+    CREATE TABLE IF NOT EXISTS finding_groups (
+      id INT NOT NULL AUTO_INCREMENT,
+      name VARCHAR(50) NOT NULL,
+      sort_order INT NOT NULL DEFAULT 0,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_finding_groups_name (name)
+    ) ENGINE=InnoDB
+  `);
+
+  await queryDb(`
+    CREATE TABLE IF NOT EXISTS finding_categories (
+      id INT NOT NULL AUTO_INCREMENT,
+      name VARCHAR(150) NOT NULL,
+      group_id INT NOT NULL,
+      sort_order INT NOT NULL DEFAULT 0,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_finding_categories_name (name),
+      INDEX idx_finding_categories_active_sort (is_active, sort_order, id),
+      INDEX idx_finding_categories_group (group_id),
+      CONSTRAINT fk_finding_categories_group FOREIGN KEY (group_id) REFERENCES finding_groups(id)
+        ON UPDATE RESTRICT ON DELETE RESTRICT
+    ) ENGINE=InnoDB
+  `);
+
+  await queryDb(`
+    CREATE TABLE IF NOT EXISTS finding_details (
+      id INT NOT NULL AUTO_INCREMENT,
+      category_id INT NOT NULL,
+      description VARCHAR(1000) NOT NULL,
+      description_hash CHAR(64) NOT NULL,
+      sort_order INT NOT NULL DEFAULT 0,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_finding_detail_hash (category_id, description_hash),
+      INDEX idx_finding_details_active_sort (category_id, is_active, sort_order, id),
+      CONSTRAINT fk_finding_details_category FOREIGN KEY (category_id) REFERENCES finding_categories(id)
+        ON UPDATE RESTRICT ON DELETE RESTRICT
+    ) ENGINE=InnoDB
+  `);
+
+  for (let index = 0; index < MASTER_FINDING_GROUPS.length; index++) {
+    const name = MASTER_FINDING_GROUPS[index];
+    await queryDb(
+      `INSERT INTO finding_groups (name, sort_order, is_active)
+       VALUES (?, ?, TRUE)
+       ON DUPLICATE KEY UPDATE sort_order = VALUES(sort_order), is_active = TRUE`,
+      [name, index + 1]
+    );
+  }
+
+  const categoryCountRows = await queryDb('SELECT COUNT(*) AS count FROM finding_categories');
+  const categoryCount = Number(categoryCountRows[0]?.count || 0);
+  if (categoryCount > 0) return;
+
+  // If an earlier JSON-based classification build was tested, migrate that data once.
+  let seed = DEFAULT_FINDING_CLASSIFICATION_SEED;
+  try {
+    const legacyColumn = await queryDb(`SHOW COLUMNS FROM app_settings LIKE 'finding_classifications'`);
+    if (legacyColumn.length > 0) {
+      const legacyRows = await queryDb('SELECT finding_classifications FROM app_settings WHERE id = 1 LIMIT 1');
+      const legacy = parseSettingsJson(legacyRows[0]?.finding_classifications, []);
+      if (Array.isArray(legacy) && legacy.length > 0) seed = legacy;
+    }
+  } catch (migrationErr) {
+    console.warn('Finding-classification JSON migration skipped:', migrationErr?.message || migrationErr);
+  }
+
+  const groupRows = await queryDb('SELECT id, name FROM finding_groups WHERE is_active = TRUE');
+  const groupIds = Object.fromEntries(groupRows.map((row) => [String(row.name), Number(row.id)]));
+
+  for (let categoryIndex = 0; categoryIndex < seed.length; categoryIndex++) {
+    const rawCategory = seed[categoryIndex] || {};
+    const name = String(rawCategory.category || '').trim();
+    const groupFinding = String(rawCategory.groupFinding || '').trim();
+    if (!name || !groupIds[groupFinding]) continue;
+
+    await queryDb(
+      `INSERT INTO finding_categories (name, group_id, sort_order, is_active)
+       VALUES (?, ?, ?, TRUE)
+       ON DUPLICATE KEY UPDATE group_id = VALUES(group_id), sort_order = VALUES(sort_order), is_active = TRUE`,
+      [name, groupIds[groupFinding], categoryIndex + 1]
+    );
+    const categoryRows = await queryDb('SELECT id FROM finding_categories WHERE name = ? LIMIT 1', [name]);
+    const categoryId = Number(categoryRows[0]?.id || 0);
+    if (!categoryId) continue;
+
+    const details = Array.isArray(rawCategory.details) ? rawCategory.details : [];
+    for (let detailIndex = 0; detailIndex < details.length; detailIndex++) {
+      const description = String(details[detailIndex] || '').trim();
+      if (!description) continue;
+      await queryDb(
+        `INSERT INTO finding_details (category_id, description, description_hash, sort_order, is_active)
+         VALUES (?, ?, ?, ?, TRUE)
+         ON DUPLICATE KEY UPDATE description = VALUES(description), sort_order = VALUES(sort_order), is_active = TRUE`,
+        [categoryId, description, detailHash(description), detailIndex + 1]
+      );
+    }
+  }
+
+  console.log(`Seeded ${seed.length} finding categories into relational master-data tables.`);
+};
+
+const classificationReady = settingsReady.then(() => ensureFindingClassificationSchema()).catch((err) => {
+  console.error('Failed to initialize finding classification master data:', err);
+  throw err;
+});
+
+const getFindingClassificationPayload = async () => {
+  await classificationReady;
+  const groups = await queryDb(`
+    SELECT id, name, sort_order AS sortOrder
+    FROM finding_groups
+    WHERE is_active = TRUE
+    ORDER BY sort_order ASC, id ASC
+  `);
+  const rows = await queryDb(`
+    SELECT
+      c.id AS categoryId,
+      c.name AS category,
+      c.group_id AS groupId,
+      c.sort_order AS categorySortOrder,
+      g.name AS groupFinding,
+      d.id AS detailId,
+      d.description AS detailDescription,
+      d.sort_order AS detailSortOrder
+    FROM finding_categories c
+    INNER JOIN finding_groups g ON g.id = c.group_id AND g.is_active = TRUE
+    LEFT JOIN finding_details d ON d.category_id = c.id AND d.is_active = TRUE
+    WHERE c.is_active = TRUE
+    ORDER BY c.sort_order ASC, c.id ASC, d.sort_order ASC, d.id ASC
+  `);
+
+  const byCategory = new Map();
+  for (const row of rows) {
+    const categoryId = Number(row.categoryId);
+    if (!byCategory.has(categoryId)) {
+      byCategory.set(categoryId, {
+        id: categoryId,
+        category: String(row.category || ''),
+        groupId: Number(row.groupId),
+        groupFinding: String(row.groupFinding || ''),
+        sortOrder: Number(row.categorySortOrder || 0),
+        details: [],
+      });
+    }
+    if (row.detailId) {
+      byCategory.get(categoryId).details.push({
+        id: Number(row.detailId),
+        description: String(row.detailDescription || ''),
+        sortOrder: Number(row.detailSortOrder || 0),
+      });
+    }
+  }
+
+  return {
+    groups: groups.map((group) => ({
+      id: Number(group.id),
+      name: String(group.name || ''),
+      sortOrder: Number(group.sortOrder || 0),
+    })),
+    classifications: [...byCategory.values()],
+  };
+};
+
+app.get('/api/finding-classifications', authenticateUser, async (req, res) => {
+  try {
+    res.status(200).json(await getFindingClassificationPayload());
+  } catch (err) {
+    console.error('Failed to fetch finding classifications:', err);
+    res.status(500).json({ error: 'Failed to fetch finding classifications' });
+  }
+});
+
+app.post('/api/finding-classifications/categories', authenticateUser, requireAdmin, async (req, res) => {
+  const nameResult = classificationText(req.body?.name, 150);
+  const groupFinding = String(req.body?.groupFinding || '').trim();
+  if (!nameResult.ok) return res.status(400).json({ error: nameResult.error });
+
+  try {
+    await classificationReady;
+    const groupRows = await queryDb(
+      'SELECT id, name FROM finding_groups WHERE name = ? AND is_active = TRUE LIMIT 1',
+      [groupFinding]
+    );
+    if (groupRows.length === 0) return res.status(400).json({ error: 'Choose a valid Group Finding.' });
+
+    const existingRows = await queryDb('SELECT id, is_active FROM finding_categories WHERE name = ? LIMIT 1', [nameResult.value]);
+    let categoryId;
+    let reactivated = false;
+    if (existingRows.length > 0) {
+      if (Boolean(existingRows[0].is_active)) return res.status(409).json({ error: 'This category already exists.' });
+      categoryId = Number(existingRows[0].id);
+      const maxRows = await queryDb('SELECT COALESCE(MAX(sort_order), 0) AS maxSort FROM finding_categories WHERE is_active = TRUE');
+      await queryDb(
+        'UPDATE finding_categories SET group_id = ?, is_active = TRUE, sort_order = ? WHERE id = ?',
+        [Number(groupRows[0].id), Number(maxRows[0]?.maxSort || 0) + 1, categoryId]
+      );
+      reactivated = true;
+    } else {
+      const maxRows = await queryDb('SELECT COALESCE(MAX(sort_order), 0) AS maxSort FROM finding_categories WHERE is_active = TRUE');
+      const result = await queryDb(
+        'INSERT INTO finding_categories (name, group_id, sort_order, is_active) VALUES (?, ?, ?, TRUE)',
+        [nameResult.value, Number(groupRows[0].id), Number(maxRows[0]?.maxSort || 0) + 1]
+      );
+      categoryId = Number(result.insertId);
+    }
+
+    await logAuditEvent(req, {
+      action: 'FINDING_CATEGORY_CREATED',
+      entityType: 'finding_category',
+      entityId: String(categoryId),
+      description: reactivated ? `Reactivated finding category ${nameResult.value}` : `Created finding category ${nameResult.value}`,
+      metadata: { category: nameResult.value, groupFinding, reactivated },
+    });
+    res.status(reactivated ? 200 : 201).json({ id: categoryId, reactivated });
+  } catch (err) {
+    if (err?.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'This category already exists.' });
+    console.error('Failed to create finding category:', err);
+    res.status(500).json({ error: 'Failed to create finding category' });
+  }
+});
+
+app.put('/api/finding-classifications/categories/:id', authenticateUser, requireAdmin, async (req, res) => {
+  const categoryId = parsePositiveRecordId(req.params.id);
+  if (!categoryId) return res.status(400).json({ error: 'Invalid category id.' });
+  const nameResult = classificationText(req.body?.name, 150);
+  const groupFinding = String(req.body?.groupFinding || '').trim();
+  if (!nameResult.ok) return res.status(400).json({ error: nameResult.error });
+
+  try {
+    await classificationReady;
+    const beforeRows = await queryDb(
+      `SELECT c.id, c.name, c.is_active, g.name AS groupFinding
+       FROM finding_categories c INNER JOIN finding_groups g ON g.id = c.group_id
+       WHERE c.id = ? LIMIT 1`,
+      [categoryId]
+    );
+    if (beforeRows.length === 0 || !Boolean(beforeRows[0].is_active)) return res.status(404).json({ error: 'Finding category not found.' });
+
+    const groupRows = await queryDb('SELECT id FROM finding_groups WHERE name = ? AND is_active = TRUE LIMIT 1', [groupFinding]);
+    if (groupRows.length === 0) return res.status(400).json({ error: 'Choose a valid Group Finding.' });
+
+    await queryDb('UPDATE finding_categories SET name = ?, group_id = ? WHERE id = ?', [nameResult.value, Number(groupRows[0].id), categoryId]);
+    await logAuditEvent(req, {
+      action: 'FINDING_CATEGORY_UPDATED',
+      entityType: 'finding_category',
+      entityId: String(categoryId),
+      description: `Updated finding category ${beforeRows[0].name}`,
+      metadata: {
+        before: { name: beforeRows[0].name, groupFinding: beforeRows[0].groupFinding },
+        after: { name: nameResult.value, groupFinding },
+      },
+    });
+    res.status(200).json({ id: categoryId });
+  } catch (err) {
+    if (err?.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Another category already uses this name.' });
+    console.error('Failed to update finding category:', err);
+    res.status(500).json({ error: 'Failed to update finding category' });
+  }
+});
+
+app.delete('/api/finding-classifications/categories/:id', authenticateUser, requireAdmin, async (req, res) => {
+  const categoryId = parsePositiveRecordId(req.params.id);
+  if (!categoryId) return res.status(400).json({ error: 'Invalid category id.' });
+
+  try {
+    await classificationReady;
+    const rows = await queryDb('SELECT id, name, is_active FROM finding_categories WHERE id = ? LIMIT 1', [categoryId]);
+    if (rows.length === 0 || !Boolean(rows[0].is_active)) return res.status(404).json({ error: 'Finding category not found.' });
+
+    const activeCountRows = await queryDb('SELECT COUNT(*) AS count FROM finding_categories WHERE is_active = TRUE');
+    if (Number(activeCountRows[0]?.count || 0) <= 1) {
+      return res.status(409).json({ error: 'At least one active finding category must remain.' });
+    }
+
+    await queryDb('UPDATE finding_categories SET is_active = FALSE WHERE id = ?', [categoryId]);
+    await logAuditEvent(req, {
+      action: 'FINDING_CATEGORY_DEACTIVATED',
+      entityType: 'finding_category',
+      entityId: String(categoryId),
+      description: `Removed finding category ${rows[0].name} from future selection`,
+      metadata: { category: rows[0].name, softDelete: true },
+    });
+    res.status(200).json({ success: true });
+  } catch (err) {
+    console.error('Failed to deactivate finding category:', err);
+    res.status(500).json({ error: 'Failed to remove finding category' });
+  }
+});
+
+app.post('/api/finding-classifications/categories/:categoryId/details', authenticateUser, requireAdmin, async (req, res) => {
+  const categoryId = parsePositiveRecordId(req.params.categoryId);
+  if (!categoryId) return res.status(400).json({ error: 'Invalid category id.' });
+  const descriptionResult = classificationText(req.body?.description, 1000);
+  if (!descriptionResult.ok) return res.status(400).json({ error: descriptionResult.error });
+
+  try {
+    await classificationReady;
+    const categoryRows = await queryDb('SELECT id, name FROM finding_categories WHERE id = ? AND is_active = TRUE LIMIT 1', [categoryId]);
+    if (categoryRows.length === 0) return res.status(404).json({ error: 'Finding category not found.' });
+
+    const hash = detailHash(descriptionResult.value);
+    const existingRows = await queryDb(
+      'SELECT id, is_active FROM finding_details WHERE category_id = ? AND description_hash = ? LIMIT 1',
+      [categoryId, hash]
+    );
+    let detailId;
+    let reactivated = false;
+    if (existingRows.length > 0) {
+      if (Boolean(existingRows[0].is_active)) return res.status(409).json({ error: 'This finding detail already exists for the selected category.' });
+      detailId = Number(existingRows[0].id);
+      const maxRows = await queryDb('SELECT COALESCE(MAX(sort_order), 0) AS maxSort FROM finding_details WHERE category_id = ? AND is_active = TRUE', [categoryId]);
+      await queryDb(
+        'UPDATE finding_details SET description = ?, description_hash = ?, is_active = TRUE, sort_order = ? WHERE id = ?',
+        [descriptionResult.value, hash, Number(maxRows[0]?.maxSort || 0) + 1, detailId]
+      );
+      reactivated = true;
+    } else {
+      const maxRows = await queryDb('SELECT COALESCE(MAX(sort_order), 0) AS maxSort FROM finding_details WHERE category_id = ? AND is_active = TRUE', [categoryId]);
+      const result = await queryDb(
+        'INSERT INTO finding_details (category_id, description, description_hash, sort_order, is_active) VALUES (?, ?, ?, ?, TRUE)',
+        [categoryId, descriptionResult.value, hash, Number(maxRows[0]?.maxSort || 0) + 1]
+      );
+      detailId = Number(result.insertId);
+    }
+
+    await logAuditEvent(req, {
+      action: 'FINDING_DETAIL_CREATED',
+      entityType: 'finding_detail',
+      entityId: String(detailId),
+      description: reactivated ? `Reactivated finding detail under ${categoryRows[0].name}` : `Created finding detail under ${categoryRows[0].name}`,
+      metadata: { categoryId, category: categoryRows[0].name, description: descriptionResult.value, reactivated },
+    });
+    res.status(reactivated ? 200 : 201).json({ id: detailId, reactivated });
+  } catch (err) {
+    if (err?.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'This finding detail already exists for the selected category.' });
+    console.error('Failed to create finding detail:', err);
+    res.status(500).json({ error: 'Failed to create finding detail' });
+  }
+});
+
+app.put('/api/finding-classifications/details/:id', authenticateUser, requireAdmin, async (req, res) => {
+  const detailId = parsePositiveRecordId(req.params.id);
+  if (!detailId) return res.status(400).json({ error: 'Invalid finding-detail id.' });
+  const descriptionResult = classificationText(req.body?.description, 1000);
+  if (!descriptionResult.ok) return res.status(400).json({ error: descriptionResult.error });
+
+  try {
+    await classificationReady;
+    const beforeRows = await queryDb(
+      `SELECT d.id, d.category_id AS categoryId, d.description, d.is_active, c.name AS category
+       FROM finding_details d INNER JOIN finding_categories c ON c.id = d.category_id
+       WHERE d.id = ? LIMIT 1`,
+      [detailId]
+    );
+    if (beforeRows.length === 0 || !Boolean(beforeRows[0].is_active)) return res.status(404).json({ error: 'Finding detail not found.' });
+
+    await queryDb(
+      'UPDATE finding_details SET description = ?, description_hash = ? WHERE id = ?',
+      [descriptionResult.value, detailHash(descriptionResult.value), detailId]
+    );
+    await logAuditEvent(req, {
+      action: 'FINDING_DETAIL_UPDATED',
+      entityType: 'finding_detail',
+      entityId: String(detailId),
+      description: `Updated finding detail under ${beforeRows[0].category}`,
+      metadata: {
+        categoryId: Number(beforeRows[0].categoryId),
+        category: beforeRows[0].category,
+        before: beforeRows[0].description,
+        after: descriptionResult.value,
+      },
+    });
+    res.status(200).json({ id: detailId });
+  } catch (err) {
+    if (err?.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'This finding detail already exists for the selected category.' });
+    console.error('Failed to update finding detail:', err);
+    res.status(500).json({ error: 'Failed to update finding detail' });
+  }
+});
+
+app.delete('/api/finding-classifications/details/:id', authenticateUser, requireAdmin, async (req, res) => {
+  const detailId = parsePositiveRecordId(req.params.id);
+  if (!detailId) return res.status(400).json({ error: 'Invalid finding-detail id.' });
+
+  try {
+    await classificationReady;
+    const rows = await queryDb(
+      `SELECT d.id, d.description, d.is_active, c.id AS categoryId, c.name AS category
+       FROM finding_details d INNER JOIN finding_categories c ON c.id = d.category_id
+       WHERE d.id = ? LIMIT 1`,
+      [detailId]
+    );
+    if (rows.length === 0 || !Boolean(rows[0].is_active)) return res.status(404).json({ error: 'Finding detail not found.' });
+
+    await queryDb('UPDATE finding_details SET is_active = FALSE WHERE id = ?', [detailId]);
+    await logAuditEvent(req, {
+      action: 'FINDING_DETAIL_DEACTIVATED',
+      entityType: 'finding_detail',
+      entityId: String(detailId),
+      description: `Removed finding detail from ${rows[0].category} future selection`,
+      metadata: {
+        categoryId: Number(rows[0].categoryId),
+        category: rows[0].category,
+        description: rows[0].description,
+        softDelete: true,
+      },
+    });
+    res.status(200).json({ success: true });
+  } catch (err) {
+    console.error('Failed to deactivate finding detail:', err);
+    res.status(500).json({ error: 'Failed to remove finding detail' });
   }
 });
 

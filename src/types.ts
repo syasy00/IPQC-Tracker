@@ -1,5 +1,5 @@
 export type Department = 'Production Team' | 'Test Team' | 'IE Team' | 'Quality Team' | 'Calibration Team' | 'PE Team';
-export type Category = '6S' | 'Calibration' | 'PM' | 'Procedural non-compliance' | 'Docs/WI' | 'ESD' | 'Expired Material' | 'Safety Concern' | 'Identification' | 'Training/Competency' | 'Handling';
+export type Category = string;
 
 export interface AuditRecord {
   id: string;
