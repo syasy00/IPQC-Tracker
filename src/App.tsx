@@ -266,6 +266,31 @@ const normalizeRecord = (raw: any): IPQCAuditRecord => ({
 const getFindingStatus = (record: Partial<IPQCAuditRecord>): FindingStatus | '' =>
   normalizeFindingStatus(record.status);
 
+// Excel re-import protection. Finding No is the strongest identity when the
+// workbook has it. Older workbooks without No fall back to stable finding fields
+// so re-importing a previous workbook only appends genuinely new rows.
+const normalizeImportKeyPart = (value: unknown): string =>
+  String(value ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+const getImportDeduplicationKey = (record: Partial<IPQCAuditRecord>): string => {
+  const noValue = Number((record as any)?.no);
+  if (Number.isInteger(noValue) && noValue >= 0) return `no:${noValue}`;
+
+  return `content:${[
+    record.auditDate,
+    record.shift,
+    record.auditors,
+    record.personOnJob,
+    record.department,
+    record.platform,
+    record.areaStation,
+    record.groupFinding,
+    record.category,
+    record.detailsFindings,
+    record.icarNum || 'N/A',
+  ].map(normalizeImportKeyPart).join('|')}`;
+};
+
 const getRecordAgeDays = (auditDate?: string): number => {
   if (!auditDate) return 0;
   const date = new Date(`${auditDate}T00:00:00`);
@@ -537,8 +562,6 @@ export default function App() {
   const [records, setRecords] = useState<IPQCAuditRecord[]>([]);
   const [recordsLoading, setRecordsLoading] = useState(false);
   const [settingsLoading, setSettingsLoading] = useState(false);
-  const [powerBiUrl, setPowerBiUrl] = useState<string>(''); 
-  const [dashboardMode, setDashboardMode] = useState<'system' | 'powerbi'>('system');
   // Shared authentication for both system roles: user and admin.
   // The JWT is server-issued; the role is read from the database-backed user record.
   const [authToken, setAuthToken] = useState<string | null>(() => localStorage.getItem(AUTH_TOKEN_STORAGE_KEY));
@@ -2894,7 +2917,11 @@ export default function App() {
       }
 
       let successCount = 0;
+      let skippedCount = 0;
       let failedCount = 0;
+      const existingKeys = new Set(records.map((record) => getImportDeduplicationKey(record)));
+      const workbookKeys = new Set<string>();
+
       setImportProgress({ current: 0, total: importedRows.length });
 
       for (let index = 0; index < importedRows.length; index++) {
@@ -2903,7 +2930,7 @@ export default function App() {
           (row as any).status ?? (row as any).Status ?? (row as any).findingStatus ?? (row as any).finding_status
         );
 
-        const payload = {
+        const payload: Partial<IPQCAuditRecord> = {
           no: row.no,
           auditDate: row.auditDate || new Date().toISOString().split('T')[0],
           ww: row.ww || calculateWW(row.auditDate || new Date().toISOString().split('T')[0]),
@@ -2916,14 +2943,23 @@ export default function App() {
           groupFinding: row.groupFinding || (row.category ? configuredCategoryGroupMapping[row.category] || '' : ''),
           category: row.category || '',
           detailsFindings: row.detailsFindings || '',
-
           remark: row.remark || '',
           status: importedStatus || 'Open',
           icarNum: row.icarNum || 'N/A',
           icarStatus: row.icarStatus || 'Locked',
           mqeEngineer: row.mqeEngineer || getMqeForPlatform(row.platform || PLATFORMS[0]),
-          picture: row.picture || null
+          // Embedded Excel images are returned by importFromExcel as data URLs.
+          // The backend stores these in MySQL so the evidence survives redeploys.
+          picture: row.picture || undefined,
         };
+
+        const importKey = getImportDeduplicationKey(payload);
+        if (existingKeys.has(importKey) || workbookKeys.has(importKey)) {
+          skippedCount++;
+          setImportProgress({ current: index + 1, total: importedRows.length });
+          continue;
+        }
+        workbookKeys.add(importKey);
 
         const response = await authFetch(`${API_BASE_URL}/api/records`, {
           method: 'POST',
@@ -2933,9 +2969,20 @@ export default function App() {
           },
           body: JSON.stringify(payload)
         });
+        const responseData = await response.json().catch(() => ({}));
 
-        if (response.ok) successCount++;
-        else failedCount++;
+        if (response.ok) {
+          successCount++;
+          existingKeys.add(importKey);
+        } else if (response.status === 409 && responseData?.code === 'DUPLICATE_IMPORT') {
+          // Backend performs the same protection so a stale browser/session or a
+          // concurrent import cannot create another copy of an existing finding.
+          skippedCount++;
+          existingKeys.add(importKey);
+        } else {
+          failedCount++;
+          console.warn(`Excel import row ${index + 2} failed:`, responseData?.error || response.statusText);
+        }
 
         setImportProgress({ current: index + 1, total: importedRows.length });
       }
@@ -2947,9 +2994,25 @@ export default function App() {
       }
 
       if (failedCount > 0) {
-        showToast('warning', 'Import partially completed', `${successCount} saved, ${failedCount} failed. Review the failed rows before retrying.`, 6500);
+        showToast(
+          'warning',
+          'Import partially completed',
+          `${successCount} new saved, ${skippedCount} duplicate${skippedCount === 1 ? '' : 's'} skipped, ${failedCount} failed.`,
+          7000
+        );
+      } else if (successCount === 0 && skippedCount > 0) {
+        showToast(
+          'info',
+          'No new records found',
+          `${skippedCount} existing/duplicate record${skippedCount === 1 ? ' was' : 's were'} skipped. Nothing was duplicated.`,
+          6000
+        );
       } else {
-        showToast('success', 'Import completed', `${successCount} record${successCount === 1 ? '' : 's'} saved successfully.`);
+        showToast(
+          'success',
+          'Import completed',
+          `${successCount} new record${successCount === 1 ? '' : 's'} saved${skippedCount > 0 ? `; ${skippedCount} duplicate${skippedCount === 1 ? '' : 's'} skipped` : ''}.`
+        );
       }
 
       setShowImportModal(false);
@@ -3261,31 +3324,9 @@ export default function App() {
                     <h3 className="text-sm font-bold uppercase tracking-widest text-text-muted">Analytics Dashboard</h3>
                     <p className="text-[10px] text-text-muted/60 font-bold uppercase mt-0.5">Real-time lifecycle, ICAR and submitted-finding insights</p>
                   </div>
-                  <div className="flex bg-bg-main p-1 rounded-md border border-border-subtle w-full sm:w-auto">
-                    <button 
-                      onClick={() => setDashboardMode('system')}
-                      className={`flex-1 sm:flex-none px-4 py-1.5 rounded text-[10px] font-bold uppercase transition-all ${dashboardMode === 'system' ? 'bg-white shadow-sm text-brand-orange' : 'text-text-muted hover:text-text-main'}`}
-                    >
-                      App Charts
-                    </button>
-                    <button 
-                      onClick={() => setDashboardMode('powerbi')}
-                      className={`flex-1 sm:flex-none px-4 py-1.5 rounded text-[10px] font-bold uppercase transition-all ${dashboardMode === 'powerbi' ? 'bg-white shadow-sm text-brand-orange' : 'text-text-muted hover:text-text-main'}`}
-                    >
-                      Power BI Live
-                    </button>
-                  </div>
                 </div>
 
-                <AnimatePresence mode="wait">
-                  {dashboardMode === 'system' ? (
-                    <motion.div 
-                      key="system-dash"
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -10 }}
-                      className="space-y-6"
-                    >
+                <div className="space-y-6">
                       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
                         <KPICard
                           icon={<ClipboardCheck size={16} className="text-blue-500" />}
@@ -3491,46 +3532,7 @@ export default function App() {
                           </div>
                         )}
                       </div>
-                    </motion.div>
-                  ) : (
-                    <motion.div 
-                      key="powerbi-dash"
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -10 }}
-                      className="w-full h-[600px] bg-white rounded-lg border border-border-subtle overflow-hidden relative"
-                    >
-                      {powerBiUrl ? (
-                        <iframe 
-                          title="Power BI Report" 
-                          className="w-full h-full border-none"
-                          src={powerBiUrl} 
-                          allowFullScreen={true}
-                        />
-                      ) : (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center">
-                          <div className="w-16 h-16 bg-bg-main text-brand-orange rounded-full flex items-center justify-center mb-6">
-                            <LayoutDashboard size={32} />
-                          </div>
-                          <h3 className="text-lg font-bold">Power BI Connection Ready</h3>
-                          <p className="max-w-md text-xs text-text-muted mt-2 leading-relaxed">
-                            You can directly embed your organizational Power BI reports here for enterprise-grade analytics and deeper data slicing.
-                          </p>
-                          <div className="mt-8 w-full max-w-sm">
-                            <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest mb-2 block text-left pl-1">Embed URL</label>
-                            <input 
-                              type="text" 
-                              placeholder="Paste your Power BI Publish URL here..."
-                              className="w-full bg-slate-50 border border-border-subtle rounded-lg p-3 text-xs focus:border-brand-orange outline-none transition-all"
-                              value={powerBiUrl}
-                              onChange={(e) => setPowerBiUrl(e.target.value)}
-                            />
-                          </div>
-                        </div>
-                      )}
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+                </div>
               </motion.div>
             )}
 
@@ -6711,7 +6713,8 @@ export default function App() {
                       <ul className="mt-1.5 space-y-1 text-[10px] leading-4 text-slate-500">
                         <li>• Use the approved IPQC Excel column format.</li>
                         <li>• Finding Status is imported separately from ICAR Status.</li>
-                        <li>• Records are appended to MySQL; existing rows are not automatically removed.</li>
+                        <li>• Existing findings are detected and skipped automatically; only genuinely new rows are saved.</li>
+                        <li>• Embedded Excel evidence photos are imported and stored with the finding when available.</li>
                       </ul>
                     </div>
                   </div>
