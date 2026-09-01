@@ -16,8 +16,8 @@ app.set('trust proxy', 1);
 app.disable('x-powered-by');
 
 // Lightweight production security headers without adding another runtime dependency.
-// The policy keeps the current bundled React app, evidence previews and optional
-// Power BI frames working while blocking framing, MIME sniffing and unsafe objects.
+// The policy keeps the current bundled React app and evidence previews working
+// while blocking framing, MIME sniffing and unsafe objects.
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
@@ -355,6 +355,18 @@ const ensureAuditTrailSchema = async () => {
     await ensureAuditRecordColumn('updated_at', 'updated_at DATETIME NULL');
     await ensureAuditRecordColumn('deleted_by', 'deleted_by INT NULL');
     await ensureAuditRecordColumn('deleted_at', 'deleted_at DATETIME NULL');
+
+    // Evidence is intentionally stored in MySQL as a data URL by the current
+    // frontend instead of relying on Render's ephemeral local filesystem.
+    // LONGTEXT safely holds the <=5 MB image payload after base64 encoding.
+    const pictureColumns = await queryDb(`SHOW COLUMNS FROM audit_records LIKE 'picture'`);
+    if (pictureColumns.length === 0) {
+      await queryDb(`ALTER TABLE audit_records ADD COLUMN picture LONGTEXT NULL`);
+      console.log('Added audit_records.picture as LONGTEXT evidence storage.');
+    } else if (!String(pictureColumns[0]?.Type || '').toLowerCase().includes('longtext')) {
+      await queryDb(`ALTER TABLE audit_records MODIFY COLUMN picture LONGTEXT NULL`);
+      console.log('Expanded audit_records.picture to LONGTEXT for persistent evidence storage.');
+    }
   } else {
     console.warn('audit_records table was not found; traceability columns will be added after the table exists.');
   }
@@ -3063,6 +3075,56 @@ Use at most four highlights.
   }
 });
 
+// Import-only duplicate guard. Finding No is treated as the strongest identity
+// when present. Legacy workbooks without No fall back to stable observation fields.
+// We intentionally do not compare mutable lifecycle fields such as status/remark,
+// so re-importing an updated copy of an existing finding does not create a clone.
+const findExistingImportRecord = async (finding) => {
+  if (finding.no !== null && finding.no !== undefined) {
+    const byNumber = await queryDb(
+      `SELECT id, deleted_at AS deletedAt
+       FROM audit_records
+       WHERE no = ?
+       ORDER BY id ASC
+       LIMIT 1`,
+      [finding.no]
+    );
+    if (byNumber.length > 0) return byNumber[0];
+  }
+
+  const rows = await queryDb(
+    `SELECT id, deleted_at AS deletedAt
+     FROM audit_records
+     WHERE audit_date = ?
+       AND COALESCE(shift, '') = ?
+       AND COALESCE(auditor_name, '') = ?
+       AND COALESCE(pic_finding, '') = ?
+       AND COALESCE(department, '') = ?
+       AND COALESCE(platform, '') = ?
+       AND COALESCE(area_station, '') = ?
+       AND COALESCE(group_finding, '') = ?
+       AND COALESCE(category, '') = ?
+       AND COALESCE(finding_details, '') = ?
+       AND COALESCE(NULLIF(icar_num, ''), 'N/A') = ?
+     ORDER BY id ASC
+     LIMIT 1`,
+    [
+      finding.auditDate,
+      finding.shift || '',
+      finding.auditors || '',
+      finding.personOnJob || '',
+      finding.department || '',
+      finding.platform || '',
+      finding.areaStation || '',
+      finding.groupFinding || '',
+      finding.category || '',
+      finding.detailsFindings || '',
+      finding.icarNum || 'N/A',
+    ]
+  );
+  return rows[0] || null;
+};
+
 // API: Add a New Record (CREATE)
 app.post('/api/records', authenticateUser, uploadEvidencePicture, async (req, res) => {
   const validation = validateFindingPayload(req.body);
@@ -3082,9 +3144,30 @@ app.post('/api/records', authenticateUser, uploadEvidencePicture, async (req, re
 
   const picture = req.file ? `/uploads/${req.file.filename}` : (validation.value.picture || null);
   const normalizedIcar = normalizeIcarInput(icarNum);
+  const source = String(req.headers['x-audit-source'] || '').trim().toLowerCase();
 
   try {
     await auditTrailReady;
+
+    if (source === 'excel-import') {
+      const duplicate = await findExistingImportRecord({
+        ...validation.value,
+        icarNum: normalizedIcar.icarNum,
+      });
+      if (duplicate) {
+        removeUploadedFileQuietly(req.file);
+        return res.status(409).json({
+          error: duplicate.deletedAt
+            ? 'This finding already exists in the recycle bin. Restore it instead of importing another copy.'
+            : 'This finding already exists and was skipped to prevent a duplicate import.',
+          code: 'DUPLICATE_IMPORT',
+          duplicate: true,
+          existingId: Number(duplicate.id),
+          inRecycleBin: Boolean(duplicate.deletedAt),
+        });
+      }
+    }
+
     const result = await queryDb(
       `INSERT INTO audit_records (
         no, audit_date, ww, shift, auditor_name, pic_finding, department,
@@ -3101,7 +3184,6 @@ app.post('/api/records', authenticateUser, uploadEvidencePicture, async (req, re
     );
 
     const created = await selectRecordById(result.insertId);
-    const source = String(req.headers['x-audit-source'] || '').trim().toLowerCase();
     const action = source === 'excel-import' ? 'FINDING_IMPORTED' : 'FINDING_CREATED';
     await writeRecordVersion(req, created, 'created');
     await logAuditEvent(req, {
